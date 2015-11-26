@@ -597,6 +597,20 @@ def int_debugtrap : Intrinsic<[]>,
 // NOP: calls/invokes to this intrinsic are removed by codegen
 def int_donothing : Intrinsic<[], [], [IntrNoMem]>;
 
+// Coroutine support intrinsics
+def int_coro_init : Intrinsic<[llvm_ptr_ty], [llvm_ptr_ty], []>;
+def int_coro_suspend : Intrinsic<[llvm_i1_ty], 
+  [llvm_ptr_ty, llvm_ptr_ty, llvm_i1_ty], [IntrReadWriteArgMem, NoCapture<0>, NoCapture<1>]>;
+def int_coro_param : Intrinsic<[], 
+	[llvm_ptr_ty, llvm_ptr_ty], [IntrReadWriteArgMem, NoCapture<0>, NoCapture<1>]>;
+def int_coro_frame : Intrinsic<[llvm_ptr_ty], [], []>;
+def int_coro_size : Intrinsic<[llvm_i32_ty], [], [IntrNoMem]>;
+
+// Coroutine handle intrinsics
+def int_coro_resume : Intrinsic<[], [llvm_ptr_ty], []>;
+def int_coro_destroy : Intrinsic<[], [llvm_ptr_ty], []>;
+def int_coro_done : Intrinsic<[llvm_i1_ty], [llvm_ptr_ty], [IntrReadMem]>;
+
 // Intrisics to support half precision floating point format
 let Properties = [IntrNoMem] in {
 def int_convert_to_fp16   : Intrinsic<[llvm_i16_ty], [llvm_anyfloat_ty]>;
