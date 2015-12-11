@@ -21,7 +21,7 @@ Coroutine related llvm intrinsics
 
   %0 = call i32 @llvm.coro.size()
   %1 = call noalias i8* @malloc(i32 %0)
-  %2 = call i8* @llvm.coro.init(i8* %call)
+  %2 = call i8* @llvm.coro.init(i8* %1)
 
 :declare i1 @llvm.coro.suspend(i8*, i8*):
   This intrinsic marks a suspension point in a coroutine. 
@@ -48,7 +48,7 @@ Coroutine related llvm intrinsics
 :declare void @llvm.coro.destroy(i8*):
   Given a coroutine frame pointer, this intrinsic destroys the coroutine.
 
-:declare i1 @llvm.coro.resume(i8*):
+:declare i1 @llvm.coro.done(i8*):
   Given a coroutine frame pointer, this intrinsic tells if the coroutine
   is suspended at a final suspend point.
 
