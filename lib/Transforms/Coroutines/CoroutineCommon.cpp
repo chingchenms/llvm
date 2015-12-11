@@ -45,7 +45,7 @@ void CoroutineCommon::PerModuleInit(Module &M) {
 }
 
 IntrinsicInst *CoroutineCommon::FindIntrinsic(BasicBlock &B,
-                                                    Intrinsic::ID intrinID) {
+                                              Intrinsic::ID intrinID) {
   for (Instruction &I : B)
     if (IntrinsicInst *intrin = dyn_cast<IntrinsicInst>(&I))
       if (intrin->getIntrinsicID() == intrinID)
@@ -55,7 +55,7 @@ IntrinsicInst *CoroutineCommon::FindIntrinsic(BasicBlock &B,
 }
 
 IntrinsicInst *CoroutineCommon::FindIntrinsic(Function &F,
-                                                    Intrinsic::ID intrinID) {
+                                              Intrinsic::ID intrinID) {
   for (BasicBlock &B : F)
     if (IntrinsicInst *intrin = FindIntrinsic(B, intrinID))
       return intrin;
@@ -73,7 +73,7 @@ void CoroutineCommon::ComputeDefChain(Instruction *source,
   if (result.count(source))
     return;
 
-  SmallVector<Instruction*, 16> workList;
+  SmallVector<Instruction *, 16> workList;
   workList.push_back(source);
 
   do {
@@ -95,7 +95,7 @@ void CoroutineCommon::ComputeDefChain(Instruction *source,
 void llvm::CoroutineCommon::MoveInReverseOrder(InstrSetVector const &Instrs,
                                                Instruction *InsertBefore) {
   for (auto it = Instrs.rbegin(), end = Instrs.rend(); it != end; ++it) {
-    Instruction* I = *it;
+    Instruction *I = *it;
     if (I != InsertBefore)
       I->moveBefore(InsertBefore);
   }
@@ -130,20 +130,20 @@ void CoroutineCommon::ComputeAllPredecessors(
 }
 
 void CoroutineCommon::ComputeRampBlocks(
-    Function &F, SmallPtrSet<BasicBlock *, 16>& RampBlocks) {
+    Function &F, SmallPtrSet<BasicBlock *, 16> &RampBlocks) {
 
   RampBlocks.clear();
 
   IntrinsicInst *coroDone = FindIntrinsic(F, Intrinsic::coro_done);
   assert(coroDone && "missing @llvm.coro.done intrinsic");
   assert(dyn_cast<ConstantPointerNull>(coroDone->getArgOperand(0)) &&
-    "expecting null argument in @llvm.coro.done intrinsic");
+         "expecting null argument in @llvm.coro.done intrinsic");
 
   BranchSuccessors done = getSuccessors(coroDone);
   BasicBlock *ReturnBlock = done.IfTrue;
   BasicBlock *StartBlock = done.IfFalse;
   IntrinsicInst *FirstSuspendIntr =
-    FindIntrinsic(*StartBlock, Intrinsic::coro_suspend);
+      FindIntrinsic(*StartBlock, Intrinsic::coro_suspend);
 
   if (!FirstSuspendIntr) {
     auto BR = cast<BranchInst>(StartBlock->getTerminator());
@@ -164,8 +164,8 @@ void CoroutineCommon::ComputeSharedAllocas(
   ComputeRampBlocks(F, RampBlocks);
 
   // find allocas with uses outside the ramp function
-  for (Instruction& I: instructions(F))
-    if (AllocaInst* AI = dyn_cast<AllocaInst>(&I))
+  for (Instruction &I : instructions(F))
+    if (AllocaInst *AI = dyn_cast<AllocaInst>(&I))
       for (User *U : AI->users()) {
         Instruction *Instr = cast<Instruction>(U);
         if (RampBlocks.count(Instr->getParent()) == 0) {
@@ -175,11 +175,12 @@ void CoroutineCommon::ComputeSharedAllocas(
       }
 }
 
-void CoroutineCommon::ReplaceWithIndirectCall(IntrinsicInst * intrin, ConstantInt * index) {
+void CoroutineCommon::ReplaceWithIndirectCall(IntrinsicInst *intrin,
+                                              ConstantInt *index) {
   Value *rawFrame = intrin->getArgOperand(0);
   auto frame = new BitCastInst(rawFrame, anyFramePtrTy, "", intrin);
-  auto gepIndex = GetElementPtrInst::Create(
-    anyFrameTy, frame, { zeroConstant, index }, "", intrin);
+  auto gepIndex = GetElementPtrInst::Create(anyFrameTy, frame,
+                                            {zeroConstant, index}, "", intrin);
   auto fnAddr = new LoadInst(gepIndex, "", intrin); // FIXME: alignment
   auto call = CallInst::Create(fnAddr, rawFrame, "", intrin);
   call->setCallingConv(CallingConv::Fast);
@@ -187,7 +188,7 @@ void CoroutineCommon::ReplaceWithIndirectCall(IntrinsicInst * intrin, ConstantIn
   intrin->eraseFromParent();
 }
 
-IntrinsicInst* CoroutineCommon::asFakeSuspend(Instruction *I) {
+IntrinsicInst *CoroutineCommon::asFakeSuspend(Instruction *I) {
   if (IntrinsicInst *intrin = dyn_cast<IntrinsicInst>(I))
     if (intrin->getIntrinsicID() == Intrinsic::coro_suspend)
       if (dyn_cast<ConstantPointerNull>(intrin->getArgOperand(1)))
@@ -195,9 +196,9 @@ IntrinsicInst* CoroutineCommon::asFakeSuspend(Instruction *I) {
   return nullptr;
 }
 
-void CoroutineCommon::RemoveFakeSuspends(Function& F) {
+void CoroutineCommon::RemoveFakeSuspends(Function &F) {
   for (auto it = inst_begin(F), end = inst_end(F); it != end;) {
-    Instruction& I = *it++;
+    Instruction &I = *it++;
     if (auto intrin = asFakeSuspend(&I)) {
       auto bitcast = dyn_cast<BitCastInst>(intrin->getOperand(0));
       intrin->eraseFromParent();
@@ -216,7 +217,7 @@ void CoroutineCommon::InsertFakeSuspend(Value *value,
                    "", InsertBefore);
 }
 
-CoroutineCommon::BranchSuccessors::BranchSuccessors(IntrinsicInst * I) {
+CoroutineCommon::BranchSuccessors::BranchSuccessors(IntrinsicInst *I) {
   assert(I->getNumUses() == 1 && "unexpected number of uses");
   BranchInst *Br = cast<BranchInst>(I->user_back());
   assert(Br->isConditional());
@@ -224,13 +225,12 @@ CoroutineCommon::BranchSuccessors::BranchSuccessors(IntrinsicInst * I) {
   IfFalse = Br->getSuccessor(1);
 }
 
-void CoroutineCommon::RemoveNoOptAttribute(Function& F) {
+void CoroutineCommon::RemoveNoOptAttribute(Function &F) {
   if (auto intrin = asFakeSuspend(&*inst_begin(F))) {
     // fake suspend is a marker that function already had
     // optnone, therefore, we keep it
     intrin->eraseFromParent();
-  }
-  else {
+  } else {
     // CoroEarly marks coroutine as optnone/noinline until
     F.removeFnAttr(Attribute::OptimizeNone);
     F.removeFnAttr(Attribute::NoInline);
@@ -238,9 +238,7 @@ void CoroutineCommon::RemoveNoOptAttribute(Function& F) {
   }
 }
 
-
-
-void llvm::initializeCoroutines(PassRegistry& registry) {
+void llvm::initializeCoroutines(PassRegistry &registry) {
   initializeCoroEarlyPass(registry);
   initializeCoroSplitPass(registry);
   initializeCoroHeapElidePass(registry);
