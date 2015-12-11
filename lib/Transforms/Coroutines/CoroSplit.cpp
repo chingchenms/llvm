@@ -198,7 +198,7 @@ struct CoroutineProcessor : CoroutineCommon {
 
     for (Instruction &I : instructions(F)) {
       if (AllocaInst *AI = dyn_cast<AllocaInst>(&I)) {
-        if (notInRamp(*AI))
+        if (notInRamp(*AI) || AI->getName() == "__promise")
           SharedAllocas.insert(AI);
       } else if (IntrinsicInst *intrin = dyn_cast<IntrinsicInst>(&I)) {
         switch (intrin->getIntrinsicID()) {
@@ -429,7 +429,8 @@ struct CoroutineProcessor : CoroutineCommon {
           if (getFramePtr(*succ) == frameInCleanup) {
             // insert call to destroy followed by return
             B.getTerminator()->eraseFromParent();
-            CallInst::Create(destroyFn, frameInResume, "", &B);
+            auto call = CallInst::Create(destroyFn, frameInResume, "", &B);
+            call->setCallingConv(CallingConv::Fast);
             ReturnInst::Create(M->getContext(), &B);
           }
         }
