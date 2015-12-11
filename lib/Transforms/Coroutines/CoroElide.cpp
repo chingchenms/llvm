@@ -237,9 +237,25 @@ struct CoroHeapElide : ModulePass, CoroutineCommon {
     return changed;
   }
 
+  static bool hasResumeOrDestroy(Function &F) {
+    for (auto& I : instructions(F)) {
+      if (auto intrin = dyn_cast<IntrinsicInst>(&I)) {
+        switch (intrin->getIntrinsicID()) {
+        default:
+          continue;
+        case Intrinsic::coro_resume:
+        case Intrinsic::coro_destroy:
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
   bool runOnFunction(Function &F) {
     bool changed = false;
-    if (FindIntrinsic(F, Intrinsic::coro_destroy)) {
+
+    if (hasResumeOrDestroy(F)) {
       if (tryElide(F)) {
         ++CoroHeapElideCounter;
         changed = true;
