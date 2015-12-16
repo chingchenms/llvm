@@ -73,14 +73,24 @@ struct LLVM_LIBRARY_VISIBILITY CoroutineCommon {
     BasicBlock *IfTrue;
     BasicBlock *IfFalse;
 
+    BranchSuccessors() : IfFalse(), IfTrue() {}
     BranchSuccessors(IntrinsicInst *I);
+    void reset(IntrinsicInst *I);
   };
 
   static BranchSuccessors getSuccessors(IntrinsicInst *I) { return {I}; }
 
   struct SuspendPoint : BranchSuccessors {
     IntrinsicInst *SuspendInst;
+    SuspendPoint() : SuspendInst(), BranchSuccessors() {}
     SuspendPoint(IntrinsicInst *I) : BranchSuccessors(I), SuspendInst(I) {}
+    SuspendPoint(BasicBlock *B);
+
+    explicit operator bool() const { return SuspendInst; }
+    void clear() {
+      SuspendInst = nullptr;
+      IfFalse = IfTrue = nullptr;
+    }
   };
 
   static void ComputeRampBlocks(Function &F, BlockSet &RampBlocks);
@@ -105,6 +115,8 @@ void initializeCoroEarlyPass(PassRegistry &Registry);
 void initializeCoroHeapElidePass(PassRegistry &Registry);
 void initializeCoroCleanupPass(PassRegistry &registry);
 void initializeCoroSplitPass(PassRegistry &registry);
+void initializeCoroSplit2Pass(PassRegistry &registry);
+void initializeCoroPassManagerPass(PassRegistry &registry);
 }
 
 #endif

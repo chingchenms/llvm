@@ -213,11 +213,16 @@ void CoroutineCommon::InsertFakeSuspend(Value *value,
   auto bitCast = new BitCastInst(value, bytePtrTy, "", InsertBefore);
   auto intrinFn = Intrinsic::getDeclaration(M, Intrinsic::coro_suspend);
   CallInst::Create(intrinFn, {bitCast, ConstantPointerNull::get(bytePtrTy),
-                              ConstantInt::getTrue(M->getContext())},
+                              ConstantInt::get(int32Ty, INT_FAST32_MAX)},
                    "", InsertBefore);
 }
 
 CoroutineCommon::BranchSuccessors::BranchSuccessors(IntrinsicInst *I) {
+  reset(I);
+}
+
+void llvm::CoroutineCommon::BranchSuccessors::reset(IntrinsicInst * I)
+{
   assert(I->getNumUses() == 1 && "unexpected number of uses");
   BranchInst *Br = cast<BranchInst>(I->user_back());
   assert(Br->isConditional());
@@ -241,6 +246,20 @@ void CoroutineCommon::RemoveNoOptAttribute(Function &F) {
 void llvm::initializeCoroutines(PassRegistry &registry) {
   initializeCoroEarlyPass(registry);
   initializeCoroSplitPass(registry);
+  initializeCoroSplit2Pass(registry);
   initializeCoroHeapElidePass(registry);
   initializeCoroCleanupPass(registry);
+  initializeCoroPassManagerPass(registry);
+}
+
+llvm::CoroutineCommon::SuspendPoint::SuspendPoint(BasicBlock * B)
+{
+    for (auto& I : *B)
+      if (auto II = dyn_cast<IntrinsicInst>(&I))
+        if (II->getIntrinsicID() == Intrinsic::coro_suspend) {
+          reset(II);
+          SuspendInst = II;
+          return;
+        }
+    SuspendInst = nullptr;
 }
