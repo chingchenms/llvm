@@ -232,6 +232,8 @@ struct CoroutineInfo : CoroutineCommon {
     ReplaceIntrinsicWith(*ThisFunction, Intrinsic::coro_size, ConstantInt::get(int32Ty, size));
   }
 
+  bool SingleSuspend;
+
   void AnalyzeFunction(Function& F) {
     ReturnInst* Return = nullptr;
     CoroInit = nullptr;
@@ -329,6 +331,13 @@ struct CoroutineInfo : CoroutineCommon {
             break;
           }
     }
+
+    auto realSuspendNum = Suspends.size() - (FinalSuspend ? 1 : 0);
+    if (realSuspendNum != 1)
+      llvm_unreachable("realSuspendNum != 1. Cannot handle yet");
+
+    SingleSuspend = (realSuspendNum == 1);
+
     // part 4, replace allocas 
     CreateFrameStruct();
     ReplaceSharedUses();
@@ -339,10 +348,6 @@ struct CoroutineInfo : CoroutineCommon {
     // part 5, duplicate the delete block and extract cleanup part from it
     if (SuspendInInitBlock)
       llvm_unreachable("SuspendInInitBlock. Cannot handle yet");
-
-    auto realSuspendNum = Suspends.size() - (FinalSuspend ? 1 : 0);
-    if (realSuspendNum != 1)
-      llvm_unreachable("realSuspendNum != 1. Cannot handle yet");
 
     // replace all frame uses with arg
     ReplaceAllUsesOutsideTheRamp(frameInRamp, frameInResume);
@@ -466,14 +471,26 @@ struct CoroutineInfo : CoroutineCommon {
         BB.eraseFromParent();
     }
 
-    CallInst::Create(cleanupFn, { frameInDestroy }, "", &*entry->begin());
+    auto call = CallInst::Create(cleanupFn, { frameInDestroy }, "", &*entry->begin());
+    call->setCallingConv(CallingConv::Fast);
   }
 
   void PolishRamp(BasicBlock* InitBlock) {
     auto Term = InitBlock->getTerminator();
+
+    auto gep0 = GetElementPtrInst::Create(
+      frameTy, frameInRamp, { zeroConstant, zeroConstant }, "", Term);
+    new StoreInst(resumeFn, gep0, Term);
+
+    auto gep1 = GetElementPtrInst::Create(
+      frameTy, frameInRamp, { zeroConstant, oneConstant }, "", Term);
+    new StoreInst(destroyFn, gep1, Term);
+
+
     if (auto BR = dyn_cast<BranchInst>(Term)) {
       assert(BR->getNumSuccessors() == 1 && "InitialBlock has unexpected number of successors");
       auto call = CallInst::Create(startFn, {frameInRamp}, "", BR);
+      call->setCallingConv(CallingConv::Fast);
       BR->setSuccessor(0, ReturnBlock);
       return;
     }
@@ -516,7 +533,9 @@ struct CoroutineInfo : CoroutineCommon {
     Function* fn = cast<Function>(op);
     assert(fn->getType() == awaitSuspendFnPtrTy && "unexpected await_suspend fn type");
     auto vFrame = new BitCastInst(Frame, bytePtrTy, "", I);
-    CallInst::Create(fn, { I->getArgOperand(0), vFrame }, "", I);
+    auto call = CallInst::Create(fn, { I->getArgOperand(0), vFrame }, "", I);
+    //InlineFunctionInfo IFI;
+    //InlineFunction(call, IFI);
   }
 
   void ReplaceSuspend(Suspend &sp) {
@@ -536,19 +555,23 @@ struct CoroutineInfo : CoroutineCommon {
     }
 
     if (sp.OnResume == nullptr) {
-      // will null out resumeFn
-      auto gep = GetElementPtrInst::Create(frameTy, frame,
-      { zeroConstant, zeroConstant }, "",
-        sp.SuspendInst);
-      new StoreInst(ConstantPointerNull::get(resumeFnPtrTy), gep,
-        sp.SuspendInst);
+      if (!SingleSuspend) {
+        // will null out resumeFn
+        auto gep = GetElementPtrInst::Create(frameTy, frame,
+        { zeroConstant, zeroConstant }, "",
+          sp.SuspendInst);
+        new StoreInst(ConstantPointerNull::get(resumeFnPtrTy), gep,
+          sp.SuspendInst);
+      }
     }
     else {
-      auto jumpIndex = ConstantInt::get(M->getContext(), APInt(32, Index));
-      auto gep = GetElementPtrInst::Create(frameTy, frame,
-      { zeroConstant, twoConstant }, "",
-        sp.SuspendInst);
-      new StoreInst(jumpIndex, gep, sp.SuspendInst);
+      if (!SingleSuspend) {
+        auto jumpIndex = ConstantInt::get(M->getContext(), APInt(32, Index));
+        auto gep = GetElementPtrInst::Create(frameTy, frame,
+        { zeroConstant, twoConstant }, "",
+          sp.SuspendInst);
+        new StoreInst(jumpIndex, gep, sp.SuspendInst);
+      }
     }
 
     CallAwaitSuspend(sp.SuspendInst, frame);
