@@ -18,6 +18,7 @@
 #include "llvm/IR/Module.h"
 #include "llvm/IR/CallSite.h"
 #include "llvm/Support/Casting.h"
+#include "llvm/Transforms/Utils/Cloning.h"
 
 #include "llvm/ADT/Statistic.h"
 #include "llvm/IR/Function.h"
@@ -257,6 +258,8 @@ namespace {
     static char ID; // Pass identification, replacement for typeid
     CoroPreSplit() : ModulePass(ID) {}
 
+    SmallPtrSet<Function*, 8> RampFunctions;
+
     void ReplaceIfEmpty(Instruction& I, const Function & F) {
       if (F.size() == 1)
         if (F.getEntryBlock().size() == 1)
@@ -283,6 +286,7 @@ namespace {
         op = cast<ConstantExpr>(op)->getOperand(0);
       }
       Function* fn = cast<Function>(op);
+      RampFunctions.insert(fn);
       if (fn->size() != 1)
         return;
 
@@ -332,13 +336,29 @@ namespace {
       return true;
     }
 
+    void handleRampFunction(Function& F) {
+      for (auto it = inst_begin(F), end = inst_end(F); it != end;) {
+        Instruction& I = *it++;
+        if (auto CS = CallSite(&I)) {
+          InlineFunctionInfo IFI;
+          InlineFunction(CS, IFI);
+        }
+      }
+    }
+
     bool runOnModule(Module &M) override {
       CoroutineCommon::PerModuleInit(M);
+      RampFunctions.clear();
 
       bool changed = false;
       for (Function &F : M.getFunctionList())
         if (isCoroutine(F))
           changed |= runOnCoroutine(F);
+
+      for (Function* F : RampFunctions) {
+        handleRampFunction(*F);
+        changed = true;
+      }
       return changed;
     }
   };

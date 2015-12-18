@@ -343,7 +343,7 @@ struct CoroutineInfo : CoroutineCommon {
     ReplaceSharedUses();
 
     // part 2.5 get rid of all suspends
-    ReplaceSuspends();
+    ReplaceSuspendsCFG();
 
     // part 5, duplicate the delete block and extract cleanup part from it
     if (SuspendInInitBlock)
@@ -397,6 +397,12 @@ struct CoroutineInfo : CoroutineCommon {
     ReplaceCoroFrame(resumeFn, frameInResume);
     ReplaceCoroFrame(cleanupFn, frameInCleanup);
     ReplaceCoroFrame(destroyFn, frameInDestroy);
+
+    ReplaceSuspends(ThisFunction, frameInRamp);
+    ReplaceSuspends(startFn, frameInStart);
+    ReplaceSuspends(resumeFn, frameInResume);
+    ReplaceSuspends(cleanupFn, frameInCleanup);
+    ReplaceSuspends(destroyFn, frameInDestroy);
   }
 
   void ReplaceCoroFrame(Function* F, Value* Frame) {
@@ -534,11 +540,11 @@ struct CoroutineInfo : CoroutineCommon {
     assert(fn->getType() == awaitSuspendFnPtrTy && "unexpected await_suspend fn type");
     auto vFrame = new BitCastInst(Frame, bytePtrTy, "", I);
     auto call = CallInst::Create(fn, { I->getArgOperand(0), vFrame }, "", I);
-    //InlineFunctionInfo IFI;
-    //InlineFunction(call, IFI);
+    InlineFunctionInfo IFI;
+    InlineFunction(call, IFI);
   }
 
-  void ReplaceSuspend(Suspend &sp) {
+  void ReplaceSuspendCFG(Suspend &sp) {
     auto const Index = &sp - Suspends.begin();
     BasicBlock* SuspendBlock = sp.SuspendInst->getParent();
     SuspendBlock->getTerminator()->eraseFromParent();
@@ -573,15 +579,24 @@ struct CoroutineInfo : CoroutineCommon {
         new StoreInst(jumpIndex, gep, sp.SuspendInst);
       }
     }
-
-    CallAwaitSuspend(sp.SuspendInst, frame);
-
-    sp.SuspendInst->eraseFromParent();
   }
 
-  void ReplaceSuspends() {
+  void ReplaceSuspendsCFG() {
     for (Suspend& sp : Suspends) 
-      ReplaceSuspend(sp);
+      ReplaceSuspendCFG(sp);
+  }
+
+
+  void ReplaceSuspends(Function* F, Value* Frame) {
+    for (auto it = inst_begin(*F), end = inst_end(*F); it != end;) {
+      Instruction& I = *it++;
+      if (auto II = dyn_cast<IntrinsicInst>(&I)) {
+        if (II->getIntrinsicID() == Intrinsic::coro_suspend) {
+          CallAwaitSuspend(II, Frame);
+          II->eraseFromParent();
+        }
+      }
+    }
   }
 
   void ReplaceAllUsesOutsideTheRamp(Value *OldFrameValue,         
@@ -605,43 +620,6 @@ struct CoroutineInfo : CoroutineCommon {
     RemoveFakeSuspends(F);
     CreateAuxillaryFunctions();
     AnalyzeFunction(F);
-
-#if 0
-    // find the first suspend
-    BasicBlock *PrevBlock = CoroDone.SuspendInst->getParent();
-    BasicBlock *Candidate = CoroDone.IfFalse;
-    DestroyCallBlock = nullptr;
-
-    for (;;) {
-      while (Candidate->getSinglePredecessor() == 0) {
-        Candidate = CloneBlock(Candidate, PrevBlock);
-      }
-      RampBlocks.insert(Candidate);
-      auto T = Candidate->getTerminator();
-      if (SuspendPoint SP{Candidate}) {
-        auto T = Candidate->getTerminator();
-        BranchInst::Create(ReturnBlock, T);
-        // FIXME: check that it is not final suspend
-        FirstResume = SP.IfTrue;
-        T->eraseFromParent();
-        break;
-      }
-      PrevBlock = Candidate;
-      if (auto Next = Candidate->getSingleSuccessor()) {
-        Candidate = Next;
-        continue;
-      }
-      auto BI = dyn_cast<BranchInst>(T);
-      assert(BI && "Cannot handle any terminator but BranchInst yet");
-      if (TryReplaceWithDestroyCall(*BI, 0))
-        Candidate = BI->getSuccessor(1);
-      else if (TryReplaceWithDestroyCall(*BI, 1))
-        Candidate = BI->getSuccessor(0);
-      else
-        llvm_unreachable("cannot handle branches where one success does not "
-                         "lead to cleanup");
-    }
-#endif
     return true;
   }
 };
