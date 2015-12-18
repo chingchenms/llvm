@@ -386,17 +386,6 @@ struct CoroutineProcessor : CoroutineCommon {
     }
   }
 
-  void ReplaceIntrinsicWith(Function &func, Intrinsic::ID id, Value *framePtr) {
-    for (auto it = inst_begin(func), end = inst_end(func); it != end;) {
-      Instruction& I = *it++;
-      if (IntrinsicInst* intrin = dyn_cast<IntrinsicInst>(&I))
-        if (intrin->getIntrinsicID() == id) {
-          intrin->replaceAllUsesWith(framePtr);
-          intrin->eraseFromParent();
-        }
-    }
-  }
-
   void SplitOutDestroyFunction() {
     Function::BasicBlockListType &oldBlocks = F->getBasicBlockList();
     Function::BasicBlockListType &newBlocks = destroyFn->getBasicBlockList();

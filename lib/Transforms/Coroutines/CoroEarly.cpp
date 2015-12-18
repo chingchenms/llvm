@@ -274,16 +274,53 @@ namespace {
             }
     }
 
+    void ReplaceSuspendIfEmpty(IntrinsicInst& I) {
+      Value *op = I.getArgOperand(1);
+      while (const ConstantExpr *CE = dyn_cast<ConstantExpr>(op)) {
+        if (!CE->isCast())
+          break;
+        // Look through the bitcast
+        op = cast<ConstantExpr>(op)->getOperand(0);
+      }
+      Function* fn = cast<Function>(op);
+      if (fn->size() != 1)
+        return;
+
+      BasicBlock& B = fn->back();
+      if (B.size() < 2)
+        return;
+
+      auto LastInstr = B.getTerminator()->getPrevNode();
+      CallInst* Call = dyn_cast<CallInst>(LastInstr);
+      Function* awaitSuspendFn = Call->getCalledFunction();
+      if (!awaitSuspendFn)
+        return;
+      if (awaitSuspendFn->isDeclaration())
+        return;
+
+      if (awaitSuspendFn->size() == 1)
+        if (awaitSuspendFn->getEntryBlock().size() == 1)
+          if (isa<ReturnInst>(&*inst_begin(*awaitSuspendFn))) 
+            I.setOperand(0, ConstantPointerNull::get(bytePtrTy));
+    }
+
     bool runOnCoroutine(Function& F) {
       RemoveNoOptAttribute(F);
       for (auto it = inst_begin(F), end = inst_end(F); it != end;) {
         Instruction& I = *it++;
+
         CallSite CS(cast<Value>(&I));
         if (!CS)
           continue;
         const Function *Callee = CS.getCalledFunction();
         if (!Callee)
           continue; // indirect call, nothing to do
+        if (Callee->isIntrinsic()) {
+          if (Callee->getIntrinsicID() == Intrinsic::coro_suspend)
+            ReplaceSuspendIfEmpty(*cast<IntrinsicInst>(&I));
+          continue;
+        }
+
         if (Callee->isDeclaration())
           continue;
 
@@ -292,7 +329,7 @@ namespace {
         if (RetType == voidTy) ReplaceIfEmpty(I, *Callee);
         else if (RetType == boolTy) ReplaceIfConstant(I, *Callee);
       }
-      return false;
+      return true;
     }
 
     bool runOnModule(Module &M) override {

@@ -69,6 +69,8 @@ struct LLVM_LIBRARY_VISIBILITY CoroutineCommon {
   static void MoveInReverseOrder(InstrSetVector const &Instrs,
                                  Instruction *InsertBefore);
 
+  static void ReplaceIntrinsicWith(Function &func, Intrinsic::ID id, Value *framePtr);
+
   struct BranchSuccessors {
     BasicBlock *IfTrue;
     BasicBlock *IfFalse;

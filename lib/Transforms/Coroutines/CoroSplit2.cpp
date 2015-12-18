@@ -42,11 +42,11 @@ struct CoroutineInfo : CoroutineCommon {
   IntrinsicInst *CoroDelete;
 
   struct Suspend {
-    IntrinsicInst* Intrin;
-    BasicBlock* IfTrue = nullptr;
-    BasicBlock* IfFalse = nullptr;
+    IntrinsicInst* SuspendInst;
+    BasicBlock* OnResume = nullptr;
+    BasicBlock* OnCleanup = nullptr;
 
-    Suspend(IntrinsicInst* I) : Intrin(I) {}
+    Suspend(IntrinsicInst* I) : SuspendInst(I) {}
   };
 
   SmallVector<Suspend, 8> Suspends;
@@ -61,6 +61,7 @@ struct CoroutineInfo : CoroutineCommon {
   Function *resumeFn = nullptr;
   Function *destroyFn = nullptr;
   Function *cleanupFn = nullptr;
+  Function *startFn = nullptr;
 
   SmallString<16> smallString;
   StructType *frameTy = nullptr;
@@ -81,84 +82,30 @@ struct CoroutineInfo : CoroutineCommon {
   Value *frameInDestroy;
   Value *frameInCleanup;
   Value *frameInResume;
+  Value *frameInStart;
   Instruction *frameInRamp;
 
-  Value *vFrameInDestroy;
-  Value *vFrameInCleanup;
-  Value *vFrameInResume;
-  Instruction *vFrameInRamp;
-
-  Function *CreateAuxillaryFunction(Twine suffix, Value *&frame,
-                                    Value *&vFrame) {
+  Function *CreateAuxillaryFunction(Twine suffix, Value *&frame) {
     auto func = Function::Create(resumeFnTy, GlobalValue::InternalLinkage,
                                  ThisFunction->getName() + suffix, M);
     func->setCallingConv(CallingConv::Fast);
     frame = &*func->arg_begin();
-    frame->setName("frame.ptr");
-
-    auto entry = BasicBlock::Create(M->getContext(), "entry", func);
-    vFrame = new BitCastInst(frame, bytePtrTy, "frame.void.ptr", entry);
+    frame->setName("frame.ptr" + suffix);
     return func;
   }
 
   void CreateAuxillaryFunctions() {
-    resumeFn =
-        CreateAuxillaryFunction(".resume", frameInResume, vFrameInResume);
-    cleanupFn =
-        CreateAuxillaryFunction(".cleanup", frameInCleanup, vFrameInCleanup);
-    destroyFn =
-        CreateAuxillaryFunction(".destroy", frameInDestroy, vFrameInDestroy);
+    resumeFn = CreateAuxillaryFunction(".resume", frameInResume);
+    cleanupFn = CreateAuxillaryFunction(".cleanup", frameInCleanup);
+    destroyFn = CreateAuxillaryFunction(".destroy", frameInDestroy);
+    startFn = CreateAuxillaryFunction(".start", frameInStart);
 
     auto CoroInit = FindIntrinsic(*ThisFunction, Intrinsic::coro_init);
     assert(CoroInit && "Call to @llvm.coro.init is missing");
-    vFrameInRamp = CoroInit;
-    frameInRamp = new BitCastInst(vFrameInRamp, framePtrTy, "frame",
+    frameInRamp = new BitCastInst(CoroInit, framePtrTy, "frame",
                                   CoroInit->getNextNode());
   }
 
-#if 0
-  void AnalyzeFunction2(Function &F) {
-    init(F);
-
-    CoroInit = nullptr;
-    CoroDelete = nullptr;
-    ReturnBlock = nullptr;
-    Suspends.clear();
-    AllAllocas.clear();
-
-    for (auto &I : instructions(F)) {
-      I.dump();
-      if (auto AI = dyn_cast<AllocaInst>(&I)) {
-        AllAllocas.emplace_back(AI);
-        continue;
-      }
-      if (auto II = dyn_cast<IntrinsicInst>(&I)) {
-        switch (II->getIntrinsicID()) {
-        default:
-          continue;
-        case Intrinsic::coro_suspend:
-          //Suspends.emplace_back(II);
-          continue;
-        case Intrinsic::coro_init:
-          assert(!CoroDelete && "more than one @llvm.coro.init in a coroutine");
-          CoroInit = II;
-          continue;
-        case Intrinsic::coro_delete:
-          assert(!CoroDelete && "more than one @llvm.coro.delete in a coroutine");
-          CoroDelete = II;
-          continue;
-        }
-      }
-    }
-
-    assert(CoroInit && "missing @llvm.coro.init");
-    assert(CoroDelete && "missing @llvm.coro.delete");
-    assert(Suspends.size() != 0 && "cannot handle no suspend coroutines yet");
-
-    DeleteBlock = CoroDelete->getParent();
-    assert(isa<ReturnInst>(DeleteBlock->getTerminator()) && "expecting delete block to end with return");
-  }
-#endif
   void ReplaceSuccessors(BasicBlock *B, BasicBlock *oldTarget,
                          BasicBlock *newTarget) {
     // FIXME: can't handle anything but the branch instructions
@@ -183,7 +130,8 @@ struct CoroutineInfo : CoroutineCommon {
     return NewBB;
   }
 
-  BasicBlock *MoveInstructionWithItsUsers(Twine Name, Instruction* Instr) {   
+  BasicBlock *MoveInstructionWithItsUsers(Twine Name, Instruction* Instr) {  
+    Function* Fn = Instr->getParent()->getParent();
     SmallSet<Instruction*, 8> InstructionsToMove;
     SmallVector<Instruction*, 8> Worklist;
     Worklist.push_back(Instr);
@@ -211,14 +159,13 @@ struct CoroutineInfo : CoroutineCommon {
     }
 
     Worklist.clear();
-    for (auto& I : instructions(ThisFunction))
+    for (auto& I : instructions(Fn))
       if (InstructionsToMove.count(&I) != 0)
         Worklist.push_back(&I);
 
     InstructionsToMove.clear();
 
-    BasicBlock* PreviousOwner = Instr->getParent();
-    auto NewBlock = BasicBlock::Create(M->getContext(), Name, ThisFunction);
+    auto NewBlock = BasicBlock::Create(M->getContext(), Name, Fn);
     auto InsertionPt = ReturnInst::Create(M->getContext(), NewBlock);
     for (auto I: Worklist) {
       I->removeFromParent();
@@ -277,12 +224,21 @@ struct CoroutineInfo : CoroutineCommon {
       typeArray.push_back(AI->getType()->getElementType());
     }
     frameTy->setBody(typeArray);
+
+    // TODO: when we optimize storage layout, keep coro_size as intrinsic
+    // for later passes to plug in the right amount
+    const DataLayout &DL = M->getDataLayout();
+    APInt size(32, DL.getTypeAllocSize(frameTy));
+    ReplaceIntrinsicWith(*ThisFunction, Intrinsic::coro_size, ConstantInt::get(int32Ty, size));
   }
 
   void AnalyzeFunction(Function& F) {
     ReturnInst* Return = nullptr;
     CoroInit = nullptr;
     CoroDelete = nullptr;
+    bool SuspendInInitBlock = false;
+
+    BasicBlock *InitBlock = nullptr;
 
     for (auto &BB : F) {
       auto *Term = BB.getTerminator();
@@ -302,10 +258,14 @@ struct CoroutineInfo : CoroutineCommon {
             continue;
           case Intrinsic::coro_suspend:
             Suspends.emplace_back(II);
+            assert(InitBlock && "@llvm.coro.suspend before @llvm.coro.init");
+            if (II->getParent() == InitBlock)
+              SuspendInInitBlock = true;
             continue;
           case Intrinsic::coro_init:
             assert(!CoroDelete && "more than one @llvm.coro.init in a coroutine");
             CoroInit = II;
+            InitBlock = II->getParent();
             continue;
           case Intrinsic::coro_delete:
             assert(!CoroDelete && "more than one @llvm.coro.delete in a coroutine");
@@ -320,38 +280,42 @@ struct CoroutineInfo : CoroutineCommon {
     assert(Return && "missing ret instruction");
     assert(Suspends.size() != 0 && "cannot handle no suspend coroutines yet");
 
+    auto StartBlock = InitBlock->getSingleSuccessor();
+    assert(StartBlock && "expecting a single successor of InitBlock");
+
+    Suspend* FinalSuspend = nullptr;
     // part 1, split out suspends and fill out the branches
     for (auto &S : Suspends) {
-      auto CI = cast<ConstantInt>(S.Intrin->getOperand(2));
+      auto CI = cast<ConstantInt>(S.SuspendInst->getOperand(2));
       APInt Val = CI->getValue();
 
-      if (S.Intrin->getNumUses() == 0) {
+      if (S.SuspendInst->getNumUses() == 0) {
         // split up the block
-        auto next = S.Intrin->getParent()->splitBasicBlock(
-            S.Intrin->getNextNode(), Twine("resume.") + Twine(Val.getZExtValue()));
-        S.IfFalse = S.IfTrue = next;
+        // FIXME: more validation
+        auto next = S.SuspendInst->getParent()->splitBasicBlock(
+            S.SuspendInst->getNextNode(), Twine("resume.") + Twine(Val.getZExtValue()));
+        S.OnResume = S.OnCleanup = next;
         continue;
       }
-      assert(S.Intrin->getNumUses() == 1 && "unexpected number of uses");
-      auto BR = cast<BranchInst>(S.Intrin->user_back());
+      assert(S.SuspendInst->getNumUses() == 1 && "unexpected number of uses");
+      auto BR = cast<BranchInst>(S.SuspendInst->user_back());
       if (BR->getNumSuccessors() == 1) {
-        S.IfFalse = S.IfTrue = BR->getSuccessor(0);
+        S.OnResume = S.OnCleanup = BR->getSuccessor(0);
       }
       else {
-        S.IfTrue = BR->getSuccessor(0);
-        S.IfFalse = BR->getSuccessor(1);
+        S.OnResume = BR->getSuccessor(0);
+        S.OnCleanup = BR->getSuccessor(1);
       }
       // if it is final suspend, correct the branch to point only at
       // the cleanup
       if (Val == 0) {
-        S.IfTrue = nullptr;
+        S.OnResume = nullptr;
+        FinalSuspend = &S;
       }
     }
 
-    auto InitBlock = CoroInit->getParent();
-
     // part 2, split out return instruction into its own block
-    auto ReturnBlock = MoveInstructionWithItsUsers("ramp.return", Return);
+    ReturnBlock = MoveInstructionWithItsUsers("ramp.return", Return);
     RampBlocks.clear();
     RampBlocks.insert(InitBlock);
     RampBlocks.insert(ReturnBlock);
@@ -365,13 +329,250 @@ struct CoroutineInfo : CoroutineCommon {
             break;
           }
     }
+    // part 4, replace allocas 
     CreateFrameStruct();
     ReplaceSharedUses();
-    // part 4, replace allocas 
 
+    // part 2.5 get rid of all suspends
+    ReplaceSuspends();
 
-    // part 3, duplicate the delete block and extract cleanup part from it
+    // part 5, duplicate the delete block and extract cleanup part from it
+    if (SuspendInInitBlock)
+      llvm_unreachable("SuspendInInitBlock. Cannot handle yet");
+
+    auto realSuspendNum = Suspends.size() - (FinalSuspend ? 1 : 0);
+    if (realSuspendNum != 1)
+      llvm_unreachable("realSuspendNum != 1. Cannot handle yet");
+
+    // replace all frame uses with arg
+    ReplaceAllUsesOutsideTheRamp(frameInRamp, frameInResume);
+
+    // move all but ramp blocks in resumeFn
+    Function::BasicBlockListType &oldBlocks = ThisFunction->getBasicBlockList();
+    Function::BasicBlockListType &newBlocks = resumeFn->getBasicBlockList();
+    for (auto it = ThisFunction->begin(), end = ThisFunction->end(); it != end;) {
+      BasicBlock& BB = *it++;
+      if (RampBlocks.count(&BB) == 0) {
+        oldBlocks.remove(BB);
+        newBlocks.push_back(&BB);
+      }
+    }
+
+    // clone into start and cleanup
+
+    SmallVector<ReturnInst*, 8> Returns;
+    ValueToValueMapTy VMap;
+    VMap[frameInResume] = frameInCleanup;
+    CloneFunctionInto(cleanupFn, resumeFn,
+      VMap, false,
+      Returns);
+    PolishCleanup(VMap[CoroDelete], VMap, FinalSuspend);
+
+    Returns.clear();
+    VMap.clear();
+    VMap[frameInResume] = frameInStart;
+    CloneFunctionInto(startFn, resumeFn,
+      VMap, false,
+      Returns);
+    PolishStart(cast<BasicBlock>(VMap[StartBlock]));
+
+    Returns.clear();
+    VMap.clear();
+    VMap[frameInResume] = frameInDestroy;
+    CloneFunctionInto(destroyFn, resumeFn,
+      VMap, false,
+      Returns);
+    PolishDestroy(VMap[CoroDelete]);
+
+    PolishResume();
+    PolishRamp(InitBlock);
+
+    ReplaceCoroFrame(ThisFunction, frameInRamp);
+    ReplaceCoroFrame(startFn, frameInStart);
+    ReplaceCoroFrame(resumeFn, frameInResume);
+    ReplaceCoroFrame(cleanupFn, frameInCleanup);
+    ReplaceCoroFrame(destroyFn, frameInDestroy);
+  }
+
+  void ReplaceCoroFrame(Function* F, Value* Frame) {
+    for (auto it = inst_begin(F), e = inst_end(F); it != e;) {
+      Instruction& I = *it++;
+      if (auto II = dyn_cast<IntrinsicInst>(&I))
+        if (II->getIntrinsicID() == Intrinsic::coro_frame) {
+          auto vFrame = new BitCastInst(Frame, bytePtrTy, "", II);
+          II->replaceAllUsesWith(vFrame);
+          II->eraseFromParent();
+        }
+    }
+  }
+
+  void PolishCleanup(Value *CoroDelete, ValueToValueMapTy &VMap,
+                     Suspend *FinalSuspend) {
+    // find the intruction that uses delete
+    assert(CoroDelete->getNumUses() == 1 && "unexpected number of uses");
+    auto DeleteInstr = cast<Instruction>(CoroDelete->user_back());
+    auto notNeeded = MoveInstructionWithItsUsers("", DeleteInstr);
+    notNeeded->eraseFromParent();
+
+    auto Entry = BasicBlock::Create(M->getContext(), "entry", cleanupFn,
+      &cleanupFn->getEntryBlock());
+
+    if (FinalSuspend) {
+      auto gep = GetElementPtrInst::Create(
+        frameTy, frameInCleanup, { zeroConstant, zeroConstant }, "", Entry);
+      auto resumeAddr = new LoadInst(gep, "", Entry);
+      auto isNull =
+        new ICmpInst(*Entry, CmpInst::Predicate::ICMP_EQ,
+          ConstantPointerNull::get(resumeFnPtrTy), resumeAddr);
+
+      BasicBlock* swBlock = BasicBlock::Create(M->getContext(), "switch", cleanupFn);
+      BranchInst::Create(cast<BasicBlock>(VMap[FinalSuspend->OnCleanup]),
+                         swBlock, isNull, Entry);
+      Entry = swBlock;
+    }
+
+    auto CaseCount = Suspends.size() - (FinalSuspend ? 1 : 0);
+
+    auto Unreachable = BasicBlock::Create(M->getContext(), "unreach", cleanupFn);
+    new UnreachableInst(M->getContext(), Unreachable);
+
+    auto gepIndex = GetElementPtrInst::Create(
+      frameTy, frameInCleanup, { zeroConstant, twoConstant }, "", Entry);
+    auto index = new LoadInst(gepIndex, "resume.index", Entry);
+    auto switchInst = SwitchInst::Create(index, Unreachable, CaseCount, Entry);
+    for (unsigned i = 0; i < Suspends.size(); ++i) {
+      Suspend& sp = Suspends[i];
+      if (FinalSuspend != &sp) {
+        switchInst->addCase(ConstantInt::get(M->getContext(), APInt(32, i)),
+                            cast<BasicBlock>(VMap[sp.OnCleanup]));
+      }
+    }
+  }
+
+  void PolishDestroy(Value* CoroDelete) {
+    // find the intruction that uses delete
+    assert(CoroDelete->getNumUses() == 1 && "unexpected number of uses");
+    auto DeleteInstr = cast<Instruction>(CoroDelete->user_back());
+    auto entry = MoveInstructionWithItsUsers("entry", DeleteInstr);
+    ReturnInst::Create(M->getContext(), entry);
     
+    for (auto& BB : *destroyFn)
+      if (&BB != entry)
+        BB.dropAllReferences();
+
+    for (auto BI = destroyFn->begin(), E = destroyFn->end(); BI != E;) {
+      BasicBlock& BB = *BI++;
+      if (&BB != entry)
+        BB.eraseFromParent();
+    }
+
+    CallInst::Create(cleanupFn, { frameInDestroy }, "", &*entry->begin());
+  }
+
+  void PolishRamp(BasicBlock* InitBlock) {
+    auto Term = InitBlock->getTerminator();
+    if (auto BR = dyn_cast<BranchInst>(Term)) {
+      assert(BR->getNumSuccessors() == 1 && "InitialBlock has unexpected number of successors");
+      auto call = CallInst::Create(startFn, {frameInRamp}, "", BR);
+      BR->setSuccessor(0, ReturnBlock);
+      return;
+    }
+    llvm_unreachable("cannot handle yet");
+  }
+  
+  void PolishStart(BasicBlock* StartBlock) {
+    auto Entry = BasicBlock::Create(M->getContext(), "entry", startFn,
+      &startFn->getEntryBlock());
+
+    BranchInst::Create(StartBlock, Entry);
+  }
+
+  void PolishResume() {
+    auto entry = BasicBlock::Create(M->getContext(), "entry", resumeFn,
+                                    &resumeFn->getEntryBlock());
+    int Count = 0;
+    BasicBlock* LastResume = nullptr;
+
+    for (auto & SP : Suspends) {
+      if (SP.OnResume) {
+        ++Count;
+        LastResume = SP.OnResume;
+      }
+    }
+
+    assert(Count == 1 && "Cannot yet handle multple suspend points");
+
+    BranchInst::Create(LastResume, entry);
+  }
+
+  void CallAwaitSuspend(IntrinsicInst *I, Value *Frame) {
+    Value *op = I->getArgOperand(1);
+    while (const ConstantExpr *CE = dyn_cast<ConstantExpr>(op)) {
+      if (!CE->isCast())
+        break;
+      // Look through the bitcast
+      op = cast<ConstantExpr>(op)->getOperand(0);
+    }
+    Function* fn = cast<Function>(op);
+    assert(fn->getType() == awaitSuspendFnPtrTy && "unexpected await_suspend fn type");
+    auto vFrame = new BitCastInst(Frame, bytePtrTy, "", I);
+    CallInst::Create(fn, { I->getArgOperand(0), vFrame }, "", I);
+  }
+
+  void ReplaceSuspend(Suspend &sp) {
+    auto const Index = &sp - Suspends.begin();
+    BasicBlock* SuspendBlock = sp.SuspendInst->getParent();
+    SuspendBlock->getTerminator()->eraseFromParent();
+
+    Value *frame = nullptr;
+
+    if (sp.SuspendInst->getParent() == CoroInit->getParent()) {
+      frame = frameInRamp;
+      BranchInst::Create(ReturnBlock, SuspendBlock);
+    }
+    else {
+      frame = frameInResume;
+      ReturnInst::Create(M->getContext(), SuspendBlock);
+    }
+
+    if (sp.OnResume == nullptr) {
+      // will null out resumeFn
+      auto gep = GetElementPtrInst::Create(frameTy, frame,
+      { zeroConstant, zeroConstant }, "",
+        sp.SuspendInst);
+      new StoreInst(ConstantPointerNull::get(resumeFnPtrTy), gep,
+        sp.SuspendInst);
+    }
+    else {
+      auto jumpIndex = ConstantInt::get(M->getContext(), APInt(32, Index));
+      auto gep = GetElementPtrInst::Create(frameTy, frame,
+      { zeroConstant, twoConstant }, "",
+        sp.SuspendInst);
+      new StoreInst(jumpIndex, gep, sp.SuspendInst);
+    }
+
+    CallAwaitSuspend(sp.SuspendInst, frame);
+
+    sp.SuspendInst->eraseFromParent();
+  }
+
+  void ReplaceSuspends() {
+    for (Suspend& sp : Suspends) 
+      ReplaceSuspend(sp);
+  }
+
+  void ReplaceAllUsesOutsideTheRamp(Value *OldFrameValue,         
+    Value *NewFrameValue) {
+    for (auto UI = OldFrameValue->use_begin(), E = OldFrameValue->use_end();
+         UI != E;) {
+      Use &U = *UI++;
+
+      if (auto I = dyn_cast<Instruction>(U.getUser()))
+        if (RampBlocks.count(I->getParent()) == 1)
+          continue;
+
+      U.set(NewFrameValue);
+    }
   }
 
   bool runOnCoroutine(Function &F) {

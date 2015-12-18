@@ -129,6 +129,17 @@ void CoroutineCommon::ComputeAllPredecessors(
   }
 }
 
+void CoroutineCommon::ReplaceIntrinsicWith(Function &func, Intrinsic::ID id, Value *framePtr) {
+  for (auto it = inst_begin(func), end = inst_end(func); it != end;) {
+    Instruction& I = *it++;
+    if (IntrinsicInst* intrin = dyn_cast<IntrinsicInst>(&I))
+      if (intrin->getIntrinsicID() == id) {
+        intrin->replaceAllUsesWith(framePtr);
+        intrin->eraseFromParent();
+      }
+  }
+}
+
 void CoroutineCommon::ComputeRampBlocks(
     Function &F, SmallPtrSet<BasicBlock *, 16> &RampBlocks) {
 

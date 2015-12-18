@@ -73,6 +73,7 @@ struct CoroCleanup : FunctionPass, CoroutineCommon {
         switch (intrin->getIntrinsicID()) {
         default:
           continue;
+        case Intrinsic::coro_delete:
         case Intrinsic::coro_init:
           ReplaceCoroInit(intrin);
           ++CoroInitCounter;

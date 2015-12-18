@@ -604,7 +604,7 @@ def int_coro_suspend : Intrinsic<[llvm_i1_ty],
 def int_coro_param : Intrinsic<[], 
 	[llvm_ptr_ty, llvm_ptr_ty], [IntrReadWriteArgMem, NoCapture<0>, NoCapture<1>]>;
 def int_coro_frame : Intrinsic<[llvm_ptr_ty], [], []>;
-def int_coro_delete : Intrinsic<[llvm_ptr_ty], [], []>;
+def int_coro_delete : Intrinsic<[llvm_ptr_ty], [llvm_ptr_ty], []>;
 def int_coro_size : Intrinsic<[llvm_i32_ty], [], [IntrNoMem]>;
 
 // Coroutine handle intrinsics
