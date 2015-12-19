@@ -606,11 +606,14 @@ def int_coro_param : Intrinsic<[],
 def int_coro_frame : Intrinsic<[llvm_ptr_ty], [], []>;
 def int_coro_delete : Intrinsic<[llvm_ptr_ty], [llvm_ptr_ty], []>;
 def int_coro_size : Intrinsic<[llvm_i32_ty], [], [IntrNoMem]>;
+def int_coro_frame2 : Intrinsic<[llvm_anyptr_ty], [], []>;
+def int_coro_size2 : Intrinsic<[llvm_i32_ty], [llvm_anyptr_ty], [IntrNoMem]>;
 
 // Coroutine handle intrinsics
 def int_coro_resume : Intrinsic<[], [llvm_ptr_ty], []>;
 def int_coro_destroy : Intrinsic<[], [llvm_ptr_ty], []>;
 def int_coro_done : Intrinsic<[llvm_i1_ty], [llvm_ptr_ty], [IntrReadMem]>;
+
 
 // Intrisics to support half precision floating point format
 let Properties = [IntrNoMem] in {
