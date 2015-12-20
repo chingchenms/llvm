@@ -16,6 +16,7 @@
 #include "llvm/Transforms/Coroutines.h"
 #include "llvm/Transforms/Utils/PromoteMemToReg.h"
 
+#include "llvm/IR/CFG.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/CallSite.h"
 #include "llvm/Support/Casting.h"
@@ -85,6 +86,140 @@ namespace {
       }
     }
   };
+
+  using SuspendMap = DenseMap<BasicBlock*, unsigned>;
+}
+
+static void insertCoroLoadAndStore(AllocaInst *AI, SuspendMap::iterator SI) {
+  BasicBlock* ResumeEdge = SI->getFirst();
+
+  // find the suspend instruction and its number
+  BasicBlock* SuspendBlock = ResumeEdge->getSinglePredecessor();
+  assert(SuspendBlock && "resume edge block should have a single predecessor");
+  BranchInst* BR = cast<BranchInst>(SuspendBlock->getTerminator());
+  assert(BR->getNumSuccessors() == 2 && "suspend block should end in cond branch");
+  auto II = cast<IntrinsicInst>(BR->getOperand(0));
+  assert(II->getIntrinsicID() == Intrinsic::coro_suspend);
+  auto SuspendIndex = cast<ConstantInt>(II->getOperand(2));
+
+  Module* M = ResumeEdge->getParent()->getParent();
+  auto Int32Ty = IntegerType::get(M->getContext(), 32);
+  auto Align = ConstantInt::get(Int32Ty, AI->getAlignment());
+  auto Type = AI->getType()->getElementType();
+  auto SpillIndex = ConstantInt::get(Int32Ty, SI->getSecond());
+
+  auto StoreFn = Intrinsic::getDeclaration(M, Intrinsic::coro_save, Type);
+  auto Load = new LoadInst(AI, "", false, II);
+  CallInst::Create(StoreFn, {Load, SuspendIndex, SpillIndex, Align}, "", II);
+
+  auto InsertPt = ResumeEdge->getTerminator();
+  auto LoadFn = Intrinsic::getDeclaration(M, Intrinsic::coro_load, Type);
+  auto Reload = CallInst::Create(LoadFn, { SuspendIndex, SpillIndex }, "", InsertPt);
+  new StoreInst(Reload, AI, InsertPt);
+
+  ++SI->getSecond();
+}
+
+static void processAlloca(
+  AllocaInst *AI, AllocaInfo &Info,
+  const SmallPtrSetImpl<BasicBlock *> &DefBlocks,
+  SuspendMap &SuspendBlocks) {
+
+  SmallPtrSet<BasicBlock *, 32> LiveInBlocks;
+
+  // To determine liveness, we must iterate through the predecessors of blocks
+  // where the def is live.  Blocks are added to the worklist if we need to
+  // check their predecessors.  Start with all the using blocks.
+  SmallVector<BasicBlock *, 64> LiveInBlockWorklist(Info.UsingBlocks.begin(),
+    Info.UsingBlocks.end());
+
+  // If any of the using blocks is also a definition block, check to see if the
+  // definition occurs before or after the use.  If it happens before the use,
+  // the value isn't really live-in.
+  for (unsigned i = 0, e = LiveInBlockWorklist.size(); i != e; ++i) {
+    BasicBlock *BB = LiveInBlockWorklist[i];
+    if (!DefBlocks.count(BB))
+      continue;
+
+    // Okay, this is a block that both uses and defines the value.  If the first
+    // reference to the alloca is a def (store), then we know it isn't live-in.
+    for (BasicBlock::iterator I = BB->begin();; ++I) {
+      if (StoreInst *SI = dyn_cast<StoreInst>(I)) {
+        if (SI->getOperand(1) != AI)
+          continue;
+
+        // We found a store to the alloca before a load.  The alloca is not
+        // actually live-in here.
+        LiveInBlockWorklist[i] = LiveInBlockWorklist.back();
+        LiveInBlockWorklist.pop_back();
+        --i, --e;
+        break;
+      }
+
+      if (LoadInst *LI = dyn_cast<LoadInst>(I)) {
+        if (LI->getOperand(0) != AI)
+          continue;
+
+        // Okay, we found a load before a store to the alloca.  It is actually
+        // live into this block.
+        break;
+      }
+    }
+  }
+
+  // Now that we have a set of blocks where the phi is live-in, recursively add
+  // their predecessors until we find the full region the value is live.
+  while (!LiveInBlockWorklist.empty()) {
+    BasicBlock *BB = LiveInBlockWorklist.pop_back_val();
+
+    // The block really is live in here, insert it into the set.  If already in
+    // the set, then it has already been processed.
+    if (!LiveInBlocks.insert(BB).second)
+      continue;
+
+    // Since the value is live into BB, it is either defined in a predecessor or
+    // live into it to.  Add the preds to the worklist unless they are a
+    // defining block.
+    for (pred_iterator PI = pred_begin(BB), E = pred_end(BB); PI != E; ++PI) {
+      BasicBlock *P = *PI;
+
+      auto Suspend = SuspendBlocks.find(P);
+      if (Suspend != SuspendBlocks.end()) {
+        insertCoroLoadAndStore(AI, Suspend);
+      }
+
+      // The value is not live into a predecessor if it defines the value.
+      if (DefBlocks.count(P))
+        continue;
+
+      // Otherwise it is, add to the worklist.
+      LiveInBlockWorklist.push_back(P);
+    }
+  }
+}
+
+static void removeLifetimeIntrinsicUsers(AllocaInst *AI) {
+  // Knowing that this alloca is promotable, we know that it's safe to kill all
+  // instructions except for load and store.
+
+  for (auto UI = AI->user_begin(), UE = AI->user_end(); UI != UE;) {
+    Instruction *I = cast<Instruction>(*UI);
+    ++UI;
+    if (isa<LoadInst>(I) || isa<StoreInst>(I))
+      continue;
+
+    if (!I->getType()->isVoidTy()) {
+      // The only users of this bitcast/GEP instruction are lifetime intrinsics.
+      // Follow the use/def chain to erase them now instead of leaving it for
+      // dead code elimination later.
+      for (auto UUI = I->user_begin(), UUE = I->user_end(); UUI != UUE;) {
+        Instruction *Inst = cast<Instruction>(*UUI);
+        ++UUI;
+        Inst->eraseFromParent();
+      }
+    }
+    I->eraseFromParent();
+  }
 }
 
 namespace {
@@ -97,26 +232,62 @@ namespace {
       return false;
     }
 
+    //static int getSuspendNo(IntrinsicInst* intrin) {
+    //  assert(intrin->getIntrinsicID() == Intrinsic::coro_suspend);
+    //  auto CI = cast<ConstantInt>(intrin->getArgOperand(2));
+    //  return CI->getLimitedValue()
+    //}
+
+    void handleSuspend(IntrinsicInst *intrin, SuspendMap &SuspendBlocks) {
+      // final suspend has no resume edge
+      if (cast<ConstantInt>(intrin->getArgOperand(2))->isZero())
+        return;
+
+      auto SuspendBlock = intrin->getParent();
+      assert(SuspendBlock->getNumUses() == 1 && "unexpected number of uses");
+      auto BR = cast<BranchInst>(SuspendBlock->getTerminator());
+      auto ResumeEdge = BasicBlock::Create(M->getContext(),
+                                           SuspendBlock->getName() + ".resume",
+                                           SuspendBlock->getParent());
+      BranchInst::Create(BR->getSuccessor(0), ResumeEdge);
+      BR->setSuccessor(0, ResumeEdge);
+      SuspendBlocks.insert({ ResumeEdge, 0 });
+    }
+
     bool runOnFunction(Function &F) override {
       if (!F.hasFnAttribute(Attribute::Coroutine))
         return false;
 
       // find allocas (and collect blocks with suspends)
       SmallVector<AllocaInst*, 16> Allocas;
-      SmallSet<BasicBlock*, 16> SuspendBlocks;
+      SuspendMap SuspendBlocks;
 
       for (auto it = inst_begin(F), end = inst_end(F); it != end;) {
         Instruction &I = *it++;
         if (auto intrin = dyn_cast<IntrinsicInst>(&I)) {
-          if (intrin->getIntrinsicID() == Intrinsic::coro_suspend) {
-            auto SuspendBlock = intrin->getParent();
-            assert(SuspendBlocks.count(SuspendBlock) == 0 && "Need to split block");
-          }
+          if (intrin->getIntrinsicID() == Intrinsic::coro_suspend)
+            handleSuspend(intrin, SuspendBlocks);
           continue;
         }
         if (auto AI = dyn_cast<AllocaInst>(&I))
           if (isAllocaPromotable(AI))
             Allocas.push_back(AI);
+      }
+
+      AllocaInfo Info;
+      SmallPtrSet<BasicBlock *, 32> DefBlocks;
+
+      for (auto AI : Allocas) {
+        removeLifetimeIntrinsicUsers(AI);
+        Info.AnalyzeAlloca(AI);
+
+        if (AI->use_empty())
+          continue;
+
+          // Unique the set of defining blocks for efficient lookup.
+        DefBlocks.insert(Info.DefiningBlocks.begin(), Info.DefiningBlocks.end());
+
+        processAlloca(AI, Info, DefBlocks, SuspendBlocks);
       }
       return true;
     }
