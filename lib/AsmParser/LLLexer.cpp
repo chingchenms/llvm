@@ -605,6 +605,7 @@ lltok::Kind LLLexer::LexIdentifier() {
   KEYWORD(inalloca);
   KEYWORD(cold);
   KEYWORD(convergent);
+  KEYWORD(coroutine);
   KEYWORD(dereferenceable);
   KEYWORD(dereferenceable_or_null);
   KEYWORD(inlinehint);

@@ -114,6 +114,7 @@ struct LLVM_LIBRARY_VISIBILITY CoroutineCommon {
 /// initializeCoroutines - Initialize all passes linked into the Coroutines
 /// library.
 void initializeCoroEarlyPass(PassRegistry &Registry);
+void initializeCoroEarly2Pass(PassRegistry &Registry);
 void initializeCoroHeapElidePass(PassRegistry &Registry);
 void initializeCoroCleanupPass(PassRegistry &registry);
 void initializeCoroSplitPass(PassRegistry &registry);

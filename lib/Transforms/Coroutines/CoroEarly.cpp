@@ -14,6 +14,7 @@
 
 #include "CoroutineCommon.h"
 #include "llvm/Transforms/Coroutines.h"
+#include "llvm/Transforms/Utils/PromoteMemToReg.h"
 
 #include "llvm/IR/Module.h"
 #include "llvm/IR/CallSite.h"
@@ -31,9 +32,111 @@ using namespace llvm;
 #define DEBUG_TYPE "coro-early"
 
 namespace {
+  struct AllocaInfo {
+    SmallVector<BasicBlock *, 32> DefiningBlocks;
+    SmallVector<BasicBlock *, 32> UsingBlocks;
+
+    StoreInst *OnlyStore;
+    BasicBlock *OnlyBlock;
+    bool OnlyUsedInOneBlock;
+
+    Value *AllocaPointerVal;
+
+    void clear() {
+      DefiningBlocks.clear();
+      UsingBlocks.clear();
+      OnlyStore = nullptr;
+      OnlyBlock = nullptr;
+      OnlyUsedInOneBlock = true;
+      AllocaPointerVal = nullptr;
+    }
+
+    /// Scan the uses of the specified alloca, filling in the AllocaInfo used
+    /// by the rest of the pass to reason about the uses of this alloca.
+    void AnalyzeAlloca(AllocaInst *AI) {
+      clear();
+
+      // As we scan the uses of the alloca instruction, keep track of stores,
+      // and decide whether all of the loads and stores to the alloca are within
+      // the same basic block.
+      for (auto UI = AI->user_begin(), E = AI->user_end(); UI != E;) {
+        Instruction *User = cast<Instruction>(*UI++);
+
+        if (StoreInst *SI = dyn_cast<StoreInst>(User)) {
+          // Remember the basic blocks which define new values for the alloca
+          DefiningBlocks.push_back(SI->getParent());
+          AllocaPointerVal = SI->getOperand(0);
+          OnlyStore = SI;
+        }
+        else {
+          LoadInst *LI = cast<LoadInst>(User);
+          // Otherwise it must be a load instruction, keep track of variable
+          // reads.
+          UsingBlocks.push_back(LI->getParent());
+          AllocaPointerVal = LI;
+        }
+
+        if (OnlyUsedInOneBlock) {
+          if (!OnlyBlock)
+            OnlyBlock = User->getParent();
+          else if (OnlyBlock != User->getParent())
+            OnlyUsedInOneBlock = false;
+        }
+      }
+    }
+  };
+}
+
+namespace {
   struct CoroEarly : public FunctionPass, CoroutineCommon {
     static char ID; // Pass identification, replacement for typeid
     CoroEarly() : FunctionPass(ID) {}
+
+    bool doInitialization(Module& M) override {
+      CoroutineCommon::PerModuleInit(M);
+      return false;
+    }
+
+    bool runOnFunction(Function &F) override {
+      if (!F.hasFnAttribute(Attribute::Coroutine))
+        return false;
+
+      // find allocas (and collect blocks with suspends)
+      SmallVector<AllocaInst*, 16> Allocas;
+      SmallSet<BasicBlock*, 16> SuspendBlocks;
+
+      for (auto it = inst_begin(F), end = inst_end(F); it != end;) {
+        Instruction &I = *it++;
+        if (auto intrin = dyn_cast<IntrinsicInst>(&I)) {
+          if (intrin->getIntrinsicID() == Intrinsic::coro_suspend) {
+            auto SuspendBlock = intrin->getParent();
+            assert(SuspendBlocks.count(SuspendBlock) == 0 && "Need to split block");
+          }
+          continue;
+        }
+        if (auto AI = dyn_cast<AllocaInst>(&I))
+          if (isAllocaPromotable(AI))
+            Allocas.push_back(AI);
+      }
+      return true;
+    }
+
+    // We don't modify the funciton much, so we preserve all analyses.
+    void getAnalysisUsage(AnalysisUsage &AU) const override {
+      AU.setPreservesAll();
+    }
+  };
+}
+char CoroEarly::ID = 0;
+INITIALIZE_PASS(CoroEarly, "coro-early",
+  "Pre-split coroutine transform", false, false)
+
+#define DEBUG_TYPE "coro-early"
+
+namespace {
+  struct CoroEarly2 : public FunctionPass, CoroutineCommon {
+    static char ID; // Pass identification, replacement for typeid
+    CoroEarly2() : FunctionPass(ID) {}
 
     bool doInitialization(Module& M) override {
       CoroutineCommon::PerModuleInit(M);
@@ -91,7 +194,7 @@ namespace {
               MakeOptnoneUntilCoroSplit(F);
             }
             break;
-          // FIXME: figure out what to do with this two
+            // FIXME: figure out what to do with this two
           case Intrinsic::lifetime_start:
           case Intrinsic::lifetime_end:
             intrin->eraseFromParent();
@@ -108,11 +211,11 @@ namespace {
     }
   };
 }
-char CoroEarly::ID = 0;
-INITIALIZE_PASS(CoroEarly, "coro-early",
+char CoroEarly2::ID = 0;
+INITIALIZE_PASS(CoroEarly2, "coro-early2",
   "Pre-split coroutine transform", false, false)
 
-// pass incubator
+  // pass incubator
 
 namespace {
   struct CoroModuleEarly : public FunctionPass {

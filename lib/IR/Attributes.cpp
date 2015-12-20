@@ -198,6 +198,8 @@ std::string Attribute::getAsString(bool InAttrGrp) const {
     return "byval";
   if (hasAttribute(Attribute::Convergent))
     return "convergent";
+  if (hasAttribute(Attribute::Coroutine))
+    return "coroutine";
   if (hasAttribute(Attribute::InAlloca))
     return "inalloca";
   if (hasAttribute(Attribute::InlineHint))
