@@ -32,6 +32,9 @@ def ByVal : EnumAttr<"byval">;
 /// Marks function as being in a cold path.
 def Cold : EnumAttr<"cold">;
 
+/// Marks function as being a coroutine.
+def Coroutine : EnumAttr<"coroutine">;
+
 /// Can only be moved to control-equivalent blocks.
 def Convergent : EnumAttr<"convergent">;
 

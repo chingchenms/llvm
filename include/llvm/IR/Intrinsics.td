@@ -608,6 +608,12 @@ def int_coro_delete : Intrinsic<[llvm_ptr_ty], [llvm_ptr_ty], []>;
 def int_coro_size : Intrinsic<[llvm_i32_ty], [], [IntrNoMem]>;
 def int_coro_frame2 : Intrinsic<[llvm_anyptr_ty], [], []>;
 def int_coro_size2 : Intrinsic<[llvm_i32_ty], [llvm_anyptr_ty], [IntrNoMem]>;
+def int_coro_kill : Intrinsic<[llvm_any_ty], [llvm_any_ty], []>;
+def int_coro_kill2 : Intrinsic<[llvm_any_ty], [LLVMMatchType<0>], []>;
+def int_coro_promise : Intrinsic<[llvm_anyptr_ty], [llvm_ptr_ty], []>;
+def int_coro_from_promise : Intrinsic<[llvm_ptr_ty], [llvm_anyptr_ty], []>;
+def int_coro_save : Intrinsic<[], [llvm_any_ty, llvm_i32_ty, llvm_i32_ty, llvm_i32_ty], []>;
+def int_coro_load : Intrinsic<[llvm_any_ty], [llvm_i32_ty, llvm_i32_ty], []>;
 
 // Coroutine handle intrinsics
 def int_coro_resume : Intrinsic<[], [llvm_ptr_ty], []>;

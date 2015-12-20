@@ -310,6 +310,19 @@ namespace {
 
     bool runOnCoroutine(Function& F) {
       RemoveNoOptAttribute(F);
+
+      Function* coroKill = 
+        Intrinsic::getDeclaration(M, Intrinsic::coro_kill2, { int32Ty });
+      coroKill->dump();
+
+      Function* coroSave =
+        Intrinsic::getDeclaration(M, Intrinsic::coro_save, { int32Ty });
+      coroSave->dump();
+
+      Function* coroLoad =
+        Intrinsic::getDeclaration(M, Intrinsic::coro_load, { int32Ty });
+      coroLoad->dump();
+
       for (auto it = inst_begin(F), end = inst_end(F); it != end;) {
         Instruction& I = *it++;
 
