@@ -37,11 +37,11 @@ using namespace llvm;
 #define DEBUG_TYPE "coro-split3"
 
 namespace {
-  //struct CoroSplit3 : public ModulePass, CoroutineCommon {
-struct CoroSplit3 : public FunctionPass, CoroutineCommon {
+struct CoroSplit3 : public ModulePass, CoroutineCommon {
+//struct CoroSplit3 : public FunctionPass, CoroutineCommon {
   static char ID; // Pass identification, replacement for typeid
-//  CoroSplit3() : ModulePass(ID) {}
-  CoroSplit3() : FunctionPass(ID) {}
+  CoroSplit3() : ModulePass(ID) {}
+//  CoroSplit3() : FunctionPass(ID) {}
 
   SmallVector<Function *, 8> Coroutines;
 
@@ -129,12 +129,12 @@ struct CoroSplit3 : public FunctionPass, CoroutineCommon {
   }
 
   bool runOnCoroutine(Function& F) {
-    DominatorTree &DT = getAnalysis<DominatorTreeWrapperPass>().getDomTree();
+    DominatorTree &DT = getAnalysis<DominatorTreeWrapperPass>(F).getDomTree();
     insertSpills(F, DT);
     return true;
   }
 
-#if 0
+#if 1
   bool runOnModule(Module &M) override {
     CoroutineCommon::PerModuleInit(M);
 
