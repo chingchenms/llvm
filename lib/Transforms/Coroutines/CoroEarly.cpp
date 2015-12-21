@@ -108,6 +108,14 @@ static void insertCoroLoadAndStore(AllocaInst *AI, SuspendMap::iterator SI) {
   auto Type = AI->getType()->getElementType();
   auto SpillIndex = ConstantInt::get(Int32Ty, SI->getSecond());
 
+  auto InsertPt = ResumeEdge->getTerminator();
+
+  auto Load = new LoadInst(AI, "", false, InsertPt);
+  auto KillFn = Intrinsic::getDeclaration(M, Intrinsic::coro_kill2, Type);
+  auto Reload = CallInst::Create(KillFn, { Load }, "", InsertPt);
+  new StoreInst(Reload, AI, InsertPt);
+
+#if 0
   auto StoreFn = Intrinsic::getDeclaration(M, Intrinsic::coro_save, Type);
   auto Load = new LoadInst(AI, "", false, II);
   CallInst::Create(StoreFn, {Load, SuspendIndex, SpillIndex, Align}, "", II);
@@ -116,7 +124,7 @@ static void insertCoroLoadAndStore(AllocaInst *AI, SuspendMap::iterator SI) {
   auto LoadFn = Intrinsic::getDeclaration(M, Intrinsic::coro_load, Type);
   auto Reload = CallInst::Create(LoadFn, { SuspendIndex, SpillIndex }, "", InsertPt);
   new StoreInst(Reload, AI, InsertPt);
-
+#endif
   ++SI->getSecond();
 }
 

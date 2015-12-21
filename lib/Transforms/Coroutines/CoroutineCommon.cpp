@@ -258,6 +258,7 @@ void llvm::initializeCoroutines(PassRegistry &registry) {
   initializeCoroEarlyPass(registry);
   initializeCoroSplitPass(registry);
   initializeCoroSplit2Pass(registry);
+  initializeCoroSplit3Pass(registry);
   initializeCoroHeapElidePass(registry);
   initializeCoroCleanupPass(registry);
   initializeCoroPassManagerPass(registry);

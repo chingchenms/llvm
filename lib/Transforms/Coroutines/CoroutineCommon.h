@@ -119,6 +119,7 @@ void initializeCoroHeapElidePass(PassRegistry &Registry);
 void initializeCoroCleanupPass(PassRegistry &registry);
 void initializeCoroSplitPass(PassRegistry &registry);
 void initializeCoroSplit2Pass(PassRegistry &registry);
+void initializeCoroSplit3Pass(PassRegistry &registry);
 void initializeCoroPassManagerPass(PassRegistry &registry);
 }
 

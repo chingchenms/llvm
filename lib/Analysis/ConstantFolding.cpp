@@ -1241,6 +1241,7 @@ bool llvm::canConstantFoldCallTo(const Function *F) {
   case Intrinsic::cos:
   case Intrinsic::trunc:
   case Intrinsic::rint:
+  case Intrinsic::coro_kill2:
   case Intrinsic::nearbyint:
   case Intrinsic::pow:
   case Intrinsic::powi:
@@ -1415,6 +1416,11 @@ static Constant *ConstantFoldScalarCall(StringRef Name, unsigned IntrinsicID,
                                         Type *Ty, ArrayRef<Constant *> Operands,
                                         const TargetLibraryInfo *TLI) {
   if (Operands.size() == 1) {
+
+    if (IntrinsicID == Intrinsic::coro_kill2) {
+      return Operands[0];
+    }
+
     if (ConstantFP *Op = dyn_cast<ConstantFP>(Operands[0])) {
       if (IntrinsicID == Intrinsic::convert_to_fp16) {
         APFloat Val(Op->getValueAPF());
