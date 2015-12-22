@@ -12,8 +12,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "CoroutineCommon.h"
-#include "llvm/Transforms/Utils/Local.h"
-#include "llvm/Transforms/Scalar.h"
+#include "llvm/ADT/SmallBitVector.h"
 #include "llvm/Transforms/Coroutines.h"
 #include "llvm/IR/LegacyPassManager.h"
 
@@ -40,6 +39,10 @@ using namespace llvm;
 #define DEBUG_TYPE "coro-split3"
 
 namespace {
+
+}
+
+namespace {
 struct CoroSplit3 : public ModulePass, CoroutineCommon {
 //struct CoroSplit3 : public FunctionPass, CoroutineCommon {
   static char ID; // Pass identification, replacement for typeid
@@ -48,15 +51,140 @@ struct CoroSplit3 : public ModulePass, CoroutineCommon {
 
   SmallVector<Function *, 8> Coroutines;
 
-  SmallPtrSet<BasicBlock*, 8> SuspendBlocks;
+  struct SuspendPoint {
+    IntrinsicInst* SuspendInst;
+    BranchInst* SuspendBr;
+
+    SuspendPoint(Instruction &I) : SuspendInst(dyn_cast<IntrinsicInst>(&I)) {
+      if (!SuspendInst)
+        return;
+      if (SuspendInst->getIntrinsicID() != Intrinsic::coro_suspend) {
+        SuspendInst = nullptr;
+        return;
+      }
+      SuspendBr = dyn_cast<BranchInst>(SuspendInst->getNextNode());
+      if (!SuspendBr)
+        return;
+
+      if (isFinalSuspend()) {
+        assert(SuspendBr->getNumSuccessors() == 1);
+      }
+      else {
+        assert(SuspendBr->getNumSuccessors() == 2);
+        assert(SuspendBr->getOperand(0) == SuspendInst);
+      }
+    }
+
+    bool isCanonical() const { return SuspendBr; }
+
+    void remapSuspendInst(BasicBlock* BB, ConstantInt* CI) {
+      ValueToValueMapTy VMap;
+      VMap[SuspendInst] = CI;
+      for (Instruction &I : *BB)
+        RemapInstruction(&I, VMap,
+          RF_NoModuleLevelChanges | RF_IgnoreMissingEntries);
+    }
+
+    static void fixupPhiNodes(BasicBlock *ResumeBB, BasicBlock *CleanupBB,
+                              ValueToValueMapTy &VMap) {
+      for (BasicBlock* BB : successors(CleanupBB)) {
+        for (Instruction& I : *BB) {
+          PHINode* PN = dyn_cast<PHINode>(&I);
+          if (!PN)
+            break;
+
+          auto N = PN->getNumIncomingValues();
+          SmallBitVector remapNeeded(N);
+          for (unsigned i = 0; i != N; ++i)
+            if (PN->getIncomingBlock(i) == ResumeBB)
+              remapNeeded.set(i);
+
+          for (int i = remapNeeded.find_first(); i != -1;
+               i = remapNeeded.find_next(i)) {
+            auto NewValue = VMap[PN->getIncomingValue(i)];
+            PN->addIncoming(NewValue, CleanupBB);
+          }
+        }
+      }
+    }
+
+    bool canonicalize() {
+      if (isCanonical())
+        return false;
+      BasicBlock* BB = SuspendInst->getParent();
+      Function* F = BB->getParent();
+      Module* M = F->getParent();
+      BasicBlock* ResumeBB =
+        BB->splitBasicBlock(SuspendInst->getNextNode(), BB->getName() + ".resume");
+
+      ValueToValueMapTy VMap;
+      auto CleanupBB = CloneBasicBlock(ResumeBB, VMap, ".cleanup", F);
+      CleanupBB->setName(BB->getName() + ".cleanup");
+      remapSuspendInst(CleanupBB, ConstantInt::getFalse(M->getContext()));
+      remapSuspendInst(ResumeBB, ConstantInt::getTrue(M->getContext()));
+      
+      BB->getTerminator()->eraseFromParent();
+      BranchInst::Create(ResumeBB, CleanupBB, SuspendInst, BB);
+
+      fixupPhiNodes(ResumeBB, CleanupBB, VMap);
+
+      DEBUG(dbgs() << "Canonicalize block " << BB->getName() << ". New edges: "
+        << ResumeBB->getName() << " " << CleanupBB->getName() << "\n");
+      return true;
+    }
+
+    BasicBlock* getResumeBlock() const {
+      return isFinalSuspend() ? nullptr : SuspendBr->getSuccessor(0);
+    }
+    BasicBlock* getCleanupBlock() const {
+      return isFinalSuspend() ? SuspendBr->getSuccessor(0)
+        : SuspendBr->getSuccessor(1);
+    }
+
+    bool isFinalSuspend() const {
+      assert(SuspendInst);
+      return cast<ConstantInt>(SuspendInst->getOperand(2))->isZero();
+    }
+    explicit operator bool() const { return SuspendInst; }
+  };
+
+  struct SuspendInfo : SmallVector<SuspendPoint, 8> {
+    using Base = SmallVector<SuspendPoint, 8>;
+    SmallPtrSet<BasicBlock*, 8> SuspendBlocks;
+
+    // Canonical suspend is where
+    // an @llvm.coro.suspend is followed by a
+    // branch instruction 
+    bool canonicalizeSuspends(Function& F) {
+      bool changed = false;
+      Base::clear();
+      for (auto BI = F.begin(), BE = F.end(); BI != BE;) {
+        auto& BB = *BI++;
+        for (auto &I : BB)
+          if (SuspendPoint SI{ I }) {
+            changed |= SI.canonicalize();
+            Base::push_back(SI);
+            break;
+          }
+      }
+      if (changed)
+        CoroutineCommon::simplifyAndConstantFoldTerminators(F);
+
+      SuspendBlocks.clear();
+      for (auto SP : *this)
+        SuspendBlocks.insert(SP.SuspendInst->getParent());
+
+      return changed;
+    }
+
+    bool isSuspendBlock(BasicBlock* BB) const { return SuspendBlocks.count(BB); }
+  };
 
   Function* ThisFunction;
 
-  void processValue(Value *V, DominatorTree &DT) {
+  void processValue(Value *V, DominatorTree &DT, SuspendInfo const& Info) {
     Instruction* DefInst = cast<Instruction>(V);
     BasicBlock* DefBlock = DefInst->getParent();
-    //assert(ThisFunction->getEntryBlock() == DefBlock ||
-    //       SuspendBlocks.count(DefBlock) == 0);
 
     for (auto UI = V->use_begin(), UE = V->use_end(); UI != UE;) {
       Use &U = *UI++;
@@ -76,7 +204,7 @@ struct CoroSplit3 : public ModulePass, CoroutineCommon {
         BB = DT[UseBlock]->getIDom()->getBlock();
       }
       while (BB != DefBlock) {
-        if (SuspendBlocks.count(BB)) {
+        if (Info.isSuspendBlock(BB)) {
           Instruction* InsertPt = I;
           // figure out whether we need a new block
           if (PI) {
@@ -118,162 +246,52 @@ struct CoroSplit3 : public ModulePass, CoroutineCommon {
     }
   }
 
-  void insertSpills(Function& F, DominatorTree &DT) {
+  void insertSpills(Function& F, DominatorTree &DT, SuspendInfo const& Info) {
 
     SmallVector<Value*, 8> Values;
     ThisFunction = &F;
 
-    SuspendBlocks.clear();
-
     for (auto &BB : F) {
       for (auto &I : BB) {
-        if (auto II = dyn_cast<IntrinsicInst>(&I))
-          if (II->getIntrinsicID() == Intrinsic::coro_suspend)
-            SuspendBlocks.insert(II->getParent());
-
         if (I.user_empty())
           continue;
         if (isa<AllocaInst>(&I))
           continue;
 
         for (User* U: I.users())
-          if (auto UI = dyn_cast<Instruction>(U))
-            if (UI->getParent() != &BB) {
-              Values.push_back(&I);
-              break;
-            }
+          if (auto UI = dyn_cast<Instruction>(U)) {
+            BasicBlock* UseBlock = UI->getParent();
+            if (UseBlock == &BB)
+              continue; 
+            if (!DT.isReachableFromEntry(UseBlock))
+              continue;
+            Values.push_back(&I);
+            break;
+          }
       }
     }
 
     for (auto Value : Values) {
-      processValue(Value, DT);
+      processValue(Value, DT, Info);
     }
   }
-
-  struct SuspendInfo {
-    IntrinsicInst* SuspendInst;
-    BranchInst* SuspendBr;
-
-    SuspendInfo(Instruction &I) : SuspendInst(dyn_cast<IntrinsicInst>(&I)) {
-      if (!SuspendInst)
-        return;
-      if (SuspendInst->getIntrinsicID() != Intrinsic::coro_suspend) {
-        SuspendInst = nullptr;
-        return;
-      }
-      SuspendBr = dyn_cast<BranchInst>(SuspendInst->getNextNode());
-      if (!SuspendBr)
-        return;
-
-      if (isFinalSuspend()) {
-        assert(SuspendBr->getNumSuccessors() == 1);
-      }
-      else {
-        assert(SuspendBr->getNumSuccessors() == 2);
-        assert(SuspendBr->getOperand(0) == SuspendInst);
-      }
-    }
-
-    bool isCanonical() const {
-      return SuspendBr;
-    }
-
-    bool canonicalize() {
-      if (isCanonical())
-        return false;
-      BasicBlock* BB = SuspendInst->getParent();
-      Function* F = BB->getParent();
-      Module* M = F->getParent();
-      BasicBlock* ResumeBB = 
-        BB->splitBasicBlock(SuspendInst->getNextNode(), BB->getName() + ".edge");
-
-      ValueToValueMapTy VMap;
-      auto CleanupBB = CloneBasicBlock(ResumeBB, VMap, ".cleanup", F);
-      VMap[SuspendInst] = ConstantInt::getFalse(M->getContext());
-      for (Instruction &I : *CleanupBB)
-        RemapInstruction(&I, VMap,
-          RF_NoModuleLevelChanges | RF_IgnoreMissingEntries);
-
-      VMap.clear();
-      VMap[SuspendInst] = ConstantInt::getTrue(M->getContext());
-      for (Instruction &I : *ResumeBB)
-        RemapInstruction(&I, VMap,
-          RF_NoModuleLevelChanges | RF_IgnoreMissingEntries);
-      ResumeBB->setName(BB->getName() + ".edge.resume");
-
-      BB->getTerminator()->eraseFromParent();
-      BranchInst::Create(ResumeBB, CleanupBB, SuspendInst, BB);
-      DEBUG(dbgs() << "Canonicalize block " << BB->getName() << ". New edges: " 
-        << ResumeBB->getName() << " " << CleanupBB->getName() << "\n");
-      return true;
-    }
-
-    BasicBlock* getResumeBlock() const {
-      return isFinalSuspend() ? nullptr : SuspendBr->getSuccessor(0);
-    }
-    BasicBlock* getCleanupBlock() const {
-      return isFinalSuspend() ? SuspendBr->getSuccessor(0)
-        : SuspendBr->getSuccessor(1);
-    }
-
-    bool isFinalSuspend() const {
-      assert(SuspendInst);
-      return cast<ConstantInt>(SuspendInst->getOperand(2))->isZero();
-    }
-    explicit operator bool() const { return SuspendInst; }
-  };
-
-  bool simplifyAndConstantFoldTerminators(Function& F) {
-    int maxRepeat = 3;
-    bool repeat;
-    bool changed = false;
-    do {
-      repeat = false;
-      for (auto& BB : F) changed |= SimplifyInstructionsInBlock(&BB);
-      for (auto& BB : F) repeat |= ConstantFoldTerminator(&BB);
-      changed |= repeat;
-    } while (repeat && --maxRepeat > 0);
-    return changed;
-  }
-
-  // Canonical suspend is where
-  // an @llvm.coro.suspend is followed by a
-  // branch instruction 
-  bool canonicalizeSuspends(Function& F) {
-    bool changed = false;
-    for (auto BI = F.begin(), BE = F.end(); BI != BE;) {
-      auto& BB = *BI++;
-      for (auto &I: BB)
-        if (SuspendInfo SI{ I }) {
-          changed |= SI.canonicalize();
-          break;
-        }
-    }
-    if (changed)
-      simplifyAndConstantFoldTerminators(F);
-    return changed;
-  }
-
-  legacy::FunctionPassManager* FPM;
 
   bool runOnCoroutine(Function& F) {
     DEBUG(dbgs() << "CoroSplit function: " << F.getName() << "\n");
 
-    if (canonicalizeSuspends(F)) {
-      //FPM->run(F);
+    SuspendInfo Info;
+    DominatorTreeWrapperPass& DTA = getAnalysis<DominatorTreeWrapperPass>(F);
+    if (Info.canonicalizeSuspends(F)) {
+      DTA.runOnFunction(F);
     }
-    DominatorTree &DT = getAnalysis<DominatorTreeWrapperPass>(F).getDomTree();
-    insertSpills(F, DT);
+    DominatorTree &DT = DTA.getDomTree();
+    insertSpills(F, DT, Info);
     return true;
   }
 
 #if 1
   bool runOnModule(Module &M) override {
     CoroutineCommon::PerModuleInit(M);
-    legacy::FunctionPassManager myFPM(&M);
-    FPM = &myFPM;
-    FPM->add(createEarlyCSEPass());
-    //FPM->add(createCFGSimplificationPass());
 
     bool changed = false;
     for (Function &F : M.getFunctionList())

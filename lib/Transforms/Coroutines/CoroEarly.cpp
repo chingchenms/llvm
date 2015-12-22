@@ -420,7 +420,7 @@ namespace {
         return;
 
       auto LastInstr = B.getTerminator()->getPrevNode();
-      CallInst* Call = dyn_cast<CallInst>(LastInstr);
+      CallInst* Call = cast<CallInst>(LastInstr);
       Function* awaitSuspendFn = Call->getCalledFunction();
       if (!awaitSuspendFn)
         return;

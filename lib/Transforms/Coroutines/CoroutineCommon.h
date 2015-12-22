@@ -108,6 +108,8 @@ struct LLVM_LIBRARY_VISIBILITY CoroutineCommon {
   void InsertFakeSuspend(Value *value, Instruction *InsertBefore);
   void RemoveNoOptAttribute(Function & F);
   void RemoveFakeSuspends(Function &F);
+
+  static bool simplifyAndConstantFoldTerminators(Function& F);
 };
 
 /// TODO: move to llvm/InitializePasses.h?

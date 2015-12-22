@@ -14,6 +14,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "CoroutineCommon.h"
+#include "llvm/Transforms/Utils/Local.h"
 #include "llvm/Transforms/Coroutines.h"
 
 #include "llvm/IR/Module.h"
@@ -217,6 +218,19 @@ void CoroutineCommon::RemoveFakeSuspends(Function &F) {
         bitcast->eraseFromParent();
     }
   }
+}
+
+bool llvm::CoroutineCommon::simplifyAndConstantFoldTerminators(Function & F) {
+  int maxRepeat = 3;
+  bool repeat;
+  bool changed = false;
+  do {
+    repeat = false;
+    for (auto& BB : F) changed |= SimplifyInstructionsInBlock(&BB);
+    for (auto& BB : F) repeat |= ConstantFoldTerminator(&BB);
+    changed |= repeat;
+  } while (repeat && --maxRepeat > 0);
+  return changed;
 }
 
 void CoroutineCommon::InsertFakeSuspend(Value *value,
