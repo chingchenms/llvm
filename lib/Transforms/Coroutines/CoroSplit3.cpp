@@ -12,7 +12,10 @@
 //===----------------------------------------------------------------------===//
 
 #include "CoroutineCommon.h"
+#include "llvm/Transforms/Utils/Local.h"
+#include "llvm/Transforms/Scalar.h"
 #include "llvm/Transforms/Coroutines.h"
+#include "llvm/IR/LegacyPassManager.h"
 
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/SmallVector.h"
@@ -47,10 +50,13 @@ struct CoroSplit3 : public ModulePass, CoroutineCommon {
 
   SmallPtrSet<BasicBlock*, 8> SuspendBlocks;
 
+  Function* ThisFunction;
+
   void processValue(Value *V, DominatorTree &DT) {
     Instruction* DefInst = cast<Instruction>(V);
     BasicBlock* DefBlock = DefInst->getParent();
-    assert(SuspendBlocks.count(DefBlock) == 0);
+    //assert(ThisFunction->getEntryBlock() == DefBlock ||
+    //       SuspendBlocks.count(DefBlock) == 0);
 
     for (auto UI = V->use_begin(), UE = V->use_end(); UI != UE;) {
       Use &U = *UI++;
@@ -88,9 +94,23 @@ struct CoroSplit3 : public ModulePass, CoroutineCommon {
                 SuspendTerminator->setSuccessor(1, ResumeBlock);
             }
           }
+
+          // we may be able to recreate instruction
+          if (auto Gep = dyn_cast<GetElementPtrInst>(V)) {
+            if (isa<AllocaInst>(Gep->getPointerOperand()))
+              if (Gep->hasAllConstantIndices()) {
+                auto Dup = Gep->clone();
+                DEBUG(dbgs() << "Cloned: " << *Dup << "\n");
+                Dup->insertBefore(InsertPt);
+                U.set(Dup);
+                break;
+              }
+          }
+          // otherwise, create a spill slot
           auto LoadFn = Intrinsic::getDeclaration(M, Intrinsic::coro_kill2, U->getType());
           auto Reload = CallInst::Create(LoadFn, { V }, V->getName() + ".spill", InsertPt);
           U.set(Reload);
+          DEBUG(dbgs() << "Created spill: " << *Reload << "\n");
           break;
         }
         BB = DT[BB]->getIDom()->getBlock();
@@ -99,7 +119,9 @@ struct CoroSplit3 : public ModulePass, CoroutineCommon {
   }
 
   void insertSpills(Function& F, DominatorTree &DT) {
+
     SmallVector<Value*, 8> Values;
+    ThisFunction = &F;
 
     SuspendBlocks.clear();
 
@@ -128,7 +150,118 @@ struct CoroSplit3 : public ModulePass, CoroutineCommon {
     }
   }
 
+  struct SuspendInfo {
+    IntrinsicInst* SuspendInst;
+    BranchInst* SuspendBr;
+
+    SuspendInfo(Instruction &I) : SuspendInst(dyn_cast<IntrinsicInst>(&I)) {
+      if (!SuspendInst)
+        return;
+      if (SuspendInst->getIntrinsicID() != Intrinsic::coro_suspend) {
+        SuspendInst = nullptr;
+        return;
+      }
+      SuspendBr = dyn_cast<BranchInst>(SuspendInst->getNextNode());
+      if (!SuspendBr)
+        return;
+
+      if (isFinalSuspend()) {
+        assert(SuspendBr->getNumSuccessors() == 1);
+      }
+      else {
+        assert(SuspendBr->getNumSuccessors() == 2);
+        assert(SuspendBr->getOperand(0) == SuspendInst);
+      }
+    }
+
+    bool isCanonical() const {
+      return SuspendBr;
+    }
+
+    bool canonicalize() {
+      if (isCanonical())
+        return false;
+      BasicBlock* BB = SuspendInst->getParent();
+      Function* F = BB->getParent();
+      Module* M = F->getParent();
+      BasicBlock* ResumeBB = 
+        BB->splitBasicBlock(SuspendInst->getNextNode(), BB->getName() + ".edge");
+
+      ValueToValueMapTy VMap;
+      auto CleanupBB = CloneBasicBlock(ResumeBB, VMap, ".cleanup", F);
+      VMap[SuspendInst] = ConstantInt::getFalse(M->getContext());
+      for (Instruction &I : *CleanupBB)
+        RemapInstruction(&I, VMap,
+          RF_NoModuleLevelChanges | RF_IgnoreMissingEntries);
+
+      VMap.clear();
+      VMap[SuspendInst] = ConstantInt::getTrue(M->getContext());
+      for (Instruction &I : *ResumeBB)
+        RemapInstruction(&I, VMap,
+          RF_NoModuleLevelChanges | RF_IgnoreMissingEntries);
+      ResumeBB->setName(BB->getName() + ".edge.resume");
+
+      BB->getTerminator()->eraseFromParent();
+      BranchInst::Create(ResumeBB, CleanupBB, SuspendInst, BB);
+      DEBUG(dbgs() << "Canonicalize block " << BB->getName() << ". New edges: " 
+        << ResumeBB->getName() << " " << CleanupBB->getName() << "\n");
+      return true;
+    }
+
+    BasicBlock* getResumeBlock() const {
+      return isFinalSuspend() ? nullptr : SuspendBr->getSuccessor(0);
+    }
+    BasicBlock* getCleanupBlock() const {
+      return isFinalSuspend() ? SuspendBr->getSuccessor(0)
+        : SuspendBr->getSuccessor(1);
+    }
+
+    bool isFinalSuspend() const {
+      assert(SuspendInst);
+      return cast<ConstantInt>(SuspendInst->getOperand(2))->isZero();
+    }
+    explicit operator bool() const { return SuspendInst; }
+  };
+
+  bool simplifyAndConstantFoldTerminators(Function& F) {
+    int maxRepeat = 3;
+    bool repeat;
+    bool changed = false;
+    do {
+      repeat = false;
+      for (auto& BB : F) changed |= SimplifyInstructionsInBlock(&BB);
+      for (auto& BB : F) repeat |= ConstantFoldTerminator(&BB);
+      changed |= repeat;
+    } while (repeat && --maxRepeat > 0);
+    return changed;
+  }
+
+  // Canonical suspend is where
+  // an @llvm.coro.suspend is followed by a
+  // branch instruction 
+  bool canonicalizeSuspends(Function& F) {
+    bool changed = false;
+    for (auto BI = F.begin(), BE = F.end(); BI != BE;) {
+      auto& BB = *BI++;
+      for (auto &I: BB)
+        if (SuspendInfo SI{ I }) {
+          changed |= SI.canonicalize();
+          break;
+        }
+    }
+    if (changed)
+      simplifyAndConstantFoldTerminators(F);
+    return changed;
+  }
+
+  legacy::FunctionPassManager* FPM;
+
   bool runOnCoroutine(Function& F) {
+    DEBUG(dbgs() << "CoroSplit function: " << F.getName() << "\n");
+
+    if (canonicalizeSuspends(F)) {
+      //FPM->run(F);
+    }
     DominatorTree &DT = getAnalysis<DominatorTreeWrapperPass>(F).getDomTree();
     insertSpills(F, DT);
     return true;
@@ -137,6 +270,10 @@ struct CoroSplit3 : public ModulePass, CoroutineCommon {
 #if 1
   bool runOnModule(Module &M) override {
     CoroutineCommon::PerModuleInit(M);
+    legacy::FunctionPassManager myFPM(&M);
+    FPM = &myFPM;
+    FPM->add(createEarlyCSEPass());
+    //FPM->add(createCFGSimplificationPass());
 
     bool changed = false;
     for (Function &F : M.getFunctionList())

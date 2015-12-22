@@ -31,205 +31,6 @@
 using namespace llvm;
 
 #define DEBUG_TYPE "coro-early"
-
-namespace {
-  struct AllocaInfo {
-    SmallVector<BasicBlock *, 32> DefiningBlocks;
-    SmallVector<BasicBlock *, 32> UsingBlocks;
-
-    StoreInst *OnlyStore;
-    BasicBlock *OnlyBlock;
-    bool OnlyUsedInOneBlock;
-
-    Value *AllocaPointerVal;
-
-    void clear() {
-      DefiningBlocks.clear();
-      UsingBlocks.clear();
-      OnlyStore = nullptr;
-      OnlyBlock = nullptr;
-      OnlyUsedInOneBlock = true;
-      AllocaPointerVal = nullptr;
-    }
-
-    /// Scan the uses of the specified alloca, filling in the AllocaInfo used
-    /// by the rest of the pass to reason about the uses of this alloca.
-    void AnalyzeAlloca(AllocaInst *AI) {
-      clear();
-
-      // As we scan the uses of the alloca instruction, keep track of stores,
-      // and decide whether all of the loads and stores to the alloca are within
-      // the same basic block.
-      for (auto UI = AI->user_begin(), E = AI->user_end(); UI != E;) {
-        Instruction *User = cast<Instruction>(*UI++);
-
-        if (StoreInst *SI = dyn_cast<StoreInst>(User)) {
-          // Remember the basic blocks which define new values for the alloca
-          DefiningBlocks.push_back(SI->getParent());
-          AllocaPointerVal = SI->getOperand(0);
-          OnlyStore = SI;
-        }
-        else {
-          LoadInst *LI = cast<LoadInst>(User);
-          // Otherwise it must be a load instruction, keep track of variable
-          // reads.
-          UsingBlocks.push_back(LI->getParent());
-          AllocaPointerVal = LI;
-        }
-
-        if (OnlyUsedInOneBlock) {
-          if (!OnlyBlock)
-            OnlyBlock = User->getParent();
-          else if (OnlyBlock != User->getParent())
-            OnlyUsedInOneBlock = false;
-        }
-      }
-    }
-  };
-
-  using SuspendMap = DenseMap<BasicBlock*, unsigned>;
-}
-
-static void insertCoroLoadAndStore(AllocaInst *AI, SuspendMap::iterator SI) {
-  BasicBlock* ResumeEdge = SI->getFirst();
-
-  // find the suspend instruction and its number
-  BasicBlock* SuspendBlock = ResumeEdge->getSinglePredecessor();
-  assert(SuspendBlock && "resume edge block should have a single predecessor");
-  BranchInst* BR = cast<BranchInst>(SuspendBlock->getTerminator());
-  assert(BR->getNumSuccessors() == 2 && "suspend block should end in cond branch");
-  auto II = cast<IntrinsicInst>(BR->getOperand(0));
-  assert(II->getIntrinsicID() == Intrinsic::coro_suspend);
-  auto SuspendIndex = cast<ConstantInt>(II->getOperand(2));
-
-  Module* M = ResumeEdge->getParent()->getParent();
-  auto Int32Ty = IntegerType::get(M->getContext(), 32);
-  auto Align = ConstantInt::get(Int32Ty, AI->getAlignment());
-  auto Type = AI->getType()->getElementType();
-  auto SpillIndex = ConstantInt::get(Int32Ty, SI->getSecond());
-
-  auto InsertPt = ResumeEdge->getTerminator();
-
-  auto Load = new LoadInst(AI, "", false, InsertPt);
-  auto KillFn = Intrinsic::getDeclaration(M, Intrinsic::coro_kill2, Type);
-  auto Reload = CallInst::Create(KillFn, { Load }, "", InsertPt);
-  new StoreInst(Reload, AI, InsertPt);
-
-#if 0
-  auto StoreFn = Intrinsic::getDeclaration(M, Intrinsic::coro_save, Type);
-  auto Load = new LoadInst(AI, "", false, II);
-  CallInst::Create(StoreFn, {Load, SuspendIndex, SpillIndex, Align}, "", II);
-
-  auto InsertPt = ResumeEdge->getTerminator();
-  auto LoadFn = Intrinsic::getDeclaration(M, Intrinsic::coro_load, Type);
-  auto Reload = CallInst::Create(LoadFn, { SuspendIndex, SpillIndex }, "", InsertPt);
-  new StoreInst(Reload, AI, InsertPt);
-#endif
-  ++SI->getSecond();
-}
-
-static void processAlloca(
-  AllocaInst *AI, AllocaInfo &Info,
-  const SmallPtrSetImpl<BasicBlock *> &DefBlocks,
-  SuspendMap &SuspendBlocks) {
-
-  SmallPtrSet<BasicBlock *, 32> LiveInBlocks;
-
-  // To determine liveness, we must iterate through the predecessors of blocks
-  // where the def is live.  Blocks are added to the worklist if we need to
-  // check their predecessors.  Start with all the using blocks.
-  SmallVector<BasicBlock *, 64> LiveInBlockWorklist(Info.UsingBlocks.begin(),
-    Info.UsingBlocks.end());
-
-  // If any of the using blocks is also a definition block, check to see if the
-  // definition occurs before or after the use.  If it happens before the use,
-  // the value isn't really live-in.
-  for (unsigned i = 0, e = LiveInBlockWorklist.size(); i != e; ++i) {
-    BasicBlock *BB = LiveInBlockWorklist[i];
-    if (!DefBlocks.count(BB))
-      continue;
-
-    // Okay, this is a block that both uses and defines the value.  If the first
-    // reference to the alloca is a def (store), then we know it isn't live-in.
-    for (BasicBlock::iterator I = BB->begin();; ++I) {
-      if (StoreInst *SI = dyn_cast<StoreInst>(I)) {
-        if (SI->getOperand(1) != AI)
-          continue;
-
-        // We found a store to the alloca before a load.  The alloca is not
-        // actually live-in here.
-        LiveInBlockWorklist[i] = LiveInBlockWorklist.back();
-        LiveInBlockWorklist.pop_back();
-        --i, --e;
-        break;
-      }
-
-      if (LoadInst *LI = dyn_cast<LoadInst>(I)) {
-        if (LI->getOperand(0) != AI)
-          continue;
-
-        // Okay, we found a load before a store to the alloca.  It is actually
-        // live into this block.
-        break;
-      }
-    }
-  }
-
-  // Now that we have a set of blocks where the phi is live-in, recursively add
-  // their predecessors until we find the full region the value is live.
-  while (!LiveInBlockWorklist.empty()) {
-    BasicBlock *BB = LiveInBlockWorklist.pop_back_val();
-
-    // The block really is live in here, insert it into the set.  If already in
-    // the set, then it has already been processed.
-    if (!LiveInBlocks.insert(BB).second)
-      continue;
-
-    // Since the value is live into BB, it is either defined in a predecessor or
-    // live into it to.  Add the preds to the worklist unless they are a
-    // defining block.
-    for (pred_iterator PI = pred_begin(BB), E = pred_end(BB); PI != E; ++PI) {
-      BasicBlock *P = *PI;
-
-      auto Suspend = SuspendBlocks.find(P);
-      if (Suspend != SuspendBlocks.end()) {
-        insertCoroLoadAndStore(AI, Suspend);
-      }
-
-      // The value is not live into a predecessor if it defines the value.
-      if (DefBlocks.count(P))
-        continue;
-
-      // Otherwise it is, add to the worklist.
-      LiveInBlockWorklist.push_back(P);
-    }
-  }
-}
-
-static void removeLifetimeIntrinsicUsers(AllocaInst *AI) {
-  // Knowing that this alloca is promotable, we know that it's safe to kill all
-  // instructions except for load and store.
-
-  for (auto UI = AI->user_begin(), UE = AI->user_end(); UI != UE;) {
-    Instruction *I = cast<Instruction>(*UI);
-    ++UI;
-    if (isa<LoadInst>(I) || isa<StoreInst>(I))
-      continue;
-
-    if (!I->getType()->isVoidTy()) {
-      // The only users of this bitcast/GEP instruction are lifetime intrinsics.
-      // Follow the use/def chain to erase them now instead of leaving it for
-      // dead code elimination later.
-      for (auto UUI = I->user_begin(), UUE = I->user_end(); UUI != UUE;) {
-        Instruction *Inst = cast<Instruction>(*UUI);
-        ++UUI;
-        Inst->eraseFromParent();
-      }
-    }
-    I->eraseFromParent();
-  }
-}
-
 namespace {
   struct CoroEarly : public FunctionPass, CoroutineCommon {
     static char ID; // Pass identification, replacement for typeid
@@ -240,63 +41,105 @@ namespace {
       return false;
     }
 
-    //static int getSuspendNo(IntrinsicInst* intrin) {
-    //  assert(intrin->getIntrinsicID() == Intrinsic::coro_suspend);
-    //  auto CI = cast<ConstantInt>(intrin->getArgOperand(2));
-    //  return CI->getLimitedValue()
-    //}
+    struct SuspendInfo
+    {
+      IntrinsicInst* SuspendInst;
+      BranchInst* SuspendBr;
 
-    void handleSuspend(IntrinsicInst *intrin, SuspendMap &SuspendBlocks) {
-      // final suspend has no resume edge
-      if (cast<ConstantInt>(intrin->getArgOperand(2))->isZero())
-        return;
+      SuspendInfo() : SuspendInst(nullptr) {}
+      SuspendInfo(Instruction &I) : SuspendInst(dyn_cast<IntrinsicInst>(&I)) {
+        if (!SuspendInst)
+          return;
+        if (SuspendInst->getIntrinsicID() != Intrinsic::coro_suspend) {
+          SuspendInst = nullptr;
+          return;
+        }
+        SuspendBr = cast<BranchInst>(SuspendInst->getNextNode());
+        if (isFinalSuspend()) {
+          assert(SuspendBr->getNumSuccessors() == 1);
+        }
+      }
 
-      auto SuspendBlock = intrin->getParent();
-      assert(SuspendBlock->getNumUses() == 1 && "unexpected number of uses");
-      auto BR = cast<BranchInst>(SuspendBlock->getTerminator());
-      auto ResumeEdge = BasicBlock::Create(M->getContext(),
-                                           SuspendBlock->getName() + ".resume",
-                                           SuspendBlock->getParent());
-      BranchInst::Create(BR->getSuccessor(0), ResumeEdge);
-      BR->setSuccessor(0, ResumeEdge);
-      SuspendBlocks.insert({ ResumeEdge, 0 });
-    }
+      BasicBlock* getResumeBlock() const {
+        return isFinalSuspend() ? nullptr : SuspendBr->getSuccessor(0);
+      }
+      BasicBlock* getCleanupBlock() const {
+        return isFinalSuspend() ? SuspendBr->getSuccessor(0)
+                                : SuspendBr->getSuccessor(1);
+      }
+
+      bool isFinalSuspend() const { 
+        assert(SuspendInst);
+        return cast<ConstantInt>(SuspendInst->getOperand(2))->isZero();
+      }
+      explicit operator bool() const { return SuspendInst; }
+    };
 
     bool runOnFunction(Function &F) override {
       if (!F.hasFnAttribute(Attribute::Coroutine))
         return false;
 
-      // find allocas (and collect blocks with suspends)
-      SmallVector<AllocaInst*, 16> Allocas;
-      SuspendMap SuspendBlocks;
+      SmallVector<SuspendInfo, 8> Suspends;
+      SmallPtrSet<BasicBlock*, 8> CleanupBlocks;
+      SmallPtrSet<BasicBlock*, 8> SuspendBlocks;
 
-      for (auto it = inst_begin(F), end = inst_end(F); it != end;) {
-        Instruction &I = *it++;
-        if (auto intrin = dyn_cast<IntrinsicInst>(&I)) {
-          if (intrin->getIntrinsicID() == Intrinsic::coro_suspend)
-            handleSuspend(intrin, SuspendBlocks);
-          continue;
+      for (auto& BB: F)
+        for (auto& I : BB)
+        if (SuspendInfo SP{ I }) {
+          Suspends.push_back(SP);
+          SuspendBlocks.insert(&BB);
         }
-        if (auto AI = dyn_cast<AllocaInst>(&I))
-          if (isAllocaPromotable(AI))
-            Allocas.push_back(AI);
+
+      SmallPtrSet<BasicBlock*, 8> SharedBlocks;
+
+      for (SuspendInfo SP : Suspends) {
+        auto BB = SP.getCleanupBlock();
+        for (;;) {
+          if (!BB->getSinglePredecessor()) {
+            SharedBlocks.insert(BB);
+            break;
+          }
+          CleanupBlocks.insert(BB);
+          if (succ_empty(BB))
+            break;
+          BB = BB->getSingleSuccessor();
+          assert(BB && "unexpected successors on a cleanup edge");
+        }
       }
 
-      AllocaInfo Info;
-      SmallPtrSet<BasicBlock *, 32> DefBlocks;
+      // SharedBlocks are candidates for duplication
+      SmallVector<BasicBlock*, 8> Predecessors;
 
-      for (auto AI : Allocas) {
-        removeLifetimeIntrinsicUsers(AI);
-        Info.AnalyzeAlloca(AI);
+      while (!SharedBlocks.empty()) {
+        // look at all predecessors, find all that belongs to cleanup
+        // duplicate the block
 
-        if (AI->use_empty())
-          continue;
+        BasicBlock *B = *SharedBlocks.begin();
+        SharedBlocks.erase(B);
+        Predecessors.clear();
+        bool notCleanup = false;
+        for (auto P : predecessors(B))
+          if (CleanupBlocks.count(P))
+            Predecessors.push_back(P);
+          else
+            notCleanup = true;
 
-          // Unique the set of defining blocks for efficient lookup.
-        DefBlocks.insert(Info.DefiningBlocks.begin(), Info.DefiningBlocks.end());
+        if (notCleanup) {
+          ValueToValueMapTy VMap;
+          auto NewBB = CloneBasicBlock(B, VMap, ".clone", &F);
 
-        processAlloca(AI, Info, DefBlocks, SuspendBlocks);
+          for (Instruction &I : *NewBB)
+            RemapInstruction(&I, VMap,
+              RF_NoModuleLevelChanges | RF_IgnoreMissingEntries);
+
+          for (auto P : Predecessors) {
+            assert(P->getSingleSuccessor() == B);
+            cast<BranchInst>(P->getTerminator())->setSuccessor(0, NewBB);
+          }
+        }
       }
+
+
       return true;
     }
 
