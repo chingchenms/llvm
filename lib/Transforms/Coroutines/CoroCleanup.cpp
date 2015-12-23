@@ -56,8 +56,10 @@ struct CoroCleanup : FunctionPass, CoroutineCommon {
       return;
 
     auto frame = new BitCastInst(rawFrame, anyFramePtrTy, "", intrin);
+    //auto gepIndex = GetElementPtrInst::Create(
+    //    anyFrameTy, frame, {zeroConstant, zeroConstant}, "", intrin);
     auto gepIndex = GetElementPtrInst::Create(
-        anyFrameTy, frame, {zeroConstant, zeroConstant}, "", intrin);
+      anyFrameTy, frame, { zeroConstant, twoConstant }, "", intrin);
     auto index = new LoadInst(gepIndex, "", intrin); // FIXME: alignment
     auto cmp = new ICmpInst(intrin, ICmpInst::ICMP_EQ,
                             ConstantPointerNull::get(anyResumeFnPtrTy), index);
