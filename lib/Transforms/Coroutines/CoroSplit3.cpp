@@ -561,6 +561,23 @@ struct CoroSplit3 : public ModulePass, CoroutineCommon {
     return Entry;
   }
 
+  void CallAwaitSuspend(IntrinsicInst *I, Value *FramePtr) {
+    auto vFrame = new BitCastInst(FramePtr, bytePtrTy, "", I);
+    Value *op = I->getArgOperand(1);
+    while (const ConstantExpr *CE = dyn_cast<ConstantExpr>(op)) {
+      if (!CE->isCast())
+        break;
+      // Look through the bitcast
+      op = cast<ConstantExpr>(op)->getOperand(0);
+    }
+    Function* fn = cast<Function>(op);
+    assert(fn->getType() == awaitSuspendFnPtrTy && "unexpected await_suspend fn type");
+
+    auto call = CallInst::Create(fn, { I->getArgOperand(0), vFrame }, "", I);
+    InlineFunctionInfo IFI;
+    InlineFunction(call, IFI);
+  }
+
   void replaceSuspends(CoroutineInfo &Info, SuspendInfo const &Suspends) {
     for (auto SP : Suspends.SuspendPoints) {
       BranchInst::Create(Info.ReturnBlock, SP.SuspendBr);
@@ -569,6 +586,7 @@ struct CoroSplit3 : public ModulePass, CoroutineCommon {
       { zeroConstant, twoConstant }, "",
         SP.SuspendInst);
       new StoreInst(SP.getIndex(), gep, SP.SuspendInst);
+      CallAwaitSuspend(SP.SuspendInst, frameInRamp);
       SP.SuspendInst->eraseFromParent();
     }
   }
