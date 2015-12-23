@@ -59,9 +59,12 @@ struct LLVM_LIBRARY_VISIBILITY CoroutineCommon {
 
   static bool isCoroutine(Function& F);
 
-  static void ComputeAllSuccessors(BasicBlock *B, BlockSet &result);
+  static void ComputeAllSuccessors(BasicBlock *B, SmallPtrSetImpl<BasicBlock*> &result);
 
   static void ComputeAllPredecessors(BasicBlock *B, BlockSet &result);
+
+  static void ComputeDefChainNotIn(Instruction *instr, BlockSet const &source,
+                                   InstrSetVector &result);
 
   static void ComputeDefChain(Instruction *instr, BlockSet const &source,
                               InstrSetVector &result);

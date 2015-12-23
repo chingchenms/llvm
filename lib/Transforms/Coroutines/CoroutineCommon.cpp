@@ -68,6 +68,31 @@ bool llvm::CoroutineCommon::isCoroutine(Function &F) {
   return FindIntrinsic(F, Intrinsic::coro_suspend);
 }
 
+void CoroutineCommon::ComputeDefChainNotIn(Instruction *source,
+  BlockSet const &Blocks,
+  InstrSetVector &result) {
+  if (result.count(source))
+    return;
+
+  SmallVector<Instruction *, 16> workList;
+  workList.push_back(source);
+
+  do {
+    source = workList.pop_back_val();
+    result.insert(source);
+
+    for (Use &u : source->operands()) {
+      Instruction *instr = dyn_cast<Instruction>(u.get());
+      if (instr == nullptr)
+        continue;
+
+      if (Blocks.count(instr->getParent()) == 0)
+        if (result.count(instr) == 0)
+          workList.push_back(instr);
+    }
+  } while (!workList.empty());
+}
+
 void CoroutineCommon::ComputeDefChain(Instruction *source,
                                       BlockSet const &Blocks,
                                       InstrSetVector &result) {
@@ -103,7 +128,7 @@ void llvm::CoroutineCommon::MoveInReverseOrder(InstrSetVector const &Instrs,
 }
 
 void CoroutineCommon::ComputeAllSuccessors(
-    BasicBlock *B, SmallPtrSet<BasicBlock *, 16> &result) {
+    BasicBlock *B, SmallPtrSetImpl<BasicBlock *> &result) {
   SmallSetVector<BasicBlock *, 16> workList;
 
   workList.insert(B);
