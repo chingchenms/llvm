@@ -17,6 +17,7 @@
 
 #include "llvm/ADT/Statistic.h"
 #include "llvm/IR/Function.h"
+#include "llvm/IR/Module.h"
 #include "llvm/IR/InstIterator.h"
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/Pass.h"
@@ -44,6 +45,38 @@ struct CoroCleanup : FunctionPass, CoroutineCommon {
   void ReplaceCoroInit(IntrinsicInst *intrin) {
     Value *operand = intrin->getArgOperand(0);
     intrin->replaceAllUsesWith(operand);
+    intrin->eraseFromParent();
+  }
+
+  void ReplaceCoroPromise(IntrinsicInst *intrin, bool from = false) {
+    
+    Value *Operand = intrin->getArgOperand(0);
+    auto PromisePtr = cast<PointerType>(
+        from ? Operand->getType() : intrin->getFunctionType()->getReturnType());
+    auto PromiseType = PromisePtr->getElementType();
+
+    // TODO: move into Coroutine Common
+    auto SampleStruct = StructType::create({ anyResumeFnPtrTy, anyResumeFnPtrTy,
+                                        int32Ty, PromiseType }, "");
+    const DataLayout &DL = M->getDataLayout();
+    const auto Offset = DL.getStructLayout(SampleStruct)->getElementOffset(3);
+
+    Value* Replacement = nullptr;
+
+    if (from) {
+      auto Index = ConstantInt::get(int32Ty, -Offset);
+      auto BCI = new BitCastInst(Operand, bytePtrTy, "", intrin);
+      auto Gep = GetElementPtrInst::CreateInBounds(BCI, { Index }, "", intrin);
+      Replacement = Gep;
+    }
+    else {
+      auto Index = ConstantInt::get(int32Ty, Offset);
+      auto Gep = GetElementPtrInst::CreateInBounds(Operand, { Index }, "", intrin);
+      auto BCI = new BitCastInst(Gep, PromisePtr, "", intrin);
+      Replacement = BCI;
+    }
+
+    intrin->replaceAllUsesWith(Replacement);
     intrin->eraseFromParent();
   }
 
@@ -101,6 +134,12 @@ struct CoroCleanup : FunctionPass, CoroutineCommon {
         case Intrinsic::coro_suspend:
           assert(isFakeSuspend(intrin) && "coro-split pass did not run");
           intrin->eraseFromParent();
+          break;
+        case Intrinsic::coro_promise:
+          ReplaceCoroPromise(intrin);
+          break;
+        case Intrinsic::coro_from_promise:
+          ReplaceCoroPromise(intrin, /*From=*/true);
           break;
         }
         changed = true;
