@@ -15,7 +15,11 @@
 #include "CoroutineCommon.h"
 #include "llvm/Transforms/Coroutines.h"
 #include "llvm/Transforms/Utils/PromoteMemToReg.h"
+#include "llvm/Transforms/IPO/InlinerPass.h"
+#include "llvm/Analysis/InlineCost.h"
+#include "llvm/Analysis/TargetLibraryInfo.h"
 
+#include "llvm/Analysis/CallGraphSCCPass.h"
 #include "llvm/IR/CFG.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/CallSite.h"
@@ -240,10 +244,12 @@ INITIALIZE_PASS(CoroEarly2, "coro-early2",
   // pass incubator
 
 namespace {
-  struct CoroModuleEarly : public FunctionPass {
+#if 0
+  struct CoroModuleEarly : public CallGraphSCCPass {
     static char ID; // Pass identification, replacement for typeid
     StringRef name;
-    CoroModuleEarly() : FunctionPass(ID), name("CoroModuleEarly") {}
+    CoroModuleEarly() : CallGraphSCCPass(ID), name("CoroModuleEarly") {}
+    Module* M;
 
     bool doInitialization(Module&) override {
       //errs() << "init: " << name << "\n";
@@ -255,7 +261,22 @@ namespace {
       return false;
     }
 
-    bool runOnFunction(Function &F) override {
+    void processCoroutine(Function& F, CallGraph& CG) {
+      // walk CG up until we hit
+    }
+
+    bool doInitialization(CallGraph &CG) override {
+      CallGraphSCCPass::doInitialization(CG);
+      M = &CG.getModule();
+
+      for (auto& F : *M)
+        if (F.hasFnAttribute(Attribute::Coroutine))
+          processCoroutine(F, CG);
+
+      return false;
+    }
+
+    bool runOnSCC(CallGraphSCC &SCC) override {
       return false;
     }
 
@@ -264,9 +285,122 @@ namespace {
       AU.setPreservesAll();
     }
   };
+#else
+  class CoroModuleEarly : public Inliner, CoroutineCommon {
+    InlineCostAnalysis *ICA;
+
+  public:
+    // Use extremely low threshold.
+    CoroModuleEarly() : Inliner(ID, -2000000000, /*InsertLifetime*/ true),
+      ICA(nullptr) {
+      initializeAlwaysInlinerPass(*PassRegistry::getPassRegistry());
+    }
+
+    static char ID; // Pass identification, replacement for typeid
+
+    InlineCost getInlineCost(CallSite CS) override;
+
+    void getAnalysisUsage(AnalysisUsage &AU) const override;
+    bool runOnSCC(CallGraphSCC &SCC) override;
+
+    SmallVector<Function*, 4> Coroutines;
+    SmallPtrSet<Function*, 16> CalledFromCoroutineInitBlock;
+
+    using llvm::Pass::doFinalization;
+    bool doInitialization(CallGraph &CG) override {
+      CalledFromCoroutineInitBlock.clear();
+      Coroutines.clear();
+      for (auto& F: CG.getModule())
+        if (F.hasFnAttribute(Attribute::Coroutine)) {
+          Coroutines.push_back(&F);
+          Instruction* II = FindIntrinsic(F, Intrinsic::coro_init);
+          assert(II->getParent() == &F.getEntryBlock() && "@llvm.coro.init is not in the entry block");
+          for (auto it = ++BasicBlock::iterator(II),
+                    end = F.getEntryBlock().end();
+               it != end; ++it) {
+            CallSite CS(&*it);
+            if (!CS.isCall())
+              continue;
+
+            Function *Callee = CS.getCalledFunction();
+
+            if (!Callee || Callee->isDeclaration())
+              continue;
+
+            CalledFromCoroutineInitBlock.insert(Callee);
+          }
+        }
+
+      SmallVector<Function *, 8> Worklist(CalledFromCoroutineInitBlock.begin(),
+                                          CalledFromCoroutineInitBlock.end());
+      while (!Worklist.empty()) {
+        auto F = Worklist.pop_back_val();
+        for (auto CR : *CG[F]) {
+          auto Callee = CR.second->getFunction();
+          if (!Callee || Callee->isDeclaration() ||
+            CalledFromCoroutineInitBlock.count(Callee) != 0)
+            continue;
+
+          CalledFromCoroutineInitBlock.insert(Callee);
+          Worklist.push_back(Callee);
+        }
+      }
+
+      for (auto F : CalledFromCoroutineInitBlock)
+        errs() << F->getName() << "\n";
+
+      return false;
+    }
+    //bool doFinalization(CallGraph &CG) override {
+    //  return removeDeadFunctions(CG, /*AlwaysInlineOnly=*/ true);
+    //}
+  };
+#endif
 }
 char CoroModuleEarly::ID = 0;
 static RegisterPass<CoroModuleEarly> Y2("CoroModuleEarly", "CoroModuleEarly Pass");
+
+INITIALIZE_PASS_BEGIN(CoroModuleEarly, "CoroModuleEarly",
+                      "CoroModuleEarly Pass", false, false)
+INITIALIZE_PASS_DEPENDENCY(AssumptionCacheTracker)
+INITIALIZE_PASS_DEPENDENCY(CallGraphWrapperPass)
+INITIALIZE_PASS_DEPENDENCY(InlineCostAnalysis)
+INITIALIZE_PASS_DEPENDENCY(TargetLibraryInfoWrapperPass)
+INITIALIZE_PASS_END(CoroModuleEarly, "CoroModuleEarly", "CoroModuleEarly Pass",
+                    false, false)
+
+
+// from_promise -- inline into coroutine
+// resume / destroy-- inline into functions that call coroutines
+// if function has from_promise in it inline it into a parent
+
+
+InlineCost CoroModuleEarly::getInlineCost(CallSite CS) {
+  Function *Callee = CS.getCalledFunction();
+
+  // Only inline direct calls to functions with always-inline attributes
+  // that are viable for inlining. FIXME: We shouldn't even get here for
+  // declarations.
+  if (!Callee || Callee->isDeclaration() || 
+    !ICA->isInlineViable(*Callee) ||
+    CS.hasFnAttr(Attribute::Coroutine))
+    return InlineCost::getNever();
+
+  if (CalledFromCoroutineInitBlock.count(Callee) != 0)
+    return InlineCost::getAlways();
+
+  return InlineCost::getNever();
+}
+
+bool CoroModuleEarly::runOnSCC(CallGraphSCC &SCC) {
+  ICA = &getAnalysis<InlineCostAnalysis>();
+  return Inliner::runOnSCC(SCC);
+}
+
+void CoroModuleEarly::getAnalysisUsage(AnalysisUsage &AU) const {
+  AU.addRequired<InlineCostAnalysis>();
+  Inliner::getAnalysisUsage(AU);
+}
 
 namespace {
   struct CoroScalarLate : public FunctionPass {
@@ -434,8 +568,9 @@ namespace {
     }
 
     bool runOnCoroutine(Function& F) {
+      // TODO: try alias analysis
       RemoveNoOptAttribute(F);
-
+#if 0
       Function* coroKill = 
         Intrinsic::getDeclaration(M, Intrinsic::coro_kill2, { int32Ty });
       coroKill->dump();
@@ -448,6 +583,10 @@ namespace {
         Intrinsic::getDeclaration(M, Intrinsic::coro_load, { int32Ty });
       coroLoad->dump();
 
+      Function* coroFromPromise = M->getFunction("llvm.coro.from.promise.p0struct.minig::promise_type");
+        //Intrinsic::getDeclaration(M, Intrinsic::coro_load, { int32Ty });
+
+#endif
       for (auto it = inst_begin(F), end = inst_end(F); it != end;) {
         Instruction& I = *it++;
 
@@ -484,14 +623,42 @@ namespace {
       }
     }
 
+    // inline small functions into its parent until we hit a coroutine
+    void handleFromPromise(Function& F) {
+      for (auto& U : F.uses()) {
+        User *UR = U.getUser();
+
+        if (!isa<CallInst>(UR) && !isa<InvokeInst>(UR))
+          continue;
+
+        CallSite CS(cast<Instruction>(UR));
+        if (!CS.isCallee(&U))
+          continue;
+
+        InlineFunctionInfo IFI;
+        InlineFunction(CS, IFI);
+      }
+    }
+
     bool runOnModule(Module &M) override {
       CoroutineCommon::PerModuleInit(M);
       RampFunctions.clear();
 
       bool changed = false;
-      for (Function &F : M.getFunctionList())
+      for (Function &F : M.getFunctionList()) {
         if (isCoroutine(F))
           changed |= runOnCoroutine(F);
+        else switch (F.getIntrinsicID()) {
+        default:
+          continue;
+        case Intrinsic::coro_from_promise:
+          handleFromPromise(F);
+          break;
+        case Intrinsic::coro_destroy:
+        case Intrinsic::coro_resume:
+          break;
+        }
+      }
 
       for (Function* F : RampFunctions) {
         handleRampFunction(*F);
