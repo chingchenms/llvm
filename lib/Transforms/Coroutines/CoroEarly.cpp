@@ -305,19 +305,21 @@ namespace {
 
     SmallVector<Function*, 4> Coroutines;
     SmallPtrSet<Function*, 16> CalledFromCoroutineInitBlock;
+    SmallPtrSet<Function*, 8> MustInline;
 
     using llvm::Pass::doFinalization;
     bool doInitialization(CallGraph &CG) override {
       CalledFromCoroutineInitBlock.clear();
       Coroutines.clear();
-      for (auto& F: CG.getModule())
+      MustInline.clear();
+      for (auto& F : CG.getModule()) {
         if (F.hasFnAttribute(Attribute::Coroutine)) {
           Coroutines.push_back(&F);
           Instruction* II = FindIntrinsic(F, Intrinsic::coro_init);
           assert(II->getParent() == &F.getEntryBlock() && "@llvm.coro.init is not in the entry block");
           for (auto it = ++BasicBlock::iterator(II),
-                    end = F.getEntryBlock().end();
-               it != end; ++it) {
+            end = F.getEntryBlock().end();
+            it != end; ++it) {
             CallSite CS(&*it);
             if (!CS.isCall())
               continue;
@@ -330,6 +332,18 @@ namespace {
             CalledFromCoroutineInitBlock.insert(Callee);
           }
         }
+        else if (F.isIntrinsic()) {
+          auto ID = F.getIntrinsicID();
+          if (ID == Intrinsic::coro_resume || ID == Intrinsic::coro_destroy) {
+            if (F.use_empty())
+              continue;
+
+            for (User *U : F.users())
+              if (auto I = dyn_cast<Instruction>(U))
+                MustInline.insert(I->getParent()->getParent());
+          }
+        }
+      }
 
       SmallVector<Function *, 8> Worklist(CalledFromCoroutineInitBlock.begin(),
                                           CalledFromCoroutineInitBlock.end());
@@ -346,8 +360,15 @@ namespace {
         }
       }
 
-      for (auto F : CalledFromCoroutineInitBlock)
-        errs() << F->getName() << "\n";
+      Worklist.clear();
+      Worklist.append(MustInline.begin(), MustInline.end());
+      while (!Worklist.empty()) {
+        auto F = Worklist.pop_back_val();
+
+        for (User *U : F->users())
+          if (auto I = dyn_cast<Instruction>(U))
+            MustInline.insert(I->getParent()->getParent());
+      }
 
       return false;
     }
@@ -378,15 +399,17 @@ INITIALIZE_PASS_END(CoroModuleEarly, "CoroModuleEarly", "CoroModuleEarly Pass",
 InlineCost CoroModuleEarly::getInlineCost(CallSite CS) {
   Function *Callee = CS.getCalledFunction();
 
-  // Only inline direct calls to functions with always-inline attributes
-  // that are viable for inlining. FIXME: We shouldn't even get here for
-  // declarations.
+  // Only inline direct calls to functions that are viable for inlining.
+  // FIXME: We shouldn't even get here for declarations.
   if (!Callee || Callee->isDeclaration() || 
     !ICA->isInlineViable(*Callee) ||
     CS.hasFnAttr(Attribute::Coroutine))
     return InlineCost::getNever();
 
   if (CalledFromCoroutineInitBlock.count(Callee) != 0)
+    return InlineCost::getAlways();
+
+  if (MustInline.count(Callee) != 0)
     return InlineCost::getAlways();
 
   return InlineCost::getNever();

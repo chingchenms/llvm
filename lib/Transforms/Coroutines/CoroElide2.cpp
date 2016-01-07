@@ -16,6 +16,9 @@
 
 #include "CoroutineCommon.h"
 #include "llvm/Transforms/Coroutines.h"
+#include "llvm/Transforms/IPO/InlinerPass.h"
+#include "llvm/Analysis/InlineCost.h"
+#include "llvm/Analysis/TargetLibraryInfo.h"
 
 #include "llvm/ADT/Statistic.h"
 #include "llvm/ADT/SmallString.h"
@@ -34,34 +37,23 @@ STATISTIC(CoroHeapElide2Counter, "Number of heap elision performed");
 
 namespace {
 
-struct CoroHeapElide2 : ModulePass, CoroutineCommon {
-  static char ID; // Pass identification, replacement for typeid
+  struct CoroHeapElide2 : public Inliner, CoroutineCommon {
+    InlineCostAnalysis *ICA;
 
-  CoroHeapElide2() : ModulePass(ID) {}
-
-
-  bool runOnModule(Module& M) override {
-    CoroutineCommon::PerModuleInit(M);
-
-    bool changed = false;
-    for (Function &F : M.getFunctionList()) {
-      changed |= runOnFunction(F);
+  public:
+    // Use extremely low threshold.
+    CoroHeapElide2() : Inliner(ID, -2000000000, /*InsertLifetime*/ true),
+      ICA(nullptr) {
+      initializeAlwaysInlinerPass(*PassRegistry::getPassRegistry());
     }
-    return changed;
-  }
 
-  bool runOnFunction(Function &F) {
-    bool changed = false;
+    static char ID; // Pass identification, replacement for typeid
 
-    //if (hasResumeOrDestroy(F)) {
-    //  if (tryElide(F)) {
-    //    ++CoroHeapElideCounter;
-    //    changed = true;
-    //  }
-    //}
-    return changed;
-  }
-};
+    InlineCost getInlineCost(CallSite CS) override;
+
+    void getAnalysisUsage(AnalysisUsage &AU) const override;
+    bool runOnSCC(CallGraphSCC &SCC) override;
+  };
 }
 
 char CoroHeapElide2::ID = 0;
@@ -70,9 +62,44 @@ INITIALIZE_PASS_BEGIN(
     "Coroutine frame allocation elision and indirect calls replacement", false,
     false)
 INITIALIZE_PASS_DEPENDENCY(CoroSplit3)
+INITIALIZE_PASS_DEPENDENCY(AssumptionCacheTracker)
+INITIALIZE_PASS_DEPENDENCY(CallGraphWrapperPass)
+INITIALIZE_PASS_DEPENDENCY(InlineCostAnalysis)
+INITIALIZE_PASS_DEPENDENCY(TargetLibraryInfoWrapperPass)
 INITIALIZE_PASS_END(
     CoroHeapElide2, "coro-elide2",
     "Coroutine frame allocation elision and indirect calls replacement", false,
     false)
 
 //Pass *llvm::createCoroHeapElide2Pass() { return new CoroHeapElide2(); }
+
+InlineCost CoroHeapElide2::getInlineCost(CallSite CS) {
+  Function *Callee = CS.getCalledFunction();
+
+  // Only inline direct calls to functions that are viable for inlining.
+  // FIXME: We shouldn't even get here for declarations.
+  if (!Callee || Callee->isDeclaration() ||
+    !ICA->isInlineViable(*Callee))
+    return InlineCost::getNever();
+
+#if 0
+  if (FindIntrinsic(*Callee, Intrinsic::coro_init))
+    return InlineCost::getAlways();
+  if (CalledFromCoroutineInitBlock.count(Callee) != 0)
+    return InlineCost::getAlways();
+
+  if (MustInline.count(Callee) != 0)
+    return InlineCost::getAlways();
+#endif
+  return InlineCost::getNever();
+}
+
+bool CoroHeapElide2::runOnSCC(CallGraphSCC &SCC) {
+  ICA = &getAnalysis<InlineCostAnalysis>();
+  return Inliner::runOnSCC(SCC);
+}
+
+void CoroHeapElide2::getAnalysisUsage(AnalysisUsage &AU) const {
+  AU.addRequired<InlineCostAnalysis>();
+  Inliner::getAnalysisUsage(AU);
+}

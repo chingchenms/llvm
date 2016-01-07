@@ -74,6 +74,8 @@ struct LLVM_LIBRARY_VISIBILITY CoroutineCommon {
 
   static void ReplaceIntrinsicWith(Function &func, Intrinsic::ID id, Value *framePtr);
 
+  void ReplaceCoroPromise(IntrinsicInst *intrin, bool from = false);
+
   struct BranchSuccessors {
     BasicBlock *IfTrue;
     BasicBlock *IfFalse;

@@ -93,6 +93,38 @@ void CoroutineCommon::ComputeDefChainNotIn(Instruction *source,
   } while (!workList.empty());
 }
 
+void CoroutineCommon::ReplaceCoroPromise(IntrinsicInst *intrin, bool from) {
+
+  Value *Operand = intrin->getArgOperand(0);
+  auto PromisePtr = cast<PointerType>(
+    from ? Operand->getType() : intrin->getFunctionType()->getReturnType());
+  auto PromiseType = PromisePtr->getElementType();
+
+  // TODO: move into Coroutine Common
+  auto SampleStruct = StructType::create({ anyResumeFnPtrTy, anyResumeFnPtrTy,
+    int32Ty, PromiseType }, "");
+  const DataLayout &DL = M->getDataLayout();
+  const auto Offset = DL.getStructLayout(SampleStruct)->getElementOffset(3);
+
+  Value* Replacement = nullptr;
+
+  if (from) {
+    auto Index = ConstantInt::get(int32Ty, -Offset);
+    auto BCI = new BitCastInst(Operand, bytePtrTy, "", intrin);
+    auto Gep = GetElementPtrInst::CreateInBounds(BCI, { Index }, "", intrin);
+    Replacement = Gep;
+  }
+  else {
+    auto Index = ConstantInt::get(int32Ty, Offset);
+    auto Gep = GetElementPtrInst::CreateInBounds(Operand, { Index }, "", intrin);
+    auto BCI = new BitCastInst(Gep, PromisePtr, "", intrin);
+    Replacement = BCI;
+  }
+
+  intrin->replaceAllUsesWith(Replacement);
+  intrin->eraseFromParent();
+}
+
 void CoroutineCommon::ComputeDefChain(Instruction *source,
                                       BlockSet const &Blocks,
                                       InstrSetVector &result) {

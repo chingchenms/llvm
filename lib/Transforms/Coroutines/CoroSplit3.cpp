@@ -325,6 +325,7 @@ struct CoroSplit3 : public ModulePass, CoroutineCommon {
     void analyzeFunction(Function &F, SuspendInfo &Info) {
       ReturnBlock = findReturnBlock(F);
       CoroInit = FindIntrinsic(F, Intrinsic::coro_init);
+      CoroInit->addAttribute(AttributeSet::ReturnIndex, Attribute::NonNull);
       assert(CoroInit && "missing @llvm.coro.init");
 
       ResumeAllocas.clear();
@@ -649,14 +650,44 @@ struct CoroSplit3 : public ModulePass, CoroutineCommon {
     NewFn->setCallingConv(CallingConv::Fast);
   }
 
+  void inlineCoroutine(Function& F) {
+    SmallVector<CallSite, 8> CSes;
+
+    for (auto U : F.users()) 
+      if (auto I = dyn_cast<Instruction>(U)) 
+        if (I->getParent()->getParent() != &F) 
+          if (auto CS = CallSite(I))
+            CSes.push_back(CS);
+
+    for (auto CS : CSes) {
+      InlineFunctionInfo IFI;
+      InlineFunction(CS, IFI);
+    }
+  }
+
+  void replaceCoroPromises(Function& F) {
+    for (auto it = inst_begin(F), end = inst_end(F); it != end;)
+      if (auto II = dyn_cast<IntrinsicInst>(&*it++))
+        if (II->getIntrinsicID() == Intrinsic::coro_from_promise)
+          ReplaceCoroPromise(II, true);
+  }
+
 #if 1
   bool runOnModule(Module &M) override {
     CoroutineCommon::PerModuleInit(M);
 
+    Function* CoroInit =
+      Intrinsic::getDeclaration(&M, Intrinsic::coro_init);
+
+    CoroInit->addAttribute(AttributeSet::ReturnIndex, Attribute::NonNull);
+
     bool changed = false;
     for (Function &F : M.getFunctionList())
       if (F.hasFnAttribute(Attribute::Coroutine)) {
-        changed |= runOnCoroutine(F);
+        changed = true;
+        runOnCoroutine(F);
+        replaceCoroPromises(F);
+        inlineCoroutine(F);
       }
     return changed;
   }
