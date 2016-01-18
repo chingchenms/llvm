@@ -34,10 +34,10 @@ STATISTIC(CoroHeapElideCounter, "Number of heap elision performed");
 
 namespace {
 
-struct CoroHeapElide : ModulePass, CoroutineCommon {
+struct CoroHeapElide : FunctionPass, CoroutineCommon {
   static char ID; // Pass identification, replacement for typeid
 
-  CoroHeapElide() : ModulePass(ID) {}
+  CoroHeapElide() : FunctionPass(ID) {}
 
   // This function walks up from an operand to @llvm.coro.resume or
   // @llvm.coro.destroy to see if it hits a @llvm.coro.init
@@ -196,7 +196,8 @@ struct CoroHeapElide : ModulePass, CoroutineCommon {
       StringRef rampName = item.getRampName();
       Module *M = F.getParent();
       Function *resumeFn = getFunc(M, rampName + ".resume");
-      Function *cleanupFn = getFunc(M, rampName + ".cleanup");
+//      Function *cleanupFn = getFunc(M, rampName + ".cleanup"); // QUICK HACK
+      Function *cleanupFn = getFunc(M, rampName + ".destroy");
 
       // FIXME: check for escapes, moves,
       if (!noDestroys && rampName != F.getName()) {
@@ -226,7 +227,7 @@ struct CoroHeapElide : ModulePass, CoroutineCommon {
     }
     return changed;
   }
-
+#if 0
   bool runOnModule(Module& M) override {
     CoroutineCommon::PerModuleInit(M);
 
@@ -235,6 +236,11 @@ struct CoroHeapElide : ModulePass, CoroutineCommon {
       changed |= runOnFunction(F);
     }
     return changed;
+  }
+#endif
+  bool doInitialization(Module &M) override {
+    CoroutineCommon::PerModuleInit(M);
+    return false;
   }
 
   static bool hasResumeOrDestroy(Function &F) {

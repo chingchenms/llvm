@@ -488,6 +488,28 @@ struct CoroSplit3 : public ModulePass, CoroutineCommon {
     new StoreInst(destroyFn, gep1, InsertPt);
   }
 
+  bool replaceCoroPromise(Function& F) {
+    bool changed = false;
+    for (auto it = inst_begin(F), end = inst_end(F); it != end;) {
+      Instruction &I = *it++;
+      if (auto intrin = dyn_cast<IntrinsicInst>(&I)) {
+        switch (intrin->getIntrinsicID()) {
+        default:
+          continue;
+        case Intrinsic::coro_promise:
+          ReplaceCoroPromise(intrin);
+          changed = true;
+          break;
+        case Intrinsic::coro_from_promise:
+          ReplaceCoroPromise(intrin, /*From=*/true);
+          changed = true;
+          break;
+        }
+      }
+    }
+    return changed;
+  }
+
   bool runOnCoroutine(Function& F) {
     DEBUG(dbgs() << "CoroSplit function: " << F.getName() << "\n");
 
@@ -533,7 +555,7 @@ struct CoroSplit3 : public ModulePass, CoroutineCommon {
     removeUnreachableBlocks(F);
 
     ReplaceIntrinsicWith(*ThisFunction, Intrinsic::coro_frame, CoroInfo.CoroInit);
-
+    replaceCoroPromise(F);
     return true;
   }
 
@@ -664,14 +686,14 @@ struct CoroSplit3 : public ModulePass, CoroutineCommon {
       InlineFunction(CS, IFI);
     }
   }
-
+#if 0
   void replaceCoroPromises(Function& F) {
     for (auto it = inst_begin(F), end = inst_end(F); it != end;)
       if (auto II = dyn_cast<IntrinsicInst>(&*it++))
         if (II->getIntrinsicID() == Intrinsic::coro_from_promise)
           ReplaceCoroPromise(II, true);
   }
-
+#endif
 #if 1
   bool runOnModule(Module &M) override {
     CoroutineCommon::PerModuleInit(M);
@@ -682,13 +704,15 @@ struct CoroSplit3 : public ModulePass, CoroutineCommon {
     CoroInit->addAttribute(AttributeSet::ReturnIndex, Attribute::NonNull);
 
     bool changed = false;
-    for (Function &F : M.getFunctionList())
+    for (Function &F : M.getFunctionList()) {
       if (F.hasFnAttribute(Attribute::Coroutine)) {
         changed = true;
         runOnCoroutine(F);
-        replaceCoroPromises(F);
-        inlineCoroutine(F);
+        //replaceCoroPromises(F);
+        //inlineCoroutine(F);
       }
+      changed |= replaceCoroPromise(F);
+    }
     return changed;
   }
 #else

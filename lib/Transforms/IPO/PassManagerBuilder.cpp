@@ -36,6 +36,13 @@
 
 using namespace llvm;
 
+namespace llvm {
+  Pass *createCoroPreSplit();
+	Pass *createCoroHeapElide2();
+  Pass *createCoroSplit3();
+  Pass *createCoroHeapElidePass();
+}
+
 static cl::opt<bool>
 RunLoopVectorization("vectorize-loops", cl::Hidden,
                      cl::desc("Run the Loop vectorization passes"));
@@ -208,6 +215,12 @@ void PassManagerBuilder::populateModulePassManager(
     addExtensionsToPM(EP_EnabledOnOptLevel0, MPM);
     return;
   }
+  
+#if 1 // spill algo is wrong this is workaround
+  MPM.add(createCoroPreSplit());
+  MPM.add(createCFGSimplificationPass());
+#endif
+  MPM.add(createCoroSplit3());
 
   // Add LibraryInfo if we have some.
   if (LibraryInfo)
@@ -257,8 +270,10 @@ void PassManagerBuilder::populateModulePassManager(
   MPM.add(createCorrelatedValuePropagationPass()); // Propagate conditionals
   MPM.add(createCFGSimplificationPass());     // Merge & remove BBs
   MPM.add(createInstructionCombiningPass());  // Combine silly seq's
+  MPM.add(createCoroHeapElidePass());
   addExtensionsToPM(EP_Peephole, MPM);
-
+//  MPM.add(createCoroHeapElide2());
+  
   MPM.add(createTailCallEliminationPass()); // Eliminate tail calls
   MPM.add(createCFGSimplificationPass());     // Merge & remove BBs
   MPM.add(createReassociatePass());           // Reassociate expressions

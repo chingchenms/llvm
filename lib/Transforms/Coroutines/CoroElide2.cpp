@@ -36,7 +36,7 @@ using namespace llvm;
 STATISTIC(CoroHeapElide2Counter, "Number of heap elision performed");
 
 namespace {
-
+#if 0
   struct CoroHeapElide2 : public Inliner, CoroutineCommon {
     InlineCostAnalysis *ICA;
 
@@ -54,6 +54,32 @@ namespace {
     void getAnalysisUsage(AnalysisUsage &AU) const override;
     bool runOnSCC(CallGraphSCC &SCC) override;
   };
+#endif
+  struct CoroHeapElide2 : public FunctionPass, CoroutineCommon {
+  public:
+	  CoroHeapElide2() : FunctionPass(ID){}
+
+	  static char ID; // Pass identification, replacement for typeid
+
+    bool attemptHeapElision(Function& F, SmallVectorImpl<IntrinsicInst*>& CoroDestroys) {
+      F.dump();
+      return true;
+    }
+
+	  bool runOnFunction(Function &F) override {
+		  SmallVector<IntrinsicInst*, 4> CoroDestroys;
+
+      for (auto &I : instructions(F))
+        if (auto II = dyn_cast<IntrinsicInst>(&I))
+          if (II->getIntrinsicID() == Intrinsic::coro_destroy)
+            CoroDestroys.push_back(II);
+
+      if (!CoroDestroys.empty())
+        return attemptHeapElision(F, CoroDestroys);
+
+		  return false;
+	  }
+  };
 }
 
 char CoroHeapElide2::ID = 0;
@@ -62,16 +88,22 @@ INITIALIZE_PASS_BEGIN(
     "Coroutine frame allocation elision and indirect calls replacement", false,
     false)
 INITIALIZE_PASS_DEPENDENCY(CoroSplit3)
-INITIALIZE_PASS_DEPENDENCY(AssumptionCacheTracker)
-INITIALIZE_PASS_DEPENDENCY(CallGraphWrapperPass)
-INITIALIZE_PASS_DEPENDENCY(InlineCostAnalysis)
-INITIALIZE_PASS_DEPENDENCY(TargetLibraryInfoWrapperPass)
+//INITIALIZE_PASS_DEPENDENCY(AssumptionCacheTracker)
+//INITIALIZE_PASS_DEPENDENCY(CallGraphWrapperPass)
+//INITIALIZE_PASS_DEPENDENCY(InlineCostAnalysis)
+//INITIALIZE_PASS_DEPENDENCY(TargetLibraryInfoWrapperPass)
 INITIALIZE_PASS_END(
     CoroHeapElide2, "coro-elide2",
     "Coroutine frame allocation elision and indirect calls replacement", false,
     false)
 
+
+namespace llvm {
+	Pass *createCoroHeapElide2() { return new CoroHeapElide2(); }
+}
 //Pass *llvm::createCoroHeapElide2Pass() { return new CoroHeapElide2(); }
+
+#if 0
 
 InlineCost CoroHeapElide2::getInlineCost(CallSite CS) {
   Function *Callee = CS.getCalledFunction();
@@ -103,3 +135,4 @@ void CoroHeapElide2::getAnalysisUsage(AnalysisUsage &AU) const {
   AU.addRequired<InlineCostAnalysis>();
   Inliner::getAnalysisUsage(AU);
 }
+#endif
