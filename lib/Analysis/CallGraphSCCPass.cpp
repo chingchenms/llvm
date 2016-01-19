@@ -124,6 +124,8 @@ bool CGPassManager::RunPassOnSCC(Pass *P, CallGraphSCC &CurSCC,
     {
       TimeRegion PassTimer(getPassTimer(CGSP));
       Changed = CGSP->runOnSCC(CurSCC);
+      if (Changed && StringRef(CGSP->getPassName()) == "Coroutine frame allocation elision and indirect calls replacement")
+        DevirtualizedCall = true;
     }
     
     // After the CGSCCPass is done, when assertions are enabled, use
