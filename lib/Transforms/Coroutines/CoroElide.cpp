@@ -35,11 +35,11 @@ STATISTIC(CoroHeapElideCounter, "Number of heap elision performed");
 
 namespace {
 
-struct CoroHeapElide : CallGraphSCCPass, CoroutineCommon {
+struct CoroHeapElide : FunctionPass, CoroutineCommon {
   static char ID; // Pass identification, replacement for typeid
   bool moduleInitialized = false;
 
-  CoroHeapElide() : CallGraphSCCPass(ID) {}
+  CoroHeapElide() : FunctionPass(ID) {}
 
   // This function walks up from an operand to @llvm.coro.resume or
   // @llvm.coro.destroy to see if it hits a @llvm.coro.init
@@ -160,12 +160,13 @@ struct CoroHeapElide : CallGraphSCCPass, CoroutineCommon {
   };
 
   /// Pass Manager itself does not invalidate any analysis info.
-  void getAnalysisUsage(AnalysisUsage &Info) const override {
-    // CGPassManager walks SCC and it needs CallGraph.
-    Info.addRequired<CallGraphWrapperPass>();
-  }
+  //void getAnalysisUsage(AnalysisUsage &Info) const override {
+  //  // CGPassManager walks SCC and it needs CallGraph.
+  //  Info.setPreservesAll();
+  //  Info.addRequired<CallGraphWrapperPass>();
+  //}
 
-  void ReplaceWithDirectCalls(CallGraph &CG, CallGraphNode &CGN,
+  void ReplaceWithDirectCalls(//CallGraph &CG, CallGraphNode &CGN,
                               SmallVector<IntrinsicInst *, 4> &v,
                               Function *func) {
     FunctionType *ft = cast<FunctionType>(func->getType()->getElementType());
@@ -176,7 +177,7 @@ struct CoroHeapElide : CallGraphSCCPass, CoroutineCommon {
           new BitCastInst(intrin->getArgOperand(0), argType, "", intrin);
       auto call = CallInst::Create(func, bitCast, "", intrin);
       call->setCallingConv(CallingConv::Fast);
-      CGN.addCalledFunction(CallSite(call), CG[func]);
+      //CGN.addCalledFunction(CallSite(call), CG[func]);
       intrin->eraseFromParent();
     }
   }
@@ -209,8 +210,8 @@ struct CoroHeapElide : CallGraphSCCPass, CoroutineCommon {
 //      Function *cleanupFn = getFunc(M, rampName + ".cleanup"); // QUICK HACK
       Function *cleanupFn = getFunc(M, rampName + ".destroy");
 
-      CallGraph &CG = getAnalysis<CallGraphWrapperPass>().getCallGraph();
-      CallGraphNode& CGN = *CG[&F];
+      //CallGraph &CG = getAnalysis<CallGraphWrapperPass>().getCallGraph();
+      //CallGraphNode& CGN = *CG[&F];
 
       // FIXME: check for escapes, moves,
       if (!noDestroys && rampName != F.getName()) {
@@ -223,7 +224,8 @@ struct CoroHeapElide : CallGraphSCCPass, CoroutineCommon {
 
         auto allocCall = item.CoroInit->getArgOperand(0);
         item.CoroInit->eraseFromParent();
-        RemoveAllAllocationRelatedThings(CGN, allocCall);
+        RemoveAllAllocationRelatedThings(//CGN, 
+          allocCall);
 
         // since we are doing heap elision, we need to
         // replace DestroyFn with CleanupFn
@@ -232,8 +234,10 @@ struct CoroHeapElide : CallGraphSCCPass, CoroutineCommon {
 
       // FIXME: handle case when we are looking at the coroutine itself
       // that destroys itself (like in case with optional/expected)
-      ReplaceWithDirectCalls(CG, CGN, item.Resumes, resumeFn);
-      ReplaceWithDirectCalls(CG, CGN, item.Destroys, cleanupFn);
+      ReplaceWithDirectCalls(//CG, CGN, 
+        item.Resumes, resumeFn);
+      ReplaceWithDirectCalls(//CG, CGN, 
+        item.Destroys, cleanupFn);
       RemoveFakeSuspends(F);
 
       changed = true;
@@ -274,7 +278,7 @@ struct CoroHeapElide : CallGraphSCCPass, CoroutineCommon {
     return false;
   }
 
-  bool runOnFunction(Function &F) {
+  bool runOnFunction(Function &F) override {
     bool changed = false;
 
     if (hasResumeOrDestroy(F)) {
@@ -286,6 +290,7 @@ struct CoroHeapElide : CallGraphSCCPass, CoroutineCommon {
     return changed;
   }
 
+#if 0
   bool runOnSCC(CallGraphSCC &SCC) override {
     bool changed = false;
     for (CallGraphNode *Node : SCC) {
@@ -297,11 +302,12 @@ struct CoroHeapElide : CallGraphSCCPass, CoroutineCommon {
     }
     return changed;
   }
-
-  void RemoveAllAllocationRelatedThings(CallGraphNode& CGN, Value *alloc) {
+#endif
+  void RemoveAllAllocationRelatedThings(//CallGraphNode& CGN, 
+    Value *alloc) {
     CallInst *NeedlessAllocateCall = cast<CallInst>(alloc);
     // TODO: clean up allocation code better
-    CGN.removeCallEdgeFor(NeedlessAllocateCall);
+    //CGN.removeCallEdgeFor(NeedlessAllocateCall);
     NeedlessAllocateCall->eraseFromParent();
   }
 };
@@ -312,7 +318,7 @@ INITIALIZE_PASS_BEGIN(
     CoroHeapElide, "coro-elide",
     "Coroutine frame allocation elision and indirect calls replacement", false,
     false)
-  INITIALIZE_PASS_DEPENDENCY(CallGraphWrapperPass)
+  //INITIALIZE_PASS_DEPENDENCY(CallGraphWrapperPass)
   INITIALIZE_PASS_DEPENDENCY(CoroSplit)
 INITIALIZE_PASS_END(
     CoroHeapElide, "coro-elide",

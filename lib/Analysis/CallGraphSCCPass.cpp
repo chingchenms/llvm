@@ -226,8 +226,12 @@ bool CGPassManager::RefreshCallGraph(CallGraphSCC &CurSCC,
         assert(!CheckingMode &&
                "CallGraphSCCPass did not update the CallGraph correctly!");
         
+        auto F = I->second->getFunction();
         // If this was an indirect call site, count it.
-        if (!I->second->getFunction())
+        if (!I->second->getFunction() ||
+            (F->isIntrinsic() &&
+             (F->getIntrinsicID() == Intrinsic::coro_destroy ||
+              F->getIntrinsicID() == Intrinsic::coro_resume)))
           ++NumIndirectRemoved;
         else 
           ++NumDirectRemoved;
