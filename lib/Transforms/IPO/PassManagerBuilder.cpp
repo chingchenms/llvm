@@ -41,6 +41,7 @@ namespace llvm {
 	Pass *createCoroHeapElide2();
   Pass *createCoroSplit3();
   Pass *createCoroHeapElidePass();
+  Pass *createCoroCleanupPass();
 }
 
 static cl::opt<bool>
@@ -486,6 +487,7 @@ void PassManagerBuilder::populateModulePassManager(
   if (MergeFunctions)
     MPM.add(createMergeFunctionsPass());
 
+  MPM.add(createCoroCleanupPass());
   addExtensionsToPM(EP_OptimizerLast, MPM);
 }
 

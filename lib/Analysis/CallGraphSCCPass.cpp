@@ -329,6 +329,10 @@ bool CGPassManager::RefreshCallGraph(CallGraphSCC &CurSCC,
         CallGraphNode *CalleeNode;
         if (Function *Callee = CS.getCalledFunction()) {
           CalleeNode = CG.getOrInsertFunction(Callee);
+          if (Callee->getName().endswith_lower(".resume") ||
+            Callee->getName().endswith_lower(".destroy")) {
+              ++NumIndirectRemoved;
+          }
           ++NumDirectAdded;
         } else {
           CalleeNode = CG.getCallsExternalNode();

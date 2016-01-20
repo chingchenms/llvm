@@ -590,9 +590,30 @@ namespace {
             I.setOperand(0, ConstantPointerNull::get(bytePtrTy));
     }
 
+    void RemoveLifetimeIntrinsics(Function& F) {
+      bool changed = false;
+      for (auto it = inst_begin(F), end = inst_end(F); it != end;) {
+        Instruction &I = *it++;
+        if (auto intrin = dyn_cast<IntrinsicInst>(&I)) {
+          switch (intrin->getIntrinsicID()) {
+          default:
+            continue;
+          case Intrinsic::lifetime_start:
+          case Intrinsic::lifetime_end:
+            intrin->eraseFromParent();
+            changed = true;
+            break;
+          }
+        }
+      }
+      if (changed)
+        simplifyAndConstantFoldTerminators(F);
+    }
+
     bool runOnCoroutine(Function& F) {
       // TODO: try alias analysis
       RemoveNoOptAttribute(F);
+      RemoveLifetimeIntrinsics(F);
 #if 0
       Function* coroKill = 
         Intrinsic::getDeclaration(M, Intrinsic::coro_kill2, { int32Ty });
