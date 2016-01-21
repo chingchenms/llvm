@@ -191,6 +191,16 @@ struct CoroHeapElide : FunctionPass, CoroutineCommon {
     return cast<Function>(value);
   }
 
+  IntrinsicInst* GetCoroElide(IntrinsicInst* CoroInit) {
+    auto PN = cast<PHINode>(CoroInit->getArgOperand(0));
+    for (auto& Inc : PN->incoming_values())
+      if (auto II = dyn_cast<IntrinsicInst>(Inc))
+        if (II->getIntrinsicID() == Intrinsic::coro_elide)
+          return II;
+
+    llvm_unreachable("expecting one of the inputs to @llvm.coro.init to be from @llvm.coro.elide");
+  }
+
   bool tryElide(Function &F) {
     bool changed = false;
     Database db(F);
@@ -207,25 +217,27 @@ struct CoroHeapElide : FunctionPass, CoroutineCommon {
       StringRef rampName = item.getRampName();
       Module *M = F.getParent();
       Function *resumeFn = getFunc(M, rampName + ".resume");
-//      Function *cleanupFn = getFunc(M, rampName + ".cleanup"); // QUICK HACK
       Function *cleanupFn = getFunc(M, rampName + ".destroy");
-
-      //CallGraph &CG = getAnalysis<CallGraphWrapperPass>().getCallGraph();
-      //CallGraphNode& CGN = *CG[&F];
 
       // FIXME: check for escapes, moves,
       if (!noDestroys && rampName != F.getName()) {
+        auto InsertPt = inst_begin(F);
         auto allocaFrame =
-            new AllocaInst(item.getFrameType(), "elided.frame", item.CoroInit);
+            new AllocaInst(item.getFrameType(), "elided.frame", &*InsertPt);
 
         auto vAllocaFrame = new BitCastInst(allocaFrame, bytePtrTy,
-                                            "elided.vFrame", item.CoroInit);
-        item.CoroInit->replaceAllUsesWith(vAllocaFrame);
+                                            "elided.vFrame", &*InsertPt);
 
-        auto allocCall = item.CoroInit->getArgOperand(0);
+        auto CoroElide = GetCoroElide(item.CoroInit);
+
+        item.CoroInit->replaceAllUsesWith(vAllocaFrame);
         item.CoroInit->eraseFromParent();
-        RemoveAllAllocationRelatedThings(//CGN, 
-          allocCall);
+
+        CoroElide->replaceAllUsesWith(vAllocaFrame);
+        CoroElide->eraseFromParent();
+        // TODO: eliminate coro elide
+        //RemoveAllAllocationRelatedThings(//CGN, 
+        //  allocCall);
 
         // since we are doing heap elision, we need to
         // replace DestroyFn with CleanupFn

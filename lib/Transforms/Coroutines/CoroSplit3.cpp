@@ -451,12 +451,13 @@ struct CoroSplit3 : public ModulePass, CoroutineCommon {
       }
       AI->eraseFromParent();
     }
-
+#if 0
     // we may end up replacing allocas with gep before frame is defined
     // move definition of frame to the beginning of function
     InstrSetVector coroFrameUses;
     ComputeDefChainNotIn(Info.CoroInit, Info.PostStartBlocks, coroFrameUses);
     MoveInReverseOrder(coroFrameUses, &*inst_begin(ThisFunction));
+#endif
   }
 
   static void fixupPhiNodes(BasicBlock *Target, BasicBlock *OldPred,
@@ -597,8 +598,6 @@ struct CoroSplit3 : public ModulePass, CoroutineCommon {
     assert(fn->getType() == awaitSuspendFnPtrTy && "unexpected await_suspend fn type");
 
     auto call = CallInst::Create(fn, { I->getArgOperand(0), vFrame }, "", I);
-    InlineFunctionInfo IFI;
-    InlineFunction(call, IFI);
   }
 
   void replaceSuspends(CoroutineInfo &Info, SuspendInfo const &Suspends) {
