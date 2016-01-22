@@ -40,7 +40,7 @@ void CoroutineCommon::PerModuleInit(Module &M) {
   anyResumeFnPtrTy = PointerType::get(anyResumeFnTy, 0);
   awaitSuspendFnPtrTy = PointerType::get(awaitSuspendFnTy, 0);
 
-  anyFrameTy = StructType::create({anyResumeFnPtrTy, anyResumeFnPtrTy, int32Ty},
+  anyFrameTy = StructType::create({anyResumeFnPtrTy, anyResumeFnPtrTy, int32Ty, int32Ty},
                                   "any.frame");
   anyFramePtrTy = PointerType::get(anyFrameTy, 0);
 }
@@ -113,9 +113,9 @@ void CoroutineCommon::ReplaceCoroPromise(IntrinsicInst *intrin, bool from) {
 
   // TODO: move into Coroutine Common
   auto SampleStruct = StructType::create({ anyResumeFnPtrTy, anyResumeFnPtrTy,
-    int32Ty, PromiseType }, "");
+    int32Ty, int32Ty, PromiseType }, "");
   const DataLayout &DL = M->getDataLayout();
-  const auto Offset = DL.getStructLayout(SampleStruct)->getElementOffset(3);
+  const auto Offset = DL.getStructLayout(SampleStruct)->getElementOffset(4);
 
   Value* Replacement = nullptr;
 

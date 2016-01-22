@@ -420,6 +420,7 @@ struct CoroSplit3 : public ModulePass, CoroutineCommon {
     typeArray.push_back(resumeFnPtrTy); // 0 res-type
     typeArray.push_back(resumeFnPtrTy); // 1 dtor-type
     typeArray.push_back(int32Ty);       // 2 index
+    typeArray.push_back(int32Ty);       // 3 padding
 
     for (AllocaInst *AI : SharedAllocas) {
       typeArray.push_back(AI->getType()->getElementType());
@@ -434,11 +435,12 @@ struct CoroSplit3 : public ModulePass, CoroutineCommon {
   }
   // replace all uses of allocas with gep from frame struct
   void ReplaceSharedUses(CoroutineInfo const& Info) {
-    APInt fieldNo(32, 2); // Fields start with after 2
+    enum { kStartingField = 3 };
+    APInt fieldNo(32, kStartingField); // Fields start with after 2
     for (AllocaInst *AI : Info.SharedAllocas) {
       smallString = AI->getName();
       if (smallString == "__promise") {
-        assert(fieldNo == 2 && "promise shall be the first field");
+        assert(fieldNo == kStartingField && "promise shall be the first field");
       }
       AI->setName(""); // FIXME: use TakeName
       auto index = ConstantInt::get(M->getContext(), ++fieldNo);
