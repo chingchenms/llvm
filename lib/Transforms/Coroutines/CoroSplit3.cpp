@@ -401,13 +401,16 @@ struct CoroSplit3 : public ModulePass, CoroutineCommon {
 
   Function *resumeFn = nullptr;
   Function *destroyFn = nullptr;
+  Function *cleanupFn = nullptr;
   Value *frameInDestroy = nullptr;
   Value *frameInResume = nullptr;
   Value *frameInRamp = nullptr;
+  Value *frameInCleanup = nullptr;
 
   void CreateAuxillaryFunctions() {
     resumeFn = CreateAuxillaryFunction(".resume", frameInResume);
     destroyFn = CreateAuxillaryFunction(".destroy", frameInDestroy);
+    cleanupFn = CreateAuxillaryFunction(".cleanup", frameInCleanup);
   }
 
   void createFrameStruct(SmallVectorImpl<AllocaInst *>& SharedAllocas) {
@@ -486,7 +489,12 @@ struct CoroSplit3 : public ModulePass, CoroutineCommon {
 
     auto gep1 = GetElementPtrInst::Create(
       frameTy, frameInRamp, { zeroConstant, oneConstant }, "", InsertPt);
-    new StoreInst(destroyFn, gep1, InsertPt);
+
+    auto CoroElide = GetCoroElide(CoroInfo.CoroInit);
+    auto ICmp = new ICmpInst(InsertPt, ICmpInst::ICMP_EQ, CoroElide,
+                             ConstantPointerNull::get(bytePtrTy));
+    auto Sel = SelectInst::Create(ICmp, destroyFn, cleanupFn, "", InsertPt);
+    new StoreInst(Sel, gep1, InsertPt);
   }
 
   bool replaceCoroPromise(Function& F) {
@@ -505,6 +513,12 @@ struct CoroSplit3 : public ModulePass, CoroutineCommon {
           ReplaceCoroPromise(intrin, /*From=*/true);
           changed = true;
           break;
+          /*
+        case Intrinsic::coro_done:
+          ReplaceCoroDone(intrin);
+          changed = true;
+          break;
+          */
         }
       }
     }
@@ -556,8 +570,35 @@ struct CoroSplit3 : public ModulePass, CoroutineCommon {
     removeUnreachableBlocks(F);
 
     ReplaceIntrinsicWith(*ThisFunction, Intrinsic::coro_frame, CoroInfo.CoroInit);
-    replaceCoroPromise(F);
+    PrepareForHeapElision();
     return true;
+  }
+
+  void PrepareForHeapElision()
+  {
+    IntrinsicInst* DeleteInResume = FindIntrinsic(*resumeFn, Intrinsic::coro_delete);
+    IntrinsicInst* DeleteInRamp = FindIntrinsic(*ThisFunction, Intrinsic::coro_delete);
+    IntrinsicInst* DeleteInDestroy = FindIntrinsic(*destroyFn, Intrinsic::coro_delete);
+
+    // if we found delete in Resume or Ramp, the coroutine is not eligible
+    // for heap elision, so we don't have to create a .cleanup function
+
+    if (DeleteInResume || DeleteInRamp)
+      return;
+
+    // otherwise, clone the Destroy function and eliminate the delete block
+    ValueToValueMapTy VMap;
+    VMap[frameInDestroy] = frameInCleanup;
+    SmallVector<ReturnInst*, 4> Returns;
+    CloneFunctionInto(cleanupFn, destroyFn, VMap, false, Returns);
+
+    IntrinsicInst* CoroDelete = cast<IntrinsicInst>(VMap[DeleteInDestroy]);
+
+// TODO: better way of removal of unneeded delete stuff
+    assert(CoroDelete->getNumUses() == 1 && "unexpected number of uses");
+    auto DeleteInstr = cast<Instruction>(CoroDelete->user_back());
+    DeleteInstr->eraseFromParent();
+    CoroDelete->eraseFromParent();
   }
 
   BasicBlock* createSwitch(StringRef Name, CoroutineInfo &Info, SuspendInfo &Suspends,
@@ -671,6 +712,8 @@ struct CoroSplit3 : public ModulePass, CoroutineCommon {
     NewFn->setCallingConv(CallingConv::Fast);
   }
 
+#if 0
+
   void inlineCoroutine(Function& F) {
     SmallVector<CallSite, 8> CSes;
 
@@ -685,7 +728,6 @@ struct CoroSplit3 : public ModulePass, CoroutineCommon {
       InlineFunction(CS, IFI);
     }
   }
-#if 0
   void replaceCoroPromises(Function& F) {
     for (auto it = inst_begin(F), end = inst_end(F); it != end;)
       if (auto II = dyn_cast<IntrinsicInst>(&*it++))
@@ -707,8 +749,6 @@ struct CoroSplit3 : public ModulePass, CoroutineCommon {
       if (F.hasFnAttribute(Attribute::Coroutine)) {
         changed = true;
         runOnCoroutine(F);
-        //replaceCoroPromises(F);
-        //inlineCoroutine(F);
       }
       changed |= replaceCoroPromise(F);
     }

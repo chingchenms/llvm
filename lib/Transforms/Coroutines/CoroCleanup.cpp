@@ -74,6 +74,11 @@ struct CoroCleanup : FunctionPass, CoroutineCommon {
     intrin->eraseFromParent();
   }
 
+  void ReplaceCoroElide(IntrinsicInst* intrin) {
+    intrin->replaceAllUsesWith(ConstantPointerNull::get(bytePtrTy));
+    intrin->eraseFromParent();
+  }
+
   bool runOnFunction(Function &F) override {
     bool changed = false;
     for (auto it = inst_begin(F), end = inst_end(F); it != end;) {
@@ -99,8 +104,11 @@ struct CoroCleanup : FunctionPass, CoroutineCommon {
           ReplaceCoroDone(intrin);
           ++CoroDoneCounter;
           break;
+        case Intrinsic::coro_elide:
+          ReplaceCoroElide(intrin);
+          break;
         case Intrinsic::coro_suspend:
-          assert(isFakeSuspend(intrin) && "coro-split pass did not run");
+//          assert(isFakeSuspend(intrin) && "coro-split pass did not run");
           intrin->eraseFromParent();
           break;
         case Intrinsic::coro_promise:

@@ -76,7 +76,8 @@ struct CoroHeapElide : FunctionPass, CoroutineCommon {
   struct Database {
     struct InlinedCoroutine {
       IntrinsicInst *CoroInit = nullptr;
-      StoreInst *DestroyFnStore = nullptr;
+      Function *ResumeFn = nullptr;
+      StoreInst *CleanupFn = nullptr;
       unsigned StoreCount = 0;
       SmallVector<IntrinsicInst *, 4> Resumes;
       SmallVector<IntrinsicInst *, 4> Destroys;
@@ -84,7 +85,7 @@ struct CoroHeapElide : FunctionPass, CoroutineCommon {
       InlinedCoroutine(IntrinsicInst *intrin) : CoroInit(intrin) {}
 
       StructType *getFrameType() {
-        Function *func = dyn_cast<Function>(DestroyFnStore->getOperand(0));
+        Function *func = ResumeFn;
         FunctionType *ft =
             cast<FunctionType>(func->getType()->getElementType());
         assert(ft->getNumParams() == 1 &&
@@ -93,8 +94,8 @@ struct CoroHeapElide : FunctionPass, CoroutineCommon {
         return cast<StructType>(argType->getElementType());
       }
       StringRef getRampName() {
-        Function *func = dyn_cast<Function>(DestroyFnStore->getOperand(0));
-        return func->getName().drop_back(sizeof(".destroy") - 1);
+        Function *func = ResumeFn;
+        return func->getName().drop_back(sizeof(".resume") - 1);
       }
     };
     SmallVector<InlinedCoroutine, 4> data;
@@ -117,10 +118,10 @@ struct CoroHeapElide : FunctionPass, CoroutineCommon {
         item.Resumes.push_back(I);
     }
 
-    void AddStore(IntrinsicInst *coroInit, StoreInst *S, Function *Func) {
+    void AddStore(IntrinsicInst *coroInit, Function *Func) {
       InlinedCoroutine &I = get(coroInit);
-      if (Func->getName().endswith(".destroy")) {
-        I.DestroyFnStore = S;
+      if (Func->getName().endswith(".resume")) {
+        I.ResumeFn = Func;
       }
       ++I.StoreCount;
     }
@@ -135,7 +136,8 @@ struct CoroHeapElide : FunctionPass, CoroutineCommon {
             IntrinsicInst *coroInit = FindDefiningCoroInit(S->getOperand(1));
             if (coroInit == nullptr)
               continue;
-            AddStore(coroInit, S, func);
+
+            AddStore(coroInit, func);
           }
         } else if (IntrinsicInst *intrin = dyn_cast<IntrinsicInst>(&I)) {
           switch (intrin->getIntrinsicID()) {
@@ -191,22 +193,12 @@ struct CoroHeapElide : FunctionPass, CoroutineCommon {
     return cast<Function>(value);
   }
 
-  IntrinsicInst* GetCoroElide(IntrinsicInst* CoroInit) {
-    auto PN = cast<PHINode>(CoroInit->getArgOperand(0));
-    for (auto& Inc : PN->incoming_values())
-      if (auto II = dyn_cast<IntrinsicInst>(Inc))
-        if (II->getIntrinsicID() == Intrinsic::coro_elide)
-          return II;
-
-    llvm_unreachable("expecting one of the inputs to @llvm.coro.init to be from @llvm.coro.elide");
-  }
-
   bool tryElide(Function &F) {
     bool changed = false;
     Database db(F);
     for (auto &item : db.data) {
-      assert(item.DestroyFnStore &&
-             "missing destroyFn store after @llvm.coro.init");
+      assert(item.ResumeFn &&
+             "missing ResumeFn store after @llvm.coro.init");
 
       const bool noDestroys = item.Destroys.empty();
       const bool noResumes = item.Resumes.empty();
@@ -216,8 +208,7 @@ struct CoroHeapElide : FunctionPass, CoroutineCommon {
 
       StringRef rampName = item.getRampName();
       Module *M = F.getParent();
-      Function *resumeFn = getFunc(M, rampName + ".resume");
-      Function *cleanupFn = getFunc(M, rampName + ".destroy");
+      Function *cleanupFn = getFunc(M, rampName + ".cleanup");
 
       // FIXME: check for escapes, moves,
       if (!noDestroys && rampName != F.getName()) {
@@ -235,27 +226,31 @@ struct CoroHeapElide : FunctionPass, CoroutineCommon {
 
         CoroElide->replaceAllUsesWith(vAllocaFrame);
         CoroElide->eraseFromParent();
-        // TODO: eliminate coro elide
-        //RemoveAllAllocationRelatedThings(//CGN, 
-        //  allocCall);
-
-        // since we are doing heap elision, we need to
-        // replace DestroyFn with CleanupFn
-        item.DestroyFnStore->setOperand(0, cleanupFn);
       }
 
+      // FIXME: remove obsolete comment 1/21/2016
       // FIXME: handle case when we are looking at the coroutine itself
       // that destroys itself (like in case with optional/expected)
       ReplaceWithDirectCalls(//CG, CGN, 
-        item.Resumes, resumeFn);
+        item.Resumes, item.ResumeFn);
       ReplaceWithDirectCalls(//CG, CGN, 
         item.Destroys, cleanupFn);
-      RemoveFakeSuspends(F);
+      replaceAllCoroDone(F);
 
       changed = true;
     }
     return changed;
   }
+
+  void replaceAllCoroDone(Function &F) {
+    for (auto it = inst_begin(F), end = inst_end(F); it != end;) {
+      Instruction &I = *it++;
+      if (IntrinsicInst *intrin = dyn_cast<IntrinsicInst>(&I))
+        if (intrin->getIntrinsicID() == Intrinsic::coro_done)
+          ReplaceCoroDone(intrin);
+    }
+  }
+
 #if 0
   bool runOnModule(Module& M) override {
     CoroutineCommon::PerModuleInit(M);

@@ -64,6 +64,17 @@ IntrinsicInst *CoroutineCommon::FindIntrinsic(Function &F,
   return nullptr;
 }
 
+IntrinsicInst *CoroutineCommon::GetCoroElide(IntrinsicInst *CoroInit) {
+  auto PN = cast<PHINode>(CoroInit->getArgOperand(0));
+  for (auto& Inc : PN->incoming_values())
+    if (auto II = dyn_cast<IntrinsicInst>(Inc))
+      if (II->getIntrinsicID() == Intrinsic::coro_elide)
+        return II;
+
+  llvm_unreachable("expecting one of the inputs to @llvm.coro.init to be from @llvm.coro.elide");
+}
+
+// This is probably obsolete
 bool llvm::CoroutineCommon::isCoroutine(Function &F) {
   return FindIntrinsic(F, Intrinsic::coro_suspend);
 }
@@ -244,6 +255,33 @@ void CoroutineCommon::ComputeSharedAllocas(
       }
 }
 
+void CoroutineCommon::ReplaceCoroDone(IntrinsicInst *intrin) {
+  Value *rawFrame = intrin->getArgOperand(0);
+
+  // this could be a coroutine start marker
+  // it that is the case, keep it
+  if (dyn_cast<ConstantPointerNull>(rawFrame))
+    return;
+
+  auto frame = new BitCastInst(rawFrame, anyFramePtrTy, "", intrin);
+#if 0
+  auto gepIndex = GetElementPtrInst::Create(
+    anyFrameTy, frame, { zeroConstant, zeroConstant }, "", intrin);
+  auto index = new LoadInst(gepIndex, "", intrin); // FIXME: alignment
+  auto cmp = new ICmpInst(intrin, ICmpInst::ICMP_EQ,
+    ConstantPointerNull::get(anyResumeFnPtrTy), index);
+#else
+  auto gepIndex = GetElementPtrInst::Create(
+    anyFrameTy, frame, { zeroConstant, twoConstant }, "", intrin);
+  auto index = new LoadInst(gepIndex, "", intrin); // FIXME: alignment
+  auto cmp = new ICmpInst(intrin, ICmpInst::ICMP_EQ,
+    ConstantInt::get(int32Ty, 0), index);
+#endif
+  intrin->replaceAllUsesWith(cmp);
+  intrin->eraseFromParent();
+}
+
+
 void CoroutineCommon::ReplaceWithIndirectCall(IntrinsicInst *intrin,
                                               ConstantInt *index) {
   Value *rawFrame = intrin->getArgOperand(0);
@@ -257,6 +295,7 @@ void CoroutineCommon::ReplaceWithIndirectCall(IntrinsicInst *intrin,
   intrin->eraseFromParent();
 }
 
+#if 0
 IntrinsicInst *CoroutineCommon::asFakeSuspend(Instruction *I) {
   if (IntrinsicInst *intrin = dyn_cast<IntrinsicInst>(I))
     if (intrin->getIntrinsicID() == Intrinsic::coro_suspend)
@@ -276,6 +315,7 @@ void CoroutineCommon::RemoveFakeSuspends(Function &F) {
     }
   }
 }
+#endif
 
 bool llvm::CoroutineCommon::simplifyAndConstantFoldTerminators(Function & F) {
   int maxRepeat = 3;
@@ -290,6 +330,7 @@ bool llvm::CoroutineCommon::simplifyAndConstantFoldTerminators(Function & F) {
   return changed;
 }
 
+#if 0
 void CoroutineCommon::InsertFakeSuspend(Value *value,
                                         Instruction *InsertBefore) {
   auto bitCast = new BitCastInst(value, bytePtrTy, "", InsertBefore);
@@ -298,6 +339,7 @@ void CoroutineCommon::InsertFakeSuspend(Value *value,
                               ConstantInt::get(int32Ty, INT_FAST32_MAX)},
                    "", InsertBefore);
 }
+#endif
 
 CoroutineCommon::BranchSuccessors::BranchSuccessors(IntrinsicInst *I) {
   reset(I);
@@ -312,6 +354,7 @@ void llvm::CoroutineCommon::BranchSuccessors::reset(IntrinsicInst * I)
   IfFalse = Br->getSuccessor(1);
 }
 
+#if 0
 void CoroutineCommon::RemoveNoOptAttribute(Function &F) {
   if (auto intrin = asFakeSuspend(&*inst_begin(F))) {
     // fake suspend is a marker that function already had
@@ -324,6 +367,7 @@ void CoroutineCommon::RemoveNoOptAttribute(Function &F) {
     F.addFnAttr(Attribute::AlwaysInline);
   }
 }
+#endif
 
 void llvm::initializeCoroutines(PassRegistry &registry) {
   initializeCoroEarlyPass(registry);

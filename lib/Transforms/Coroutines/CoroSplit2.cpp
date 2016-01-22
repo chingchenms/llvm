@@ -616,8 +616,8 @@ struct CoroutineInfo : CoroutineCommon {
   bool runOnCoroutine(Function &F) {
     init(F);
 
-    RemoveNoOptAttribute(F);
-    RemoveFakeSuspends(F);
+    //RemoveNoOptAttribute(F);
+    //RemoveFakeSuspends(F);
     CreateAuxillaryFunctions();
     AnalyzeFunction(F);
     return true;

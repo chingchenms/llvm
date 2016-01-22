@@ -210,8 +210,8 @@ struct CoroutineInfo : CoroutineCommon {
   BasicBlock *FirstResume = nullptr;
 
   bool runOnCoroutine(Function &F) {
-    RemoveNoOptAttribute(F);
-    RemoveFakeSuspends(F);
+//    RemoveNoOptAttribute(F);
+//    RemoveFakeSuspends(F);
     AnalyzeFunction(F);
     CreateAuxillaryFunctions();
 

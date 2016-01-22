@@ -57,6 +57,8 @@ struct LLVM_LIBRARY_VISIBILITY CoroutineCommon {
 
   static IntrinsicInst *FindIntrinsic(Function &F, Intrinsic::ID intrinID);
 
+  static IntrinsicInst *GetCoroElide(IntrinsicInst *CoroInit);
+
   static bool isCoroutine(Function& F);
 
   static void ComputeAllSuccessors(BasicBlock *B, SmallPtrSetImpl<BasicBlock*> &result);
@@ -73,6 +75,8 @@ struct LLVM_LIBRARY_VISIBILITY CoroutineCommon {
                                  Instruction *InsertBefore);
 
   static void ReplaceIntrinsicWith(Function &func, Intrinsic::ID id, Value *framePtr);
+
+  void ReplaceCoroDone(IntrinsicInst *intrin);
 
   void ReplaceCoroPromise(IntrinsicInst *intrin, bool from = false);
 
@@ -107,12 +111,12 @@ struct LLVM_LIBRARY_VISIBILITY CoroutineCommon {
 
   void ReplaceWithIndirectCall(IntrinsicInst *intrin, ConstantInt *index);
 
-  IntrinsicInst *asFakeSuspend(Instruction *inst);
-  bool isFakeSuspend(Instruction *inst) { return asFakeSuspend(inst); }
+  //IntrinsicInst *asFakeSuspend(Instruction *inst);
+  //bool isFakeSuspend(Instruction *inst) { return asFakeSuspend(inst); }
 
-  void InsertFakeSuspend(Value *value, Instruction *InsertBefore);
-  void RemoveNoOptAttribute(Function & F);
-  void RemoveFakeSuspends(Function &F);
+  //void InsertFakeSuspend(Value *value, Instruction *InsertBefore);
+  //void RemoveNoOptAttribute(Function & F);
+  //void RemoveFakeSuspends(Function &F);
 
   static bool simplifyAndConstantFoldTerminators(Function& F);
 };

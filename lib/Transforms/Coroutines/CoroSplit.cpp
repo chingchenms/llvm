@@ -448,8 +448,8 @@ struct CoroutineProcessor : CoroutineCommon {
   }
 
   void runTransformations() {
-    RemoveNoOptAttribute(*F);
-    RemoveFakeSuspends(*F);
+//    RemoveNoOptAttribute(*F);
+//    RemoveFakeSuspends(*F);
     CreateAuxillaryFunctions();
     RampBlocks.clear();
 
@@ -501,7 +501,7 @@ struct CoroutineProcessor : CoroutineCommon {
 
     // until coro-elide pass we need to make sure that
     // .cleanup function is not garbage collected
-    InsertFakeSuspend(cleanupFn, &*inst_begin(F));
+//    InsertFakeSuspend(cleanupFn, &*inst_begin(F));
   }
 
   void CleanupRampFunction(IntrinsicInst* coroDone, BasicBlock* StartBlock) {

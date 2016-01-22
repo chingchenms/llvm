@@ -186,7 +186,7 @@ namespace {
       intrin->replaceAllUsesWith(cmp);
       intrin->eraseFromParent();
     }
-
+#if 0
     void MakeOptnoneUntilCoroSplit(Function& F) {
       if (F.hasFnAttribute(Attribute::OptimizeNone)) {
         // put a marker that the function was originally no opt
@@ -198,6 +198,7 @@ namespace {
         F.addFnAttr(Attribute::NoInline);
       }
     }
+#endif
 
     bool runOnFunction(Function &F) override {
       bool changed = false;
@@ -217,7 +218,7 @@ namespace {
             if (!isCoroutine) {
               changed = true;
               isCoroutine = true;
-              MakeOptnoneUntilCoroSplit(F);
+              //MakeOptnoneUntilCoroSplit(F);
             }
             break;
             // FIXME: figure out what to do with this two
@@ -612,7 +613,7 @@ namespace {
 
     bool runOnCoroutine(Function& F) {
       // TODO: try alias analysis
-      RemoveNoOptAttribute(F);
+      //RemoveNoOptAttribute(F);
       RemoveLifetimeIntrinsics(F);
 #if 0
       Function* coroKill = 
@@ -698,6 +699,7 @@ namespace {
         case Intrinsic::coro_from_promise:
           handleFromPromise(F);
           break;
+          // why these are here?
         case Intrinsic::coro_destroy:
         case Intrinsic::coro_resume:
           break;
