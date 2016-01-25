@@ -124,8 +124,6 @@ bool CGPassManager::RunPassOnSCC(Pass *P, CallGraphSCC &CurSCC,
     {
       TimeRegion PassTimer(getPassTimer(CGSP));
       Changed = CGSP->runOnSCC(CurSCC);
-      if (Changed && StringRef(CGSP->getPassName()) == "Coroutine frame allocation elision and indirect calls replacement")
-        DevirtualizedCall = true;
     }
     
     // After the CGSCCPass is done, when assertions are enabled, use
@@ -226,14 +224,8 @@ bool CGPassManager::RefreshCallGraph(CallGraphSCC &CurSCC,
         assert(!CheckingMode &&
                "CallGraphSCCPass did not update the CallGraph correctly!");
         
-        auto F = I->second->getFunction();
         // If this was an indirect call site, count it.
-        if (!I->second->getFunction() 
-          //||
-          //  (F->isIntrinsic() &&
-          //   (F->getIntrinsicID() == Intrinsic::coro_destroy ||
-          //    F->getIntrinsicID() == Intrinsic::coro_resume))
-          )
+        if (!I->second->getFunction())
           ++NumIndirectRemoved;
         else 
           ++NumDirectRemoved;
@@ -331,10 +323,6 @@ bool CGPassManager::RefreshCallGraph(CallGraphSCC &CurSCC,
         CallGraphNode *CalleeNode;
         if (Function *Callee = CS.getCalledFunction()) {
           CalleeNode = CG.getOrInsertFunction(Callee);
-          if (Callee->getName().endswith_lower(".resume") ||
-            Callee->getName().endswith_lower(".destroy")) {
-              ++NumIndirectRemoved;
-          }
           ++NumDirectAdded;
         } else {
           CalleeNode = CG.getCallsExternalNode();
