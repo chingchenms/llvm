@@ -497,6 +497,14 @@ struct CoroSplit3 : public ModulePass, CoroutineCommon {
                              ConstantPointerNull::get(bytePtrTy));
     auto Sel = SelectInst::Create(ICmp, destroyFn, cleanupFn, "", InsertPt);
     new StoreInst(Sel, gep1, InsertPt);
+
+#if 0
+    auto gepIndex = GetElementPtrInst::Create(frameTy, frameInRamp,
+    { zeroConstant, oneConstant }, "", InsertPt);
+    auto fnAddr = new LoadInst(gepIndex, "", InsertPt); // FIXME: alignment
+    auto call = CallInst::Create(fnAddr, frameInRamp, "", InsertPt);
+    call->setCallingConv(CallingConv::Fast);
+#endif
   }
 
   bool replaceCoroPromise(Function& F) {
@@ -515,6 +523,12 @@ struct CoroSplit3 : public ModulePass, CoroutineCommon {
           ReplaceCoroPromise(intrin, /*From=*/true);
           changed = true;
           break;
+#if 1
+        case Intrinsic::coro_resume:
+          ReplaceWithIndirectCall(intrin, zeroConstant);
+          changed = true;
+          break;
+#endif          
           /*
         case Intrinsic::coro_done:
           ReplaceCoroDone(intrin);

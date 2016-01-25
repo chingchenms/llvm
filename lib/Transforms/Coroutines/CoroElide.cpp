@@ -210,6 +210,8 @@ struct CoroHeapElide : FunctionPass, CoroutineCommon {
       Module *M = F.getParent();
       Function *cleanupFn = getFunc(M, rampName + ".cleanup");
 
+      Value* vFrame = item.CoroInit;
+
       // FIXME: check for escapes, moves,
       if (!noDestroys && rampName != F.getName()) {
         auto InsertPt = inst_begin(F);
@@ -226,6 +228,7 @@ struct CoroHeapElide : FunctionPass, CoroutineCommon {
 
         CoroElide->replaceAllUsesWith(vAllocaFrame);
         CoroElide->eraseFromParent();
+        vFrame = vAllocaFrame;
       }
 
       // FIXME: remove obsolete comment 1/21/2016
@@ -237,9 +240,30 @@ struct CoroHeapElide : FunctionPass, CoroutineCommon {
         item.Destroys, cleanupFn);
       replaceAllCoroDone(F);
 
+      replaceIndirectCalls(F, vFrame, item.ResumeFn);
+
       changed = true;
     }
     return changed;
+  }
+
+  void replaceIndirectCalls(Function& F, Value* CoroInit, Function* DirectFunc) {
+    FunctionType *ft = cast<FunctionType>(DirectFunc->getType()->getElementType());
+    PointerType *argType = cast<PointerType>(ft->getParamType(0));
+
+    for (auto it = inst_begin(F), end = inst_end(F); it != end;) {
+      Instruction & I = *it++;
+      if (auto CI = dyn_cast<CallInst>(&I))
+        if (CI->getCalledFunction() == nullptr)
+          if (CI->getOperand(0) == CoroInit)
+          {
+            auto BitCast =
+              new BitCastInst(CoroInit, argType, "", CI);
+            auto DirectCall = CallInst::Create(DirectFunc, BitCast, "", CI);
+            DirectCall->setCallingConv(CallingConv::Fast);
+            CI->eraseFromParent();
+          }
+    }
   }
 
   void replaceAllCoroDone(Function &F) {
