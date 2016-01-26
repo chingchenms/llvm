@@ -659,12 +659,14 @@ namespace {
     }
 
     void handleRampFunction(Function& F) {
-      for (auto it = inst_begin(F), end = inst_end(F); it != end;) {
-        Instruction& I = *it++;
-        if (auto CS = CallSite(&I)) {
-          InlineFunctionInfo IFI;
-          InlineFunction(CS, IFI);
-        }
+      SmallVector<CallSite, 8> CallSites;
+      for (Instruction& I: instructions(F))
+        if (auto CS = CallSite(&I))
+          CallSites.push_back(CS);
+
+      for (auto CS : CallSites) {
+        InlineFunctionInfo IFI;
+        InlineFunction(CS, IFI);
       }
     }
 

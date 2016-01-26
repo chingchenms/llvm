@@ -109,7 +109,7 @@ struct LLVM_LIBRARY_VISIBILITY CoroutineCommon {
   static void ComputeSharedAllocas(Function &F,
                                    SmallSetVector<AllocaInst *, 16> &result);
 
-  void ReplaceWithIndirectCall(IntrinsicInst *intrin, ConstantInt *index);
+  void ReplaceWithIndirectCall(IntrinsicInst *intrin, ConstantInt *index, bool Erase = true);
 
   //IntrinsicInst *asFakeSuspend(Instruction *inst);
   //bool isFakeSuspend(Instruction *inst) { return asFakeSuspend(inst); }

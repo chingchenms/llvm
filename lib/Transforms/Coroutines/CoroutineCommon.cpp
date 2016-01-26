@@ -283,7 +283,7 @@ void CoroutineCommon::ReplaceCoroDone(IntrinsicInst *intrin) {
 
 
 void CoroutineCommon::ReplaceWithIndirectCall(IntrinsicInst *intrin,
-                                              ConstantInt *index) {
+                                              ConstantInt *index, bool Erase) {
   Value *rawFrame = intrin->getArgOperand(0);
   auto frame = new BitCastInst(rawFrame, anyFramePtrTy, "", intrin);
   auto gepIndex = GetElementPtrInst::Create(anyFrameTy, frame,
@@ -292,7 +292,9 @@ void CoroutineCommon::ReplaceWithIndirectCall(IntrinsicInst *intrin,
   auto call = CallInst::Create(fnAddr, rawFrame, "", intrin);
   call->setCallingConv(CallingConv::Fast);
   intrin->replaceAllUsesWith(call);
-  intrin->eraseFromParent();
+  if (Erase) {
+    intrin->eraseFromParent();
+  }
 }
 
 #if 0

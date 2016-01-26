@@ -236,11 +236,18 @@ struct CoroHeapElide : FunctionPass, CoroutineCommon {
       // that destroys itself (like in case with optional/expected)
       ReplaceWithDirectCalls(//CG, CGN, 
         item.Resumes, item.ResumeFn);
+#if 0
       ReplaceWithDirectCalls(//CG, CGN, 
         item.Destroys, cleanupFn);
+#else
+      for (IntrinsicInst *intrin : item.Destroys)
+        intrin->eraseFromParent();
+
+#endif
       replaceAllCoroDone(F);
 
-      replaceIndirectCalls(F, vFrame, item.ResumeFn);
+//      replaceIndirectCalls(F, vFrame, item.ResumeFn);
+      replaceIndirectCalls(F, vFrame, cleanupFn);
 
       changed = true;
     }

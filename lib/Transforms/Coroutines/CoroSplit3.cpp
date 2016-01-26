@@ -523,12 +523,16 @@ struct CoroSplit3 : public ModulePass, CoroutineCommon {
           ReplaceCoroPromise(intrin, /*From=*/true);
           changed = true;
           break;
-#if 1
+#if 0
         case Intrinsic::coro_resume:
           ReplaceWithIndirectCall(intrin, zeroConstant);
           changed = true;
           break;
 #endif          
+        case Intrinsic::coro_destroy:
+          ReplaceWithIndirectCall(intrin, oneConstant, /*EraseIntrin=*/false);
+          changed = true;
+          break;
           /*
         case Intrinsic::coro_done:
           ReplaceCoroDone(intrin);
