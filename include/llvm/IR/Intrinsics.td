@@ -615,6 +615,8 @@ def int_coro_promise : Intrinsic<[llvm_anyptr_ty], [llvm_ptr_ty], []>;
 def int_coro_from_promise : Intrinsic<[llvm_ptr_ty], [llvm_anyptr_ty], []>;
 def int_coro_save : Intrinsic<[], [llvm_any_ty, llvm_i32_ty, llvm_i32_ty, llvm_i32_ty], []>;
 def int_coro_load : Intrinsic<[llvm_any_ty], [llvm_i32_ty, llvm_i32_ty], []>;
+def int_coro_save2 : Intrinsic<[llvm_ptr_ty], [llvm_i32_ty], []>;
+def int_coro_suspend2 : Intrinsic<[llvm_i1_ty], [llvm_ptr_ty], []>;
 
 // Coroutine handle intrinsics
 def int_coro_resume : Intrinsic<[], [llvm_ptr_ty], []>;
