@@ -39,6 +39,7 @@ using namespace llvm;
 namespace llvm {
   Pass *createCoroInline();
   Pass *createCoroPreSplit();
+  Pass *createCoroCleanupPass();
 }
 
 static cl::opt<bool>
@@ -172,6 +173,7 @@ void PassManagerBuilder::addInitialAliasAnalysisPasses(
 void PassManagerBuilder::populateFunctionPassManager(
     legacy::FunctionPassManager &FPM) {
   addExtensionsToPM(EP_EarlyAsPossible, FPM);
+  FPM.add(createCoroPreSplit());
 
   // Add LibraryInfo if we have some.
   if (LibraryInfo)
@@ -192,8 +194,6 @@ void PassManagerBuilder::populateFunctionPassManager(
 
 void PassManagerBuilder::populateModulePassManager(
     legacy::PassManagerBase &MPM) {
-  MPM.add(createCoroPreSplit());
-
   // If all optimizations are disabled, just run the always-inline pass and,
   // if enabled, the function merging pass.
   if (OptLevel == 0) {
@@ -481,6 +481,7 @@ void PassManagerBuilder::populateModulePassManager(
     MPM.add(createMergeFunctionsPass());
 
   addExtensionsToPM(EP_OptimizerLast, MPM);
+  MPM.add(createCoroCleanupPass());
 }
 
 void PassManagerBuilder::addLTOOptimizationPasses(legacy::PassManagerBase &PM) {

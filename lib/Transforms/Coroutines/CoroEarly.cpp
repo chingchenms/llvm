@@ -536,7 +536,7 @@ Pass *llvm::createCoroOnOpt0() { return new CoroOpt0(); }
 namespace {
   // inline little things in a coroutine, like a void or bool
   // function with only a ret instruction returning a constant
-#if 1
+#if 0
   struct CoroPreSplit : public ModulePass, CoroutineCommon {
     static char ID; // Pass identification, replacement for typeid
     CoroPreSplit() : ModulePass(ID) {}
@@ -872,6 +872,44 @@ struct CoroPreSplit : public FunctionPass, CoroutineCommon {
     }
   }
 
+  bool doInitialization(Module& M) override {
+    CoroutineCommon::PerModuleInit(M);
+    return false;
+  }
+
+  bool replaceCoroPromise(Function& F) {
+    bool changed = false;
+    for (auto it = inst_begin(F), end = inst_end(F); it != end;) {
+      Instruction &I = *it++;
+      if (auto intrin = dyn_cast<IntrinsicInst>(&I)) {
+        switch (intrin->getIntrinsicID()) {
+        default:
+          continue;
+        case Intrinsic::coro_promise:
+          ReplaceCoroPromise(intrin);
+          changed = true;
+          break;
+        case Intrinsic::coro_from_promise:
+          ReplaceCoroPromise(intrin, /*From=*/true);
+          changed = true;
+          break;
+        }
+      }
+    }
+    return changed;
+  }
+
+  bool runOnFunction(Function& F) override {
+    bool changed = false;
+
+    if (isCoroutine(F))
+      changed |= runOnCoroutine(F);
+    changed |= replaceCoroPromise(F);
+
+    return changed;
+  }
+#if 0
+
   // inline small functions into its parent until we hit a coroutine
   void handleFromPromise(Function& F) {
     for (auto& U : F.uses()) {
@@ -888,7 +926,6 @@ struct CoroPreSplit : public FunctionPass, CoroutineCommon {
       InlineFunction(CS, IFI);
     }
   }
-
   bool runOnModule(Module &M) override {
     CoroutineCommon::PerModuleInit(M);
     RampFunctions.clear();
@@ -916,6 +953,7 @@ struct CoroPreSplit : public FunctionPass, CoroutineCommon {
     }
     return changed;
   }
+#endif
 };
 #endif
 }
