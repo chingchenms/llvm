@@ -687,6 +687,28 @@ namespace {
       }
     }
 
+    bool replaceCoroPromise(Function& F) {
+      bool changed = false;
+      for (auto it = inst_begin(F), end = inst_end(F); it != end;) {
+        Instruction &I = *it++;
+        if (auto intrin = dyn_cast<IntrinsicInst>(&I)) {
+          switch (intrin->getIntrinsicID()) {
+          default:
+            continue;
+          case Intrinsic::coro_promise:
+            ReplaceCoroPromise(intrin);
+            changed = true;
+            break;
+          case Intrinsic::coro_from_promise:
+            ReplaceCoroPromise(intrin, /*From=*/true);
+            changed = true;
+            break;
+          }
+        }
+      }
+      return changed;
+    }
+
     bool runOnModule(Module &M) override {
       CoroutineCommon::PerModuleInit(M);
       RampFunctions.clear();
@@ -697,7 +719,8 @@ namespace {
           changed |= runOnCoroutine(F);
         else switch (F.getIntrinsicID()) {
         default:
-          continue;
+          changed |= replaceCoroPromise(F);
+          break;
         case Intrinsic::coro_from_promise:
           handleFromPromise(F);
           break;

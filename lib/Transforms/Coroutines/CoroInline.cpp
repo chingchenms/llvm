@@ -63,7 +63,26 @@ namespace {
     //}
 
     bool tryCoroElide(CallGraphSCC &SCC) {
-      return false;
+      for (CallGraphNode *Node : SCC) {
+        Function *F = Node->getFunction();
+        if (F) {
+          auto CI = FindIntrinsic(*F, Intrinsic::coro_init);
+          if (!CI) return false;
+          auto CD = FindIntrinsic(*F, Intrinsic::coro_destroy);
+          if (!CD) return false;
+
+          legacy::FunctionPassManager FPM(F->getParent());
+          FPM.add(createSROAPass());
+          FPM.add(createCoroHeapElidePass());
+          FPM.add(createSROAPass());
+          FPM.add(createEarlyCSEPass());
+          FPM.add(createCFGSimplificationPass());
+          FPM.doInitialization();
+          FPM.run(*F);
+          FPM.doFinalization();
+          RefreshCallGraph(SCC, *CurrentCG, false);
+        }
+      }
     }
 
 #if 0
