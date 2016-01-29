@@ -12,6 +12,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "CoroutineCommon.h"
+#include "CoroSplit4.h"
 #include "llvm/ADT/SmallBitVector.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/SmallVector.h"
@@ -35,22 +36,11 @@
 #include "llvm/Transforms/Utils/Local.h"
 using namespace llvm;
 
-#define DEBUG_TYPE "coro-split3"
+#define DEBUG_TYPE "coro-split4"
 
 namespace {
 
-}
-
-namespace {
-//struct CoroSplit3 : public ModulePass, CoroutineCommon {
-struct CoroSplit3 : public FunctionPass, CoroutineCommon {
-  static char ID; // Pass identification, replacement for typeid
-//  CoroSplit3() : ModulePass(ID) {}
-  CoroSplit3() : FunctionPass(ID) {
-    initializeCoroSplit3Pass(*PassRegistry::getPassRegistry());
-  }
-
-  SmallVector<Function *, 8> Coroutines;
+struct CoroSplit4 : CoroutineCommon {
 
   struct SuspendPoint {
     IntrinsicInst* SuspendInst;
@@ -186,6 +176,8 @@ struct CoroSplit3 : public FunctionPass, CoroutineCommon {
   };
 
   Function* ThisFunction;
+
+  coro::CoroutineData* CD;
 
   void processValue(Instruction *DefInst, DominatorTree &DT,
                     SuspendInfo const &Info,
@@ -375,6 +367,7 @@ struct CoroSplit3 : public FunctionPass, CoroutineCommon {
     }
   };
 
+#if 0
   // TODO: move them to some struct
   SmallString<16> smallString;
   StructType *frameTy = nullptr;
@@ -414,34 +407,39 @@ struct CoroSplit3 : public FunctionPass, CoroutineCommon {
     destroyFn = CreateAuxillaryFunction(".destroy", frameInDestroy);
     cleanupFn = CreateAuxillaryFunction(".cleanup", frameInCleanup);
   }
-
+#endif
   void createFrameStruct(SmallVectorImpl<AllocaInst *>& SharedAllocas) {
     SmallVector<Type *, 8> typeArray;
 
     typeArray.clear();
-    typeArray.push_back(resumeFnPtrTy); // 0 res-type
-    typeArray.push_back(resumeFnPtrTy); // 1 dtor-type
+    typeArray.push_back(CD->ResumeFnPtrTy); // 0 res-type
+    typeArray.push_back(CD->ResumeFnPtrTy); // 1 dtor-type
     typeArray.push_back(int32Ty);       // 2 index
-    typeArray.push_back(int32Ty);       // 3 padding
+    typeArray.push_back(int32Ty);       // 3 padding // TODO: make it conditional on arch?
 
     for (AllocaInst *AI : SharedAllocas) {
       typeArray.push_back(AI->getType()->getElementType());
     }
-    frameTy->setBody(typeArray);
+    CD->FrameTy->setBody(typeArray);
 
     // TODO: when we optimize storage layout, keep coro_size as intrinsic
     // for later passes to plug in the right amount
     const DataLayout &DL = M->getDataLayout();
-    APInt size(32, DL.getTypeAllocSize(frameTy));
+    APInt size(32, DL.getTypeAllocSize(CD->FrameTy));
     ReplaceIntrinsicWith(*ThisFunction, Intrinsic::coro_size, ConstantInt::get(int32Ty, size));
   }
+
+  SmallString<16> Scratch;
+
   // replace all uses of allocas with gep from frame struct
   void ReplaceSharedUses(CoroutineInfo const& Info) {
     enum { kStartingField = 3 };
     APInt fieldNo(32, kStartingField); // Fields start with after 2
+
     for (AllocaInst *AI : Info.SharedAllocas) {
-      smallString = AI->getName();
-      if (smallString == "__promise") {
+      auto& Name = Scratch;
+      Name = AI->getName();
+      if (Name == "__promise") {
         assert(fieldNo == kStartingField && "promise shall be the first field");
       }
       AI->setName(""); // FIXME: use TakeName
@@ -450,10 +448,10 @@ struct CoroSplit3 : public FunctionPass, CoroutineCommon {
       while (!AI->use_empty()) {
         Use &U = *AI->use_begin();
         User *user = U.getUser();
-        Value *frame = frameInRamp;
+        Value *frame = CD->Ramp.Frame;
         auto gep =
-          GetElementPtrInst::Create(frameTy, frame, { zeroConstant, index },
-            smallString, cast<Instruction>(user));
+          GetElementPtrInst::Create(CD->FrameTy, frame, { zeroConstant, index },
+            Name, cast<Instruction>(user));
         U.set(gep);
       }
       AI->eraseFromParent();
@@ -485,19 +483,19 @@ struct CoroSplit3 : public FunctionPass, CoroutineCommon {
     createFrameStruct(CoroInfo.SharedAllocas);
     auto InsertPt = CoroInfo.CoroInit->getNextNode();
 
-    frameInRamp = new BitCastInst(CoroInfo.CoroInit, framePtrTy, "frame",
+    CD->Ramp.Frame = new BitCastInst(CoroInfo.CoroInit, CD->FramePtrTy, "frame",
       InsertPt);
     auto gep0 = GetElementPtrInst::Create(
-      frameTy, frameInRamp, { zeroConstant, zeroConstant }, "", InsertPt);
-    new StoreInst(resumeFn, gep0, InsertPt);
+      CD->FrameTy, CD->Ramp.Frame, { zeroConstant, zeroConstant }, "", InsertPt);
+    new StoreInst(CD->Resume.Func, gep0, InsertPt);
 
     auto gep1 = GetElementPtrInst::Create(
-      frameTy, frameInRamp, { zeroConstant, oneConstant }, "", InsertPt);
+      CD->FrameTy, CD->Ramp.Frame, { zeroConstant, oneConstant }, "", InsertPt);
 
     auto CoroElide = GetCoroElide(CoroInfo.CoroInit);
     auto ICmp = new ICmpInst(InsertPt, ICmpInst::ICMP_EQ, CoroElide,
                              ConstantPointerNull::get(bytePtrTy));
-    auto Sel = SelectInst::Create(ICmp, destroyFn, cleanupFn, "", InsertPt);
+    auto Sel = SelectInst::Create(ICmp, CD->Destroy.Func, CD->Cleanup.Func, "", InsertPt);
     new StoreInst(Sel, gep1, InsertPt);
 
 #if 0
@@ -547,25 +545,30 @@ struct CoroSplit3 : public FunctionPass, CoroutineCommon {
     return changed;
   }
 
+  void runOn(coro::CoroutineData& CoroData) {
+    CD = &CoroData;
+    ThisFunction = CD->Ramp.Func;
+    runOnCoroutine(*ThisFunction);
+  }
+
   bool runOnCoroutine(Function& F) {
     DEBUG(dbgs() << "CoroSplit function: " << F.getName() << "\n");
 
     SuspendInfo Suspends;
     CoroutineInfo CoroInfo;
 
+#if 0
     init(F);
     CreateAuxillaryFunctions();
+#endif
     //assert(F.getPrefixData() == nullptr && "coroutine should not have function prefix");
     //F.setPrefixData(destroyFn);
 
-    DominatorTreeWrapperPass& DTA = getAnalysis<DominatorTreeWrapperPass>();
-    // FIXME: make canonicalize update DT
-    if (Suspends.canonicalizeSuspends(F)) {
-      DTA.runOnFunction(F);
-    }
+    Suspends.canonicalizeSuspends(F);
     CoroInfo.analyzeFunction(F, Suspends);
 
-    DominatorTree &DT = DTA.getDomTree();
+    DominatorTree DT;
+    DT.recalculate(F);
     insertSpills(F, DT, Suspends, CoroInfo.SharedAllocas);
 
     // move this into PrepareFrame func
@@ -584,8 +587,8 @@ struct CoroSplit3 : public FunctionPass, CoroutineCommon {
 
     ThisFunction->removeFnAttr(Attribute::Coroutine);
 
-    createResumeOrDestroy(resumeFn, ResumeEntry, frameInResume, CoroInfo, Suspends);
-    createResumeOrDestroy(destroyFn, DestroyEntry, frameInDestroy, CoroInfo, Suspends);
+    createResumeOrDestroy(CD->Resume.Func, ResumeEntry, CD->Resume.Frame, CoroInfo, Suspends);
+    createResumeOrDestroy(CD->Destroy.Func, DestroyEntry, CD->Destroy.Frame, CoroInfo, Suspends);
     CoroInfo.CoroDone->replaceAllUsesWith(ConstantInt::getFalse(M->getContext()));
     removeUnreachableBlocks(F);
     simplifyAndConstantFoldTerminators(F);
@@ -598,9 +601,9 @@ struct CoroSplit3 : public FunctionPass, CoroutineCommon {
 
   void PrepareForHeapElision()
   {
-    IntrinsicInst* DeleteInResume = FindIntrinsic(*resumeFn, Intrinsic::coro_delete);
+    IntrinsicInst* DeleteInResume = FindIntrinsic(*CD->Resume.Func, Intrinsic::coro_delete);
     IntrinsicInst* DeleteInRamp = FindIntrinsic(*ThisFunction, Intrinsic::coro_delete);
-    IntrinsicInst* DeleteInDestroy = FindIntrinsic(*destroyFn, Intrinsic::coro_delete);
+    IntrinsicInst* DeleteInDestroy = FindIntrinsic(*CD->Destroy.Func, Intrinsic::coro_delete);
 
     // if we found delete in Resume or Ramp, the coroutine is not eligible
     // for heap elision, so we don't have to create a .cleanup function
@@ -610,9 +613,9 @@ struct CoroSplit3 : public FunctionPass, CoroutineCommon {
 
     // otherwise, clone the Destroy function and eliminate the delete block
     ValueToValueMapTy VMap;
-    VMap[frameInDestroy] = frameInCleanup;
+    VMap[CD->Destroy.Frame] = CD->Cleanup.Frame;
     SmallVector<ReturnInst*, 4> Returns;
-    CloneFunctionInto(cleanupFn, destroyFn, VMap, false, Returns);
+    CloneFunctionInto(CD->Cleanup.Func, CD->Destroy.Func, VMap, false, Returns);
 
     IntrinsicInst* CoroDelete = cast<IntrinsicInst>(VMap[DeleteInDestroy]);
 
@@ -630,7 +633,7 @@ struct CoroSplit3 : public FunctionPass, CoroutineCommon {
       Suspends.SuspendPoints.size() - ((Destroy || Suspends.HasFinalSuspend) ? 1 : 0);
 
     auto gepIndex = GetElementPtrInst::Create(
-      frameTy, frameInRamp, { zeroConstant, twoConstant }, "", Entry);
+      CD->FrameTy, CD->Ramp.Frame, { zeroConstant, twoConstant }, "", Entry);
     auto index = new LoadInst(gepIndex, "index", Entry);
     auto switchInst = SwitchInst::Create(index, Info.Unreachable, CaseCount, Entry);
 
@@ -667,11 +670,11 @@ struct CoroSplit3 : public FunctionPass, CoroutineCommon {
     for (auto SP : Suspends.SuspendPoints) {
       BranchInst::Create(Info.ReturnBlock, SP.SuspendBr);
       SP.SuspendBr->eraseFromParent();
-      auto gep = GetElementPtrInst::Create(frameTy, frameInRamp,
-      { zeroConstant, twoConstant }, "",
-        SP.SuspendInst);
+      auto gep = GetElementPtrInst::Create(CD->FrameTy, CD->Ramp.Frame,
+                                           {zeroConstant, twoConstant}, "",
+                                           SP.SuspendInst);
       new StoreInst(SP.getIndex(), gep, SP.SuspendInst);
-      CallAwaitSuspend(SP.SuspendInst, frameInRamp);
+      CallAwaitSuspend(SP.SuspendInst, CD->Ramp.Frame);
       SP.SuspendInst->eraseFromParent();
     }
   }
@@ -686,7 +689,7 @@ struct CoroSplit3 : public FunctionPass, CoroutineCommon {
     for (auto &A : ThisFunction->args())
       VMap[&A] = UndefValue::get(A.getType());
 
-    VMap[frameInRamp] = FramePtr;
+    VMap[CD->Ramp.Frame] = FramePtr;
 
     SmallVector<ReturnInst*, 4> Returns;
     CloneFunctionInto(NewFn, ThisFunction, VMap, false, Returns);
@@ -711,7 +714,7 @@ struct CoroSplit3 : public FunctionPass, CoroutineCommon {
       clone->insertBefore(InsertPt);
     }
 
-    VMap[frameInRamp]->replaceAllUsesWith(FramePtr);
+    VMap[CD->Ramp.Frame]->replaceAllUsesWith(FramePtr);
 
     BlockSet OldEntryBlocks;
     InstrSetVector Used;
@@ -777,6 +780,7 @@ struct CoroSplit3 : public FunctionPass, CoroutineCommon {
     return changed;
   }
 #else
+#if 0
   bool doInitialization(Module& M) override {
     CoroutineCommon::PerModuleInit(M);
     return false;
@@ -790,30 +794,38 @@ struct CoroSplit3 : public FunctionPass, CoroutineCommon {
     changed |= replaceCoroPromise(F);
     return changed;
   }
-
 #endif
-  void getAnalysisUsage(AnalysisUsage &AU) const override {
-    //AU.addRequired<TargetLibraryInfoWrapperPass>();
-    AU.addRequired<DominatorTreeWrapperPass>();
-  }
+#endif
 };
 }
 
-char CoroSplit3::ID = 0;
-namespace llvm {
-INITIALIZE_PASS_BEGIN(
-    CoroSplit3, "coro-split3",
-    "Split coroutine into ramp/resume/destroy/cleanup functions v3", false,
-    false)
-//INITIALIZE_PASS_DEPENDENCY(AssumptionCacheTracker)
-//INITIALIZE_PASS_DEPENDENCY(CallGraphWrapperPass)
-//INITIALIZE_PASS_DEPENDENCY(TargetLibraryInfoWrapperPass)
-//INITIALIZE_PASS_DEPENDENCY(TargetLibraryInfoWrapperPass)
-INITIALIZE_PASS_DEPENDENCY(DominatorTreeWrapperPass)
-INITIALIZE_PASS_END(
-    CoroSplit3, "coro-split3",
-    "Split coroutine into ramp/resume/destroy/cleanup functions v3", false,
-    false)
+void llvm::coro::CoroutineData::SubInfo::Init(Function& F, Twine Suffix, CoroutineData& Data) {
+  Func = Function::Create(Data.ResumeFnTy, GlobalValue::InternalLinkage,
+    F.getName() + Suffix, F.getParent());
+  Func->setCallingConv(CallingConv::Fast);
+  Frame = &*Func->arg_begin();
+  Frame->setName("frame.ptr" + Suffix);
+}
 
-Pass *createCoroSplit3() { return new CoroSplit3(); }
+llvm::coro::CoroutineData::CoroutineData(Function& F) {
+  SmallString<16> smallString;
+  FrameTy = StructType::create(
+    F.getContext(), (F.getName() + ".frame").toStringRef(smallString));
+  FramePtrTy = PointerType::get(FrameTy, 0);
+  ResumeFnTy = FunctionType::get(Type::getVoidTy(F.getContext()), FramePtrTy, false);
+  ResumeFnPtrTy = PointerType::get(ResumeFnTy, 0);
+
+  Ramp.Func = &F;
+  Ramp.Frame = Ramp.vFrame = nullptr;
+
+  Resume.Init(F, ".resume", *this);
+  Destroy.Init(F, ".destroy", *this);
+  Cleanup.Init(F, ".cleanup", *this);
+}
+
+void llvm::coro::CoroutineData::split(CoroutineCommon* CC) {
+  CoroSplit4 pass;
+  pass.PerModuleInit(*Ramp.Func->getParent());
+  pass.runOn(*this);
+  CC;
 }
