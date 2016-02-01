@@ -18,6 +18,7 @@
 #include "llvm/Transforms/Coroutines.h"
 #include "llvm/Analysis/CallGraphSCCPass.h"
 #include "llvm/IR/Intrinsics.h"
+#include "llvm/IR/InstIterator.h"
 #include "llvm/Transforms/Utils/Cloning.h"
 #include "llvm/Transforms/Utils/Local.h"
 #include "llvm/Support/Debug.h"
@@ -62,6 +63,23 @@ namespace {
     //  Inliner->getAnalysisUsage(AU);
     //}
 
+    void inlineResumeCleanup(Function& F) {
+      SmallVector<CallSite, 8> CoroCalls;
+      for (auto &I : instructions(F))
+        if (CallSite CS = CallSite(&I))
+          if (auto Callee = CS.getCalledFunction())
+            if (Callee->getName().endswith(".cleanup") ||
+                Callee->getName().endswith(".resume") ||
+                Callee->getName().endswith(".destroy"))
+              CoroCalls.push_back(CS);
+
+      for (auto& CS : CoroCalls) {
+        // TODO: check inlining cost
+        InlineFunctionInfo IFI;
+        InlineFunction(CS, IFI);
+      }
+    }
+
     bool tryCoroElide(CallGraphSCC &SCC) {
       for (CallGraphNode *Node : SCC) {
         Function *F = Node->getFunction();
@@ -74,12 +92,31 @@ namespace {
           legacy::FunctionPassManager FPM(F->getParent());
           FPM.add(createSROAPass());
           FPM.add(createCoroHeapElidePass());
+#if 1
           FPM.add(createSROAPass());
-          FPM.add(createEarlyCSEPass());
-          FPM.add(createCFGSimplificationPass());
+          FPM.add(createEarlyCSEPass());              // Catch trivial redundancies
+          FPM.add(createJumpThreadingPass());         // Thread jumps.
+          FPM.add(createCorrelatedValuePropagationPass()); // Propagate conditionals
+          FPM.add(createCFGSimplificationPass());     // Merge & remove BBs
+          FPM.add(createInstructionCombiningPass());  // Combine silly seq's
+          FPM.add(createTailCallEliminationPass()); // Eliminate tail calls
+          FPM.add(createCFGSimplificationPass());     // Merge & remove BBs
+          FPM.add(createReassociatePass());           // Reassociate expressions
+                                                      // Rotate Loop - disable header duplication at -Oz
+          FPM.add(createLoopRotatePass());
+
+          //FPM.add(createSROAPass());
+          //FPM.add(createEarlyCSEPass());
+          //FPM.add(createJumpThreadingPass());
+          //FPM.add(createCFGSimplificationPass());
+          //FPM.add(createInstructionCombiningPass());
+          //FPM.add(createGVNPass());
+          //FPM.add(createCorrelatedValuePropagationPass());
+#endif
           FPM.doInitialization();
           FPM.run(*F);
           FPM.doFinalization();
+          inlineResumeCleanup(*F);
           RefreshCallGraph(SCC, *CurrentCG, false);
         }
       }

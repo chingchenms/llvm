@@ -183,8 +183,10 @@ struct CoroHeapElide : FunctionPass, CoroutineCommon {
       //CGN.addCalledFunction(CallSite(call), CG[func]);
       intrin->eraseFromParent();
 
+#if 0 // DONT INLINE ATM
       InlineFunctionInfo IFI;
       InlineFunction(call, IFI);
+#endif
     }
   }
 
@@ -240,7 +242,7 @@ struct CoroHeapElide : FunctionPass, CoroutineCommon {
       // that destroys itself (like in case with optional/expected)
       ReplaceWithDirectCalls(//CG, CGN, 
         item.Resumes, item.ResumeFn);
-#if 0
+#if 1
       ReplaceWithDirectCalls(//CG, CGN, 
         item.Destroys, cleanupFn);
 #else
@@ -251,7 +253,7 @@ struct CoroHeapElide : FunctionPass, CoroutineCommon {
       replaceAllCoroDone(F);
 
 //      replaceIndirectCalls(F, vFrame, item.ResumeFn);
-      replaceIndirectCalls(F, vFrame, cleanupFn);
+//      replaceIndirectCalls(F, vFrame, cleanupFn);
 
       changed = true;
     }
@@ -273,9 +275,10 @@ struct CoroHeapElide : FunctionPass, CoroutineCommon {
             auto DirectCall = CallInst::Create(DirectFunc, BitCast, "", CI);
             DirectCall->setCallingConv(CallingConv::Fast);
             CI->eraseFromParent();
-
+#if 0 // DONT INLINE ATM
             InlineFunctionInfo IFI;
             InlineFunction(DirectCall, IFI);
+#endif
           }
     }
   }
