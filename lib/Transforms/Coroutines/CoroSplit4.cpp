@@ -203,7 +203,7 @@ struct CoroSplit4 : CoroutineCommon {
       else {
         BB = DT[UseBlock]->getIDom()->getBlock();
       }
-      while (BB != DefBlock) {
+      for (;;) {
         if (Info.isSuspendBlock(BB)) {
           Instruction* InsertPt = I;
           // figure out whether we need a new block
@@ -252,6 +252,8 @@ struct CoroSplit4 : CoroutineCommon {
           DEBUG(dbgs() << "Created spill: " << *Reload << "\n");
           break;
         }
+        if (BB == DefBlock)
+          break;
         BB = DT[BB]->getIDom()->getBlock();
       }
     }

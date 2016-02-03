@@ -17,6 +17,7 @@
 #include "llvm/ADT/SmallBitVector.h"
 #include "llvm/Transforms/Coroutines.h"
 #include "llvm/Analysis/CallGraphSCCPass.h"
+#include "llvm/Analysis/InlineCost.h"
 #include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/InstIterator.h"
 #include "llvm/Transforms/Utils/Cloning.h"
@@ -30,9 +31,6 @@ using namespace llvm;
 using namespace llvm::coro;
 
 #define DEBUG_TYPE "coro-inline"
-namespace llvm {
-  Pass *createCoroSplit3();
-}
 
 namespace {
   /// PrintCallGraphPass - Print a Module corresponding to a call graph.
@@ -75,8 +73,10 @@ namespace {
 
       for (auto& CS : CoroCalls) {
         // TODO: check inlining cost
-        InlineFunctionInfo IFI;
-        InlineFunction(CS, IFI);
+        if (ICA->getInlineCost(CS, 100)) {
+          InlineFunctionInfo IFI;
+          InlineFunction(CS, IFI);
+        }
       }
     }
 
@@ -349,8 +349,11 @@ namespace {
     }
 
 
+    InlineCostAnalysis *ICA;
     bool runOnSCC(CallGraphSCC &SCC) override {
       bool changed = false;
+      ICA = &getAnalysis<InlineCostAnalysis>();
+
       if (HasCoroInit)
         changed |= tryCoroElide(SCC);
 
@@ -389,6 +392,11 @@ namespace {
         if (auto* I = dyn_cast<Instruction>(U))
           AddCoroutine(CG, *I->getParent()->getParent());
       return !Coroutines.empty();
+    }
+
+    void getAnalysisUsage(AnalysisUsage &AU) const {
+      AU.addRequired<InlineCostAnalysis>();
+      //Inliner::getAnalysisUsage(AU);
     }
 
     //bool doFinalization(CallGraph &CG) override {

@@ -203,8 +203,10 @@ struct CoroHeapElide : FunctionPass, CoroutineCommon {
     bool changed = false;
     Database db(F);
     for (auto &item : db.data) {
-      assert(item.ResumeFn &&
-             "missing ResumeFn store after @llvm.coro.init");
+      if (!item.ResumeFn) // with nested coroutines there won't be resume in pre-split coroutines
+        continue;
+      //assert(item.ResumeFn &&
+      //       "missing ResumeFn store after @llvm.coro.init");
 
       const bool noDestroys = item.Destroys.empty();
       const bool noResumes = item.Resumes.empty();
