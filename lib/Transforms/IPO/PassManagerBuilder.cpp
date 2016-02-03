@@ -30,17 +30,12 @@
 #include "llvm/Analysis/TargetLibraryInfo.h"
 #include "llvm/Analysis/TypeBasedAliasAnalysis.h"
 #include "llvm/Target/TargetMachine.h"
+#include "llvm/Transforms/Coroutines.h"
 #include "llvm/Transforms/IPO.h"
 #include "llvm/Transforms/Scalar.h"
 #include "llvm/Transforms/Vectorize.h"
 
 using namespace llvm;
-
-namespace llvm {
-  Pass *createCoroInline();
-  Pass *createCoroPreSplit();
-  Pass *createCoroCleanupPass();
-}
 
 static cl::opt<bool>
 RunLoopVectorization("vectorize-loops", cl::Hidden,
