@@ -17,6 +17,7 @@
 #include "CoroutineCommon.h"
 #include "llvm/Transforms/Coroutines.h"
 #include "llvm/Analysis/CallGraphSCCPass.h"
+#include "llvm/Transforms/Utils/Cloning.h"
 
 #include "llvm/ADT/Statistic.h"
 #include "llvm/ADT/SmallString.h"
@@ -181,6 +182,11 @@ struct CoroHeapElide : FunctionPass, CoroutineCommon {
       call->setCallingConv(CallingConv::Fast);
       //CGN.addCalledFunction(CallSite(call), CG[func]);
       intrin->eraseFromParent();
+
+#if 0 // DONT INLINE ATM
+      InlineFunctionInfo IFI;
+      InlineFunction(call, IFI);
+#endif
     }
   }
 
@@ -197,8 +203,10 @@ struct CoroHeapElide : FunctionPass, CoroutineCommon {
     bool changed = false;
     Database db(F);
     for (auto &item : db.data) {
-      assert(item.ResumeFn &&
-             "missing ResumeFn store after @llvm.coro.init");
+      if (!item.ResumeFn) // with nested coroutines there won't be resume in pre-split coroutines
+        continue;
+      //assert(item.ResumeFn &&
+      //       "missing ResumeFn store after @llvm.coro.init");
 
       const bool noDestroys = item.Destroys.empty();
       const bool noResumes = item.Resumes.empty();
@@ -236,7 +244,7 @@ struct CoroHeapElide : FunctionPass, CoroutineCommon {
       // that destroys itself (like in case with optional/expected)
       ReplaceWithDirectCalls(//CG, CGN, 
         item.Resumes, item.ResumeFn);
-#if 0
+#if 1
       ReplaceWithDirectCalls(//CG, CGN, 
         item.Destroys, cleanupFn);
 #else
@@ -247,7 +255,7 @@ struct CoroHeapElide : FunctionPass, CoroutineCommon {
       replaceAllCoroDone(F);
 
 //      replaceIndirectCalls(F, vFrame, item.ResumeFn);
-      replaceIndirectCalls(F, vFrame, cleanupFn);
+//      replaceIndirectCalls(F, vFrame, cleanupFn);
 
       changed = true;
     }
@@ -269,6 +277,10 @@ struct CoroHeapElide : FunctionPass, CoroutineCommon {
             auto DirectCall = CallInst::Create(DirectFunc, BitCast, "", CI);
             DirectCall->setCallingConv(CallingConv::Fast);
             CI->eraseFromParent();
+#if 0 // DONT INLINE ATM
+            InlineFunctionInfo IFI;
+            InlineFunction(DirectCall, IFI);
+#endif
           }
     }
   }
@@ -357,7 +369,7 @@ INITIALIZE_PASS_BEGIN(
     "Coroutine frame allocation elision and indirect calls replacement", false,
     false)
   //INITIALIZE_PASS_DEPENDENCY(CallGraphWrapperPass)
-  INITIALIZE_PASS_DEPENDENCY(CoroSplit)
+  //INITIALIZE_PASS_DEPENDENCY(CoroSplit)
 INITIALIZE_PASS_END(
     CoroHeapElide, "coro-elide",
     "Coroutine frame allocation elision and indirect calls replacement", false,

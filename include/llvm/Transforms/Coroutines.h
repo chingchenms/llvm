@@ -45,6 +45,7 @@ Pass *createCoroLastPass();
 Pass *createCoroOnOpt0();
 
 Pass *createCoroPreSplit();
+Pass *createCoroInline();
 
 /// TODO: move to llvm/InitializePasses.h?
 /// initializeCoroutines - Initialize all passes linked into the Coroutines library.

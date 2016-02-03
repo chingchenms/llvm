@@ -134,6 +134,7 @@ void initializeCoroSplit2Pass(PassRegistry &registry);
 void initializeCoroSplit3Pass(PassRegistry &registry);
 void initializeCoroPassManagerPass(PassRegistry &registry);
 void initializeCoroModuleEarlyPass(PassRegistry &registry);
+void initializeCoroInlinePass(PassRegistry &registry);
 }
 
 #endif

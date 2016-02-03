@@ -37,10 +37,8 @@
 using namespace llvm;
 
 namespace llvm {
+  Pass *createCoroInline();
   Pass *createCoroPreSplit();
-	Pass *createCoroHeapElide2();
-  Pass *createCoroSplit3();
-  Pass *createCoroHeapElidePass();
   Pass *createCoroCleanupPass();
 }
 
@@ -175,6 +173,7 @@ void PassManagerBuilder::addInitialAliasAnalysisPasses(
 void PassManagerBuilder::populateFunctionPassManager(
     legacy::FunctionPassManager &FPM) {
   addExtensionsToPM(EP_EarlyAsPossible, FPM);
+  FPM.add(createCoroPreSplit());
 
   // Add LibraryInfo if we have some.
   if (LibraryInfo)
@@ -216,12 +215,6 @@ void PassManagerBuilder::populateModulePassManager(
     addExtensionsToPM(EP_EnabledOnOptLevel0, MPM);
     return;
   }
-  
-#if 1 // spill algo is wrong this is workaround
-  MPM.add(createCoroPreSplit());
-  MPM.add(createCFGSimplificationPass());
-#endif
-  MPM.add(createCoroSplit3());
 
   // Add LibraryInfo if we have some.
   if (LibraryInfo)
@@ -251,10 +244,12 @@ void PassManagerBuilder::populateModulePassManager(
   // Start of CallGraph SCC passes.
   if (!DisableUnitAtATime)
     MPM.add(createPruneEHPass());             // Remove dead EH info
+
   if (Inliner) {
     MPM.add(Inliner);
     Inliner = nullptr;
   }
+  MPM.add(createCoroInline());
   if (!DisableUnitAtATime)
     MPM.add(createFunctionAttrsPass());       // Set readonly/readnone attrs
   if (OptLevel > 2)
@@ -271,10 +266,8 @@ void PassManagerBuilder::populateModulePassManager(
   MPM.add(createCorrelatedValuePropagationPass()); // Propagate conditionals
   MPM.add(createCFGSimplificationPass());     // Merge & remove BBs
   MPM.add(createInstructionCombiningPass());  // Combine silly seq's
-  MPM.add(createCoroHeapElidePass());
   addExtensionsToPM(EP_Peephole, MPM);
-//  MPM.add(createCoroHeapElide2());
-  
+
   MPM.add(createTailCallEliminationPass()); // Eliminate tail calls
   MPM.add(createCFGSimplificationPass());     // Merge & remove BBs
   MPM.add(createReassociatePass());           // Reassociate expressions
@@ -487,8 +480,8 @@ void PassManagerBuilder::populateModulePassManager(
   if (MergeFunctions)
     MPM.add(createMergeFunctionsPass());
 
-  MPM.add(createCoroCleanupPass());
   addExtensionsToPM(EP_OptimizerLast, MPM);
+  MPM.add(createCoroCleanupPass());
 }
 
 void PassManagerBuilder::addLTOOptimizationPasses(legacy::PassManagerBase &PM) {

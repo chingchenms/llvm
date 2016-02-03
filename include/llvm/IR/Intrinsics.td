@@ -599,6 +599,7 @@ def int_donothing : Intrinsic<[], [], [IntrNoMem]>;
 
 // Coroutine support intrinsics
 def int_coro_init : Intrinsic<[llvm_ptr_ty], [llvm_ptr_ty], []>;
+def int_coro_init2 : Intrinsic<[llvm_ptr_ty], [llvm_ptr_ty], []>;
 def int_coro_suspend : Intrinsic<[llvm_i1_ty], 
   [llvm_ptr_ty, llvm_ptr_ty, llvm_i32_ty], [IntrReadWriteArgMem, NoCapture<0>, NoCapture<1>]>;
 def int_coro_param : Intrinsic<[], 
