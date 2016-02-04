@@ -793,6 +793,7 @@ struct CoroPreSplit : public FunctionPass, CoroutineCommon {
           I.setOperand(0, ConstantPointerNull::get(bytePtrTy));
   }
 
+  // This needs to be done presplit, not here
   void RemoveLifetimeIntrinsics(Function& F) {
     bool changed = false;
     for (auto it = inst_begin(F), end = inst_end(F); it != end;) {
@@ -812,7 +813,14 @@ struct CoroPreSplit : public FunctionPass, CoroutineCommon {
     if (changed)
       simplifyAndConstantFoldTerminators(F);
   }
+#if 0
+  bool splitSuspends(Function& F) {
+    for (auto it = inst_begin(F), e = inst_end(F); it != e;) {
+      Instruction &I = *it++;
 
+    }
+  }
+#endif
   bool runOnCoroutine(Function& F) {
     // TODO: try alias analysis
     //RemoveNoOptAttribute(F);
@@ -877,6 +885,40 @@ struct CoroPreSplit : public FunctionPass, CoroutineCommon {
     return false;
   }
 
+  // Given:
+  //   %8 = call i1 @llvm.coro.suspend(i8* %7,
+  //      i8* bitcast (void (i8*, i8*)*
+  //      @"\01??$_Ramp@Ususpend_always@std@@Upromise_type@coro@@@@YAXPEAX0@Z"
+  //      to i8*), i32 1)
+  // replace it with
+  // %coro.save.1 = call void* @llvm.coro.save(i32 1);
+  // call @"\01??$_Ramp@Ususpend_always@std@@Upromise_type@coro@@@@YAXPEAX0@Z"(%7, coro_frame)
+  // %8 = call i1 @llvm.coro.suspen2(%coro.save.1)
+  void replaceCoroSuspend(IntrinsicInst& II) {
+    auto CoroSave = Intrinsic::getDeclaration(M, Intrinsic::coro_save2);
+    auto Save = CallInst::Create(CoroSave, { II.getArgOperand(2) }, "save", &II);
+
+    auto CoroFrame = Intrinsic::getDeclaration(M, Intrinsic::coro_frame);
+    auto Frame = CallInst::Create(CoroFrame, {}, "", &II);
+
+    Value *op = II.getArgOperand(1);
+    while (const ConstantExpr *CE = dyn_cast<ConstantExpr>(op)) {
+      if (!CE->isCast())
+        break;
+      // Look through the bitcast
+      op = cast<ConstantExpr>(op)->getOperand(0);
+    }
+    Function* fn = cast<Function>(op);
+    assert(fn->getType() == awaitSuspendFnPtrTy && "unexpected await_suspend fn type");
+
+    CallInst::Create(fn, { II.getArgOperand(0), Frame }, "", &II);
+
+    auto CoroSuspend = Intrinsic::getDeclaration(M, Intrinsic::coro_suspend2);
+    auto Suspend = CallInst::Create(CoroSuspend, { Save }, "", &II);
+    II.replaceAllUsesWith(Suspend);
+    II.eraseFromParent();
+  }
+
   bool replaceCoroPromise(Function& F) {
     bool changed = false;
     for (auto it = inst_begin(F), end = inst_end(F); it != end;) {
@@ -893,6 +935,9 @@ struct CoroPreSplit : public FunctionPass, CoroutineCommon {
           ReplaceCoroPromise(intrin, /*From=*/true);
           changed = true;
           break;
+        case Intrinsic::coro_suspend:
+          replaceCoroSuspend(*intrin);
+          changed = true;
         }
       }
     }
@@ -902,8 +947,8 @@ struct CoroPreSplit : public FunctionPass, CoroutineCommon {
   bool runOnFunction(Function& F) override {
     bool changed = false;
 
-    if (isCoroutine(F))
-      changed |= runOnCoroutine(F);
+    //if (isCoroutine(F))
+    //  changed |= runOnCoroutine(F);
     changed |= replaceCoroPromise(F);
 
     return changed;

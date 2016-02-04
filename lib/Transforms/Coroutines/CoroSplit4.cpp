@@ -45,14 +45,19 @@ struct CoroSplit4 : CoroutineCommon {
   struct SuspendPoint {
     IntrinsicInst* SuspendInst;
     BranchInst* SuspendBr;
+    IntrinsicInst* SaveInst;
 
     SuspendPoint(Instruction &I) : SuspendInst(dyn_cast<IntrinsicInst>(&I)) {
       if (!SuspendInst)
         return;
-      if (SuspendInst->getIntrinsicID() != Intrinsic::coro_suspend) {
+      if (SuspendInst->getIntrinsicID() != Intrinsic::coro_suspend2) {
         SuspendInst = nullptr;
         return;
       }
+      SaveInst = cast<IntrinsicInst>(SuspendInst->getArgOperand(0));
+      assert(SaveInst->getIntrinsicID() == Intrinsic::coro_save2);
+
+
       SuspendBr = dyn_cast<BranchInst>(SuspendInst->getNextNode());
       if (!SuspendBr)
         return;
@@ -133,7 +138,7 @@ struct CoroSplit4 : CoroutineCommon {
     }
 
     ConstantInt *getIndex() const {
-      return cast<ConstantInt>(SuspendInst->getOperand(2));
+      return cast<ConstantInt>(SaveInst->getOperand(0));
     }
 
     bool isFinalSuspend() const { return getIndex()->isZero(); }
@@ -553,8 +558,25 @@ struct CoroSplit4 : CoroutineCommon {
     runOnCoroutine(*ThisFunction);
   }
 
+  void removeLifetimeIntrinsics(Function& F) {
+    for (auto it = inst_begin(F), end = inst_end(F); it != end;) {
+      Instruction &I = *it++;
+      if (auto II = dyn_cast<IntrinsicInst>(&I))
+        switch (II->getIntrinsicID()) {
+        default:
+          continue;
+        case Intrinsic::lifetime_start:
+        case Intrinsic::lifetime_end:
+          II->eraseFromParent();
+          break;
+        }
+    }
+  }
+
   bool runOnCoroutine(Function& F) {
     DEBUG(dbgs() << "CoroSplit function: " << F.getName() << "\n");
+
+    removeLifetimeIntrinsics(F);
 
     SuspendInfo Suspends;
     CoroutineInfo CoroInfo;
@@ -674,10 +696,11 @@ struct CoroSplit4 : CoroutineCommon {
       SP.SuspendBr->eraseFromParent();
       auto gep = GetElementPtrInst::Create(CD->FrameTy, CD->Ramp.Frame,
                                            {zeroConstant, twoConstant}, "",
-                                           SP.SuspendInst);
-      new StoreInst(SP.getIndex(), gep, SP.SuspendInst);
-      CallAwaitSuspend(SP.SuspendInst, CD->Ramp.Frame);
+                                           SP.SaveInst);
+      new StoreInst(SP.getIndex(), gep, SP.SaveInst);
       SP.SuspendInst->eraseFromParent();
+      SP.SaveInst->eraseFromParent();
+      //CallAwaitSuspend(SP.SuspendInst, CD->Ramp.Frame);
     }
   }
 

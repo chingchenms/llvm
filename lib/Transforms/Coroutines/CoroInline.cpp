@@ -385,7 +385,7 @@ namespace {
       CurrentCG = &CG;
       Module& M = CG.getModule();
       CoroutineCommon::PerModuleInit(M);
-      auto CoroSuspend = Intrinsic::getDeclaration(&M, Intrinsic::coro_suspend);
+      auto CoroSuspend = Intrinsic::getDeclaration(&M, Intrinsic::coro_suspend2);
       auto CoroInit = Intrinsic::getDeclaration(&M, Intrinsic::coro_init);
       HasCoroInit = !CoroInit->user_empty();
       for (User* U : CoroSuspend->users())

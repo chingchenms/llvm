@@ -380,6 +380,7 @@ void llvm::initializeCoroutines(PassRegistry &registry) {
   initializeCoroHeapElide2Pass(registry);
   initializeCoroCleanupPass(registry);
   initializeCoroPassManagerPass(registry);
+  initializeCoroInlinePass(registry);
 }
 
 llvm::CoroutineCommon::SuspendPoint::SuspendPoint(BasicBlock * B)
