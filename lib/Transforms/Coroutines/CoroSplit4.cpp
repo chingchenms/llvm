@@ -623,6 +623,18 @@ struct CoroSplit4 : CoroutineCommon {
     return true;
   }
 
+  void replaceDelete(coro::CoroutineData::SubInfo& S, IntrinsicInst* CoroDelete) {
+    if (!CoroDelete)
+      return;
+
+    assert(CoroDelete->hasOneUse());
+    auto User = cast<ICmpInst>(CoroDelete->user_back());
+    User->replaceAllUsesWith(ConstantInt::getFalse(M->getContext()));
+    User->eraseFromParent();
+    CoroDelete->eraseFromParent();
+    simplifyAndConstantFoldTerminators(*S.Func);
+  }
+
   void PrepareForHeapElision()
   {
     IntrinsicInst* DeleteInResume = FindIntrinsic(*CD->Resume.Func, Intrinsic::coro_delete);
@@ -632,22 +644,23 @@ struct CoroSplit4 : CoroutineCommon {
     // if we found delete in Resume or Ramp, the coroutine is not eligible
     // for heap elision, so we don't have to create a .cleanup function
 
-    if (DeleteInResume || DeleteInRamp)
-      return;
+    if (!DeleteInResume && !DeleteInRamp) {
+      // clone the Destroy function and eliminate the delete block
+      ValueToValueMapTy VMap;
+      VMap[CD->Destroy.Frame] = CD->Cleanup.Frame;
+      SmallVector<ReturnInst*, 4> Returns;
+      CloneFunctionInto(CD->Cleanup.Func, CD->Destroy.Func, VMap, false, Returns);
 
-    // otherwise, clone the Destroy function and eliminate the delete block
-    ValueToValueMapTy VMap;
-    VMap[CD->Destroy.Frame] = CD->Cleanup.Frame;
-    SmallVector<ReturnInst*, 4> Returns;
-    CloneFunctionInto(CD->Cleanup.Func, CD->Destroy.Func, VMap, false, Returns);
+      IntrinsicInst* CoroDelete = cast<IntrinsicInst>(VMap[DeleteInDestroy]);
+      CoroDelete->replaceAllUsesWith(ConstantPointerNull::get(bytePtrTy));
+      CoroDelete->eraseFromParent();
 
-    IntrinsicInst* CoroDelete = cast<IntrinsicInst>(VMap[DeleteInDestroy]);
+      simplifyAndConstantFoldTerminators(*CD->Cleanup.Func);
+    }
 
-// TODO: better way of removal of unneeded delete stuff
-    assert(CoroDelete->getNumUses() == 1 && "unexpected number of uses");
-    auto DeleteInstr = cast<Instruction>(CoroDelete->user_back());
-    DeleteInstr->eraseFromParent();
-    CoroDelete->eraseFromParent();
+    replaceDelete(CD->Resume, DeleteInResume);
+    replaceDelete(CD->Ramp, DeleteInRamp);
+    replaceDelete(CD->Destroy, DeleteInDestroy);
   }
 
   BasicBlock* createSwitch(StringRef Name, CoroutineInfo &Info, SuspendInfo &Suspends,
@@ -830,6 +843,12 @@ void llvm::coro::CoroutineData::SubInfo::Init(Function& F, Twine Suffix, Corouti
   Func->setCallingConv(CallingConv::Fast);
   Frame = &*Func->arg_begin();
   Frame->setName("frame.ptr" + Suffix);
+
+  // NotNull attribute
+  Argument* A = cast<Argument>(Frame);
+  AttrBuilder B;
+  B.addAttribute(Attribute::NonNull);
+  A->addAttr(AttributeSet::get(A->getContext(), A->getArgNo() + 1, B));
 }
 
 llvm::coro::CoroutineData::CoroutineData(Function& F) {
