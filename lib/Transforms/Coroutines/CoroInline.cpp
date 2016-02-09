@@ -348,6 +348,32 @@ namespace {
       return DevirtualizedCall;
     }
 
+    void addToCallGraph(Function *F) {
+      if (!F)
+        return;
+
+      CallGraph& CG = *CurrentCG;
+      CallGraphNode *Node = CG.getOrInsertFunction(F);
+
+      CG.getExternalCallingNode()->addCalledFunction(CallSite(), Node);
+
+      // Look for calls by this function.
+      for (Function::iterator BB = F->begin(), BBE = F->end(); BB != BBE; ++BB)
+        for (BasicBlock::iterator II = BB->begin(), IE = BB->end(); II != IE;
+      ++II) {
+        CallSite CS(cast<Value>(II));
+        if (CS) {
+          const Function *Callee = CS.getCalledFunction();
+          if (!Callee || !Intrinsic::isLeaf(Callee->getIntrinsicID()))
+            // Indirect calls of intrinsics are not allowed so no need to check.
+            // We can be more precise here by using TargetArg returned by
+            // Intrinsic::isLeaf.
+            Node->addCalledFunction(CS, CG.getCallsExternalNode());
+          else if (!Callee->isIntrinsic())
+            Node->addCalledFunction(CS, CG.getOrInsertFunction(Callee));
+        }
+      }
+    }
 
     InlineCostAnalysis *ICA;
     bool runOnSCC(CallGraphSCC &SCC) override {
@@ -364,8 +390,12 @@ namespace {
         if (F) {
           auto FI = std::find(Coroutines.begin(), Coroutines.end(), F);
           if (FI != Coroutines.end()) {
-            CoroData[FI - Coroutines.begin()].split(this);
+            auto& CD = CoroData[FI - Coroutines.begin()];
+            CD.split(this);
             RefreshCallGraph(SCC, *CurrentCG, false);
+            addToCallGraph(CD.Resume.Func);
+            addToCallGraph(CD.Cleanup.Func);
+            addToCallGraph(CD.Destroy.Func);
             changed = true;
           }
         }

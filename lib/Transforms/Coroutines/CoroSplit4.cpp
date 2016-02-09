@@ -704,6 +704,12 @@ struct CoroSplit4 : CoroutineCommon {
   }
 
   void replaceSuspends(CoroutineInfo &Info, SuspendInfo const &Suspends) {
+    if (Suspends.SuspendPoints.size() == 1) {
+      // if we have only one suspend point, move
+      // the save instruction to the init part
+      auto SI = Suspends.SuspendPoints.front().SaveInst;
+      SI->moveBefore(Info.CoroInit->getNextNode());
+    }
     for (auto SP : Suspends.SuspendPoints) {
       BranchInst::Create(Info.ReturnBlock, SP.SuspendBr);
       SP.SuspendBr->eraseFromParent();
@@ -843,6 +849,10 @@ void llvm::coro::CoroutineData::SubInfo::Init(Function& F, Twine Suffix, Corouti
   Func->setCallingConv(CallingConv::Fast);
   Frame = &*Func->arg_begin();
   Frame->setName("frame.ptr" + Suffix);
+
+  // start with unreachable body
+  auto BB = BasicBlock::Create(F.getContext(), "entry", Func);
+  new UnreachableInst(F.getContext(), BB);
 
   // NotNull attribute
   Argument* A = cast<Argument>(Frame);
