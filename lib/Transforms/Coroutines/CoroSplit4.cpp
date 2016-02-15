@@ -651,6 +651,9 @@ struct CoroSplit4 : CoroutineCommon {
       SmallVector<ReturnInst*, 4> Returns;
       CloneFunctionInto(CD->Cleanup.Func, CD->Destroy.Func, VMap, false, Returns);
 
+      // remove dummy entry block
+      CD->Cleanup.Func->begin()->eraseFromParent();
+
       IntrinsicInst* CoroDelete = cast<IntrinsicInst>(VMap[DeleteInDestroy]);
       CoroDelete->replaceAllUsesWith(ConstantPointerNull::get(bytePtrTy));
       CoroDelete->eraseFromParent();
