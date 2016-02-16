@@ -658,7 +658,7 @@ struct CoroSplit3 : public ModulePass, CoroutineCommon {
     Function* fn = cast<Function>(op);
     assert(fn->getType() == awaitSuspendFnPtrTy && "unexpected await_suspend fn type");
 
-    auto call = CallInst::Create(fn, { I->getArgOperand(0), vFrame }, "", I);
+    CallInst::Create(fn, { I->getArgOperand(0), vFrame }, "", I);
   }
 
   void replaceSuspends(CoroutineInfo &Info, SuspendInfo const &Suspends) {

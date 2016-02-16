@@ -81,6 +81,7 @@ namespace {
     }
 
     bool tryCoroElide(CallGraphSCC &SCC) {
+      bool changed = false;
       for (CallGraphNode *Node : SCC) {
         Function *F = Node->getFunction();
         if (F) {
@@ -118,8 +119,10 @@ namespace {
           FPM.doFinalization();
           inlineResumeCleanup(*F);
           RefreshCallGraph(SCC, *CurrentCG, false);
+          changed = true;
         }
       }
+      return changed;
     }
 
 #if 0
