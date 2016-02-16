@@ -299,6 +299,7 @@ struct CoroSplit4 : CoroutineCommon {
     SmallVector<AllocaInst*, 4> ResumeAllocas;
     SmallVector<AllocaInst*, 8> SharedAllocas;
     SmallPtrSet<BasicBlock*, 16> PostStartBlocks;
+    SmallPtrSet<BasicBlock*, 16> StartBlocks;
     BasicBlock* ReturnBlock;
     IntrinsicInst* CoroInit;
     IntrinsicInst* CoroDone;
@@ -323,6 +324,26 @@ struct CoroSplit4 : CoroutineCommon {
       llvm_unreachable("did not find @llvm.coro.done marking the return block");
     }
 
+    void ComputeAllSuccessorsButDontFollowSuspendBlocks(
+      BasicBlock *B, SuspendInfo &Info, SmallPtrSetImpl<BasicBlock *> &result) {
+      SmallSetVector<BasicBlock *, 16> workList;
+
+      workList.insert(B);
+      while (!workList.empty()) {
+        B = workList.pop_back_val();
+        result.insert(B);
+
+        // do not follow successors of suspend blocks
+        if (Info.isSuspendBlock(B))
+          continue;
+
+        for (BasicBlock *SI : successors(B))
+          if (result.count(SI) == 0)
+            workList.insert(SI);
+      }
+    }
+
+
     void analyzeFunction(Function &F, SuspendInfo &Info) {
       ReturnBlock = findReturnBlock(F);
       CoroInit = FindIntrinsic(F, Intrinsic::coro_init);
@@ -332,6 +353,9 @@ struct CoroSplit4 : CoroutineCommon {
       ResumeAllocas.clear();
       SharedAllocas.clear();
       PostStartBlocks.clear();
+      StartBlocks.clear();
+      ComputeAllSuccessorsButDontFollowSuspendBlocks(&*F.begin(), Info, StartBlocks);
+
       Unreachable = BasicBlock::Create(F.getContext(), "unreach", &F);
       new UnreachableInst(F.getContext(), Unreachable);
 
@@ -358,7 +382,9 @@ struct CoroSplit4 : CoroutineCommon {
           for (User* U : AI->users()) {
             Instruction *UI = cast<Instruction>(U);
             bool inResume = PostStartBlocks.count(UI->getParent());
-            seenInStart |= !inResume;
+            bool inStart = StartBlocks.count(UI->getParent());
+            //            seenInStart |= !inResume; // bug here
+            seenInStart |= inStart; // bug here
             seenInResume |= inResume;
           }
           if (seenInResume)
