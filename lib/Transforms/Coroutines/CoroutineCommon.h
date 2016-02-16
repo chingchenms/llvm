@@ -81,8 +81,8 @@ struct LLVM_LIBRARY_VISIBILITY CoroutineCommon {
   void ReplaceCoroPromise(IntrinsicInst *intrin, bool from = false);
 
   struct BranchSuccessors {
-    BasicBlock *IfTrue;
     BasicBlock *IfFalse;
+    BasicBlock *IfTrue;
 
     BranchSuccessors() : IfFalse(), IfTrue() {}
     BranchSuccessors(IntrinsicInst *I);
@@ -93,7 +93,7 @@ struct LLVM_LIBRARY_VISIBILITY CoroutineCommon {
 
   struct SuspendPoint : BranchSuccessors {
     IntrinsicInst *SuspendInst;
-    SuspendPoint() : SuspendInst(), BranchSuccessors() {}
+    SuspendPoint() : BranchSuccessors(), SuspendInst() {}
     SuspendPoint(IntrinsicInst *I) : BranchSuccessors(I), SuspendInst(I) {}
     SuspendPoint(BasicBlock *B);
 

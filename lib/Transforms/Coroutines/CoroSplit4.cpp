@@ -906,9 +906,8 @@ llvm::coro::CoroutineData::CoroutineData(Function& F) {
   Cleanup.Init(F, ".cleanup", *this);
 }
 
-void llvm::coro::CoroutineData::split(CoroutineCommon* CC) {
+void llvm::coro::CoroutineData::split(CoroutineCommon*) {
   CoroSplit4 pass;
   pass.PerModuleInit(*Ramp.Func->getParent());
   pass.runOn(*this);
-  CC;
 }
