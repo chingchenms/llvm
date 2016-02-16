@@ -33,8 +33,6 @@ using namespace llvm;
 
 #define DEBUG_TYPE "coro-elide2"
 
-STATISTIC(CoroHeapElide2Counter, "Number of heap elision performed");
-
 namespace {
 #if 0
   struct CoroHeapElide2 : public Inliner, CoroutineCommon {
