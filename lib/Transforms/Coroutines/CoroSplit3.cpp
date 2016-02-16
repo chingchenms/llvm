@@ -797,7 +797,6 @@ struct CoroSplit3 : public ModulePass, CoroutineCommon {
 }
 
 char CoroSplit3::ID = 0;
-namespace llvm {
 INITIALIZE_PASS_BEGIN(
     CoroSplit3, "coro-split3",
     "Split coroutine into ramp/resume/destroy/cleanup functions v3", false,
@@ -812,5 +811,6 @@ INITIALIZE_PASS_END(
     "Split coroutine into ramp/resume/destroy/cleanup functions v3", false,
     false)
 
-Pass *createCoroSplit3() { return new CoroSplit3(); }
+namespace llvm {
+  Pass *createCoroSplit3() { return new CoroSplit3(); }
 }
