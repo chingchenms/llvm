@@ -245,11 +245,10 @@ INITIALIZE_PASS(CoroEarly2, "coro-early2",
   // pass incubator
 
 namespace {
-#if 0
-  struct CoroModuleEarly : public CallGraphSCCPass {
+  struct CoroModuleEarly : public ModulePass {
     static char ID; // Pass identification, replacement for typeid
     StringRef name;
-    CoroModuleEarly() : CallGraphSCCPass(ID), name("CoroModuleEarly") {}
+    CoroModuleEarly() : ModulePass(ID), name("CoroModuleEarly") {}
     Module* M;
 
     bool doInitialization(Module&) override {
@@ -262,122 +261,10 @@ namespace {
       return false;
     }
 
-    void processCoroutine(Function& F, CallGraph& CG) {
-      // walk CG up until we hit
-    }
-
-    bool doInitialization(CallGraph &CG) override {
-      CallGraphSCCPass::doInitialization(CG);
-      M = &CG.getModule();
-
-      for (auto& F : *M)
-        if (F.hasFnAttribute(Attribute::Coroutine))
-          processCoroutine(F, CG);
-
+    bool runOnModule(Module&) override {
       return false;
-    }
-
-    bool runOnSCC(CallGraphSCC &SCC) override {
-      return false;
-    }
-
-    // We don't modify the program, so we preserve all analyses.
-    void getAnalysisUsage(AnalysisUsage &AU) const override {
-      AU.setPreservesAll();
     }
   };
-#else
-  class CoroModuleEarly : public Inliner, CoroutineCommon {
-    InlineCostAnalysis *ICA;
-
-  public:
-    // Use extremely low threshold.
-    CoroModuleEarly() : Inliner(ID, -2000000000, /*InsertLifetime*/ true),
-      ICA(nullptr) {
-      initializeAlwaysInlinerPass(*PassRegistry::getPassRegistry());
-    }
-
-    static char ID; // Pass identification, replacement for typeid
-
-    InlineCost getInlineCost(CallSite CS) override;
-
-    void getAnalysisUsage(AnalysisUsage &AU) const override;
-    bool runOnSCC(CallGraphSCC &SCC) override;
-
-    SmallVector<Function*, 4> Coroutines;
-    SmallPtrSet<Function*, 16> CalledFromCoroutineInitBlock;
-    SmallPtrSet<Function*, 8> MustInline;
-
-    using llvm::Pass::doFinalization;
-    bool doInitialization(CallGraph &CG) override {
-      CalledFromCoroutineInitBlock.clear();
-      Coroutines.clear();
-      MustInline.clear();
-      for (auto& F : CG.getModule()) {
-        if (F.hasFnAttribute(Attribute::Coroutine)) {
-          Coroutines.push_back(&F);
-          Instruction* II = FindIntrinsic(F, Intrinsic::coro_init);
-          assert(II->getParent() == &F.getEntryBlock() && "@llvm.coro.init is not in the entry block");
-          for (auto it = ++BasicBlock::iterator(II),
-            end = F.getEntryBlock().end();
-            it != end; ++it) {
-            CallSite CS(&*it);
-            if (!CS.isCall())
-              continue;
-
-            Function *Callee = CS.getCalledFunction();
-
-            if (!Callee || Callee->isDeclaration())
-              continue;
-
-            CalledFromCoroutineInitBlock.insert(Callee);
-          }
-        }
-        else if (F.isIntrinsic()) {
-          auto ID = F.getIntrinsicID();
-          if (ID == Intrinsic::coro_resume || ID == Intrinsic::coro_destroy) {
-            if (F.use_empty())
-              continue;
-
-            for (User *U : F.users())
-              if (auto I = dyn_cast<Instruction>(U))
-                MustInline.insert(I->getParent()->getParent());
-          }
-        }
-      }
-
-      SmallVector<Function *, 8> Worklist(CalledFromCoroutineInitBlock.begin(),
-                                          CalledFromCoroutineInitBlock.end());
-      while (!Worklist.empty()) {
-        auto F = Worklist.pop_back_val();
-        for (auto CR : *CG[F]) {
-          auto Callee = CR.second->getFunction();
-          if (!Callee || Callee->isDeclaration() ||
-            CalledFromCoroutineInitBlock.count(Callee) != 0)
-            continue;
-
-          CalledFromCoroutineInitBlock.insert(Callee);
-          Worklist.push_back(Callee);
-        }
-      }
-
-      Worklist.clear();
-      Worklist.append(MustInline.begin(), MustInline.end());
-      while (!Worklist.empty()) {
-        auto F = Worklist.pop_back_val();
-
-        for (User *U : F->users())
-          if (auto I = dyn_cast<Instruction>(U))
-            MustInline.insert(I->getParent()->getParent());
-      }
-
-      return false;
-    }
-    //bool doFinalization(CallGraph &CG) override {
-    //  return removeDeadFunctions(CG, /*AlwaysInlineOnly=*/ true);
-    //}
-  };
-#endif
 }
 char CoroModuleEarly::ID = 0;
 static RegisterPass<CoroModuleEarly> Y2("CoroModuleEarly", "CoroModuleEarly Pass");
@@ -391,40 +278,6 @@ INITIALIZE_PASS_DEPENDENCY(TargetLibraryInfoWrapperPass)
 INITIALIZE_PASS_END(CoroModuleEarly, "CoroModuleEarly", "CoroModuleEarly Pass",
                     false, false)
 
-
-// from_promise -- inline into coroutine
-// resume / destroy-- inline into functions that call coroutines
-// if function has from_promise in it inline it into a parent
-
-
-InlineCost CoroModuleEarly::getInlineCost(CallSite CS) {
-  Function *Callee = CS.getCalledFunction();
-
-  // Only inline direct calls to functions that are viable for inlining.
-  // FIXME: We shouldn't even get here for declarations.
-  if (!Callee || Callee->isDeclaration() || 
-    !ICA->isInlineViable(*Callee) ||
-    CS.hasFnAttr(Attribute::Coroutine))
-    return InlineCost::getNever();
-
-  if (CalledFromCoroutineInitBlock.count(Callee) != 0)
-    return InlineCost::getAlways();
-
-  if (MustInline.count(Callee) != 0)
-    return InlineCost::getAlways();
-
-  return InlineCost::getNever();
-}
-
-bool CoroModuleEarly::runOnSCC(CallGraphSCC &SCC) {
-  ICA = &getAnalysis<InlineCostAnalysis>();
-  return Inliner::runOnSCC(SCC);
-}
-
-void CoroModuleEarly::getAnalysisUsage(AnalysisUsage &AU) const {
-  AU.addRequired<InlineCostAnalysis>();
-  Inliner::getAnalysisUsage(AU);
-}
 
 namespace {
   struct CoroScalarLate : public FunctionPass {
@@ -519,8 +372,8 @@ Pass *llvm::createCoroEarlyPass() {
 } // must be a function pass
 
 Pass *llvm::createCoroModuleEarlyPass() {
-    return createCoroSplitPass();
-  //return new CoroModuleEarly();
+  //  return createCoroSplitPass();
+  return new CoroModuleEarly();
 }
 Pass *llvm::createCoroScalarLatePass() {
   //  return createPrintModulePass(outs());

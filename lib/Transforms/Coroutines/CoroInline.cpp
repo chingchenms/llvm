@@ -49,17 +49,16 @@ namespace {
     void AddCoroutine(CallGraph& CG, Function& F) {
       if (Coroutines.insert(&F)) {
         CoroData.emplace_back(F);
-        CG.getOrInsertFunction(CoroData.back().Resume.Func);
-        CG.getOrInsertFunction(CoroData.back().Cleanup.Func);
-        CG.getOrInsertFunction(CoroData.back().Destroy.Func);
+        auto rf = CG.getOrInsertFunction(CoroData.back().Resume.Func);
+        CG.getExternalCallingNode()->addCalledFunction(CallSite(), rf);
+        auto cf = CG.getOrInsertFunction(CoroData.back().Cleanup.Func);
+        CG.getExternalCallingNode()->addCalledFunction(CallSite(), cf);
+        auto df = CG.getOrInsertFunction(CoroData.back().Destroy.Func);
+        CG.getExternalCallingNode()->addCalledFunction(CallSite(), df);
       }
     }
 
     bool HasCoroInit;
-
-    //void getAnalysisUsage(AnalysisUsage &AU) const override {
-    //  Inliner->getAnalysisUsage(AU);
-    //}
 
     void inlineResumeCleanup(Function& F) {
       SmallVector<CallSite, 8> CoroCalls;
@@ -124,19 +123,6 @@ namespace {
       }
       return changed;
     }
-
-#if 0
-    void splitCoroutine(Function& F) {
-      xxx
-      //legacy::FunctionPassManager FPM(F.getParent());
-      ////FPM.add(new DominatorTreeWrapperPass());
-      //FPM.add(createSROAPass());
-      ////FPM.add(createCoroSplit3());
-      //FPM.doInitialization();
-      //FPM.run(F);
-      //FPM.doFinalization();
-    }
-#endif
 
     /// Scan the functions in the specified CFG and resync the
     /// callgraph with the call sites found in it.  This is used after
@@ -358,8 +344,6 @@ namespace {
       CallGraph& CG = *CurrentCG;
       CallGraphNode *Node = CG.getOrInsertFunction(F);
 
-      CG.getExternalCallingNode()->addCalledFunction(CallSite(), Node);
-
       // Look for calls by this function.
       for (Function::iterator BB = F->begin(), BBE = F->end(); BB != BBE; ++BB)
         for (BasicBlock::iterator II = BB->begin(), IE = BB->end(); II != IE;
@@ -402,11 +386,6 @@ namespace {
             changed = true;
           }
         }
-        //if (F && Coroutines.count(F)) {
-        //  splitCoroutine(*F);
-        //  changed = true;
-        //}
-        //DEBUG(dbgs() << " " << (F ? F->getName() : "INDIRECTNODE"));
       }
 
       return changed; // Inliner->runOnSCC(SCC);

@@ -219,6 +219,7 @@ void PassManagerBuilder::populateModulePassManager(
 
   if (!DisableUnitAtATime) {
     addExtensionsToPM(EP_ModuleOptimizerEarly, MPM);
+    MPM.add(createCoroModuleEarlyPass());
 
     MPM.add(createIPSCCPPass());              // IP SCCP
     MPM.add(createGlobalOptimizerPass());     // Optimize out global vars
