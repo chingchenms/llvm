@@ -444,20 +444,22 @@ struct CoroSplit4 : CoroutineCommon {
   void createFrameStruct(SmallVectorImpl<AllocaInst *>& SharedAllocas) {
     SmallVector<Type *, 8> typeArray;
 
+    const DataLayout &DL = M->getDataLayout();
+
     typeArray.clear();
     typeArray.push_back(CD->ResumeFnPtrTy); // 0 res-type
     typeArray.push_back(CD->ResumeFnPtrTy); // 1 dtor-type
     typeArray.push_back(int32Ty);       // 2 index
+#if 0
     typeArray.push_back(int32Ty);       // 3 padding // TODO: make it conditional on arch?
+#endif
+    // TODO: optimize storage layout
 
     for (AllocaInst *AI : SharedAllocas) {
       typeArray.push_back(AI->getType()->getElementType());
     }
     CD->FrameTy->setBody(typeArray);
 
-    // TODO: when we optimize storage layout, keep coro_size as intrinsic
-    // for later passes to plug in the right amount
-    const DataLayout &DL = M->getDataLayout();
     APInt size(32, DL.getTypeAllocSize(CD->FrameTy));
     ReplaceIntrinsicWith(*ThisFunction, Intrinsic::coro_size, ConstantInt::get(int32Ty, size));
   }
@@ -466,7 +468,7 @@ struct CoroSplit4 : CoroutineCommon {
 
   // replace all uses of allocas with gep from frame struct
   void ReplaceSharedUses(CoroutineInfo const& Info) {
-    enum { kStartingField = 3 };
+    enum { kStartingField = 2 };
     APInt fieldNo(32, kStartingField); // Fields start with after 2
 
     for (AllocaInst *AI : Info.SharedAllocas) {

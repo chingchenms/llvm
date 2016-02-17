@@ -113,9 +113,11 @@ void CoroutineCommon::ReplaceCoroPromise(IntrinsicInst *intrin, bool from) {
 
   // TODO: move into Coroutine Common
   auto SampleStruct = StructType::create({ anyResumeFnPtrTy, anyResumeFnPtrTy,
-    int32Ty, int32Ty, PromiseType }, "");
+    int32Ty, 
+    //int32Ty, 
+    PromiseType }, "");
   const DataLayout &DL = M->getDataLayout();
-  const auto Offset = DL.getStructLayout(SampleStruct)->getElementOffset(4);
+  const auto Offset = DL.getStructLayout(SampleStruct)->getElementOffset(3);
 
   Value* Replacement = nullptr;
 
