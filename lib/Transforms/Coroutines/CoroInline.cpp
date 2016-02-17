@@ -71,7 +71,7 @@ namespace {
               CoroCalls.push_back(CS);
 
       for (auto& CS : CoroCalls) {
-        // TODO: check inlining cost
+        // TODO: get proper inline threshold Inliner::getInlineThreshold(CS))
         if (ICA->getInlineCost(CS, 100)) {
           InlineFunctionInfo IFI;
           InlineFunction(CS, IFI);
@@ -91,19 +91,22 @@ namespace {
 
           legacy::FunctionPassManager FPM(F->getParent());
           FPM.add(createSROAPass());
+          FPM.add(createInstructionCombiningPass());  // Combine silly seq's
           FPM.add(createCoroHeapElidePass());
-#if 1
+
           FPM.add(createSROAPass());
+          FPM.add(createEarlyCSEPass());              // Catch trivial redundancies
+#if 0
           FPM.add(createEarlyCSEPass());              // Catch trivial redundancies
           FPM.add(createJumpThreadingPass());         // Thread jumps.
           FPM.add(createCorrelatedValuePropagationPass()); // Propagate conditionals
           FPM.add(createCFGSimplificationPass());     // Merge & remove BBs
           FPM.add(createInstructionCombiningPass());  // Combine silly seq's
-          FPM.add(createTailCallEliminationPass()); // Eliminate tail calls
-          FPM.add(createCFGSimplificationPass());     // Merge & remove BBs
-          FPM.add(createReassociatePass());           // Reassociate expressions
+          //FPM.add(createTailCallEliminationPass()); // Eliminate tail calls
+          //FPM.add(createCFGSimplificationPass());     // Merge & remove BBs
+          //FPM.add(createReassociatePass());           // Reassociate expressions
                                                       // Rotate Loop - disable header duplication at -Oz
-          FPM.add(createLoopRotatePass());
+          //FPM.add(createLoopRotatePass());
 
           //FPM.add(createSROAPass());
           //FPM.add(createEarlyCSEPass());
