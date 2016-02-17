@@ -94,9 +94,9 @@ namespace {
           FPM.add(createInstructionCombiningPass());  // Combine silly seq's
           FPM.add(createCoroHeapElidePass());
 
-          FPM.add(createSROAPass());
-          FPM.add(createEarlyCSEPass());              // Catch trivial redundancies
-#if 0
+     //     FPM.add(createSROAPass());
+     //     FPM.add(createEarlyCSEPass());              // Catch trivial redundancies
+#if 1
           FPM.add(createEarlyCSEPass());              // Catch trivial redundancies
           FPM.add(createJumpThreadingPass());         // Thread jumps.
           FPM.add(createCorrelatedValuePropagationPass()); // Propagate conditionals
