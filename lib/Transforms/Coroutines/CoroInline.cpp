@@ -94,19 +94,17 @@ namespace {
           FPM.add(createInstructionCombiningPass());  // Combine silly seq's
           FPM.add(createCoroHeapElidePass());
 
-     //     FPM.add(createSROAPass());
-     //     FPM.add(createEarlyCSEPass());              // Catch trivial redundancies
 #if 1
           FPM.add(createEarlyCSEPass());              // Catch trivial redundancies
           FPM.add(createJumpThreadingPass());         // Thread jumps.
           FPM.add(createCorrelatedValuePropagationPass()); // Propagate conditionals
           FPM.add(createCFGSimplificationPass());     // Merge & remove BBs
           FPM.add(createInstructionCombiningPass());  // Combine silly seq's
-          //FPM.add(createTailCallEliminationPass()); // Eliminate tail calls
-          //FPM.add(createCFGSimplificationPass());     // Merge & remove BBs
-          //FPM.add(createReassociatePass());           // Reassociate expressions
+          FPM.add(createTailCallEliminationPass()); // Eliminate tail calls
+          FPM.add(createCFGSimplificationPass());     // Merge & remove BBs
+          FPM.add(createReassociatePass());           // Reassociate expressions
                                                       // Rotate Loop - disable header duplication at -Oz
-          //FPM.add(createLoopRotatePass());
+          FPM.add(createLoopRotatePass());
 
           //FPM.add(createSROAPass());
           //FPM.add(createEarlyCSEPass());
