@@ -34,6 +34,7 @@
 #include "llvm/Transforms/IPO/InlinerPass.h"
 #include "llvm/Transforms/Utils/Cloning.h"
 #include "llvm/Transforms/Utils/Local.h"
+#include "llvm/Transforms/Utils/BasicBlockUtils.h"
 using namespace llvm;
 
 #define DEBUG_TYPE "coro-split4"
@@ -184,11 +185,24 @@ struct CoroSplit4 : CoroutineCommon {
 
   coro::CoroutineData* CD;
 
-  void processValue(Instruction *DefInst, DominatorTree &DT,
+  void processValue(IntrinsicInst* CoroInit, Value *DefInst, DominatorTree &DT,
                     SuspendInfo const &Info,
                     SmallVectorImpl<AllocaInst *> &SharedAllocas) {
 
-    BasicBlock* DefBlock = DefInst->getParent();
+    Instruction* AllocaInsertPt = ThisFunction->getEntryBlock().getTerminator();
+    Instruction* StoreInsertPt = nullptr;
+    BasicBlock* DefBlock = nullptr;
+    if (auto I = dyn_cast<Instruction>(DefInst)) {
+      DefBlock = I->getParent();
+      StoreInsertPt = I->getNextNode();
+      while (isa<PHINode>(StoreInsertPt))
+        StoreInsertPt = StoreInsertPt->getNextNode();
+    }
+    else {
+      StoreInsertPt = CoroInit->getNextNode();
+      // TODO: handle copy/dtor for parameter
+    }
+
     AllocaInst* Spill = nullptr;
 
     for (auto UI = DefInst->use_begin(), UE = DefInst->use_end(); UI != UE;) {
@@ -211,21 +225,11 @@ struct CoroSplit4 : CoroutineCommon {
       for (;;) {
         if (Info.isSuspendBlock(BB)) {
           Instruction* InsertPt = I;
-          // figure out whether we need a new block
+
+          // if it is used in a Phi instruction, split the edge
           if (PI) {
-            auto IB = PI->getIncomingBlock(U);
-            if (IB == BB) {
-              auto ResumeBlock =
-                BasicBlock::Create(M->getContext(), BB->getName() + ".resume",
-                  BB->getParent(), UseBlock);
-              InsertPt = BranchInst::Create(UseBlock, ResumeBlock);
-              auto SuspendTerminator = cast<BranchInst>(BB->getTerminator());
-              assert(SuspendTerminator->getNumSuccessors() == 2);
-              if (SuspendTerminator->getSuccessor(0) == UseBlock)
-                SuspendTerminator->setSuccessor(0, ResumeBlock);
-              else
-                SuspendTerminator->setSuccessor(1, ResumeBlock);
-            }
+            BasicBlock *NewBB = SplitEdge(PI->getIncomingBlock(U), UseBlock, &DT);
+            InsertPt = NewBB->getTerminator();
           }
 
           // we may be able to recreate instruction
@@ -243,11 +247,10 @@ struct CoroSplit4 : CoroutineCommon {
           // see if we already created a spill slot
           // otherwise, create a spill slot
           if (!Spill) {
-            Function* F = DefBlock->getParent();
             Spill = new AllocaInst(DefInst->getType(),
                                    DefInst->getName() + ".spill.alloca",
-                                   F->getEntryBlock().getTerminator());
-            new StoreInst(DefInst, Spill, DefInst->getNextNode());
+                                   AllocaInsertPt);
+            new StoreInst(DefInst, Spill, StoreInsertPt);
             SharedAllocas.push_back(Spill);
           }
 
@@ -259,12 +262,15 @@ struct CoroSplit4 : CoroutineCommon {
         }
         if (BB == DefBlock)
           break;
+        auto* Node = DT[BB]->getIDom();
+        if (Node == nullptr) // possible if DefInst is an Argument
+          break;
         BB = DT[BB]->getIDom()->getBlock();
       }
     }
   }
 
-  void insertSpills(Function &F, DominatorTree &DT, SuspendInfo const &Info,
+  void insertSpills(IntrinsicInst* CoroInit, Function &F, DominatorTree &DT, SuspendInfo const &Info,
                     SmallVectorImpl<AllocaInst *>& SharedAllocas) {
 
     SmallVector<Instruction*, 8> Values;
@@ -290,8 +296,11 @@ struct CoroSplit4 : CoroutineCommon {
       }
     }
 
-    for (auto Value : Values) {
-      processValue(Value, DT, Info, SharedAllocas);
+    for (auto Value: Values) {
+      processValue(CoroInit, Value, DT, Info, SharedAllocas);
+    }
+    for (auto& Arg : F.getArgumentList()) {
+      processValue(CoroInit, &Arg, DT, Info, SharedAllocas);
     }
   }
 
@@ -621,7 +630,7 @@ struct CoroSplit4 : CoroutineCommon {
 
     DominatorTree DT;
     DT.recalculate(F);
-    insertSpills(F, DT, Suspends, CoroInfo.SharedAllocas);
+    insertSpills(CoroInfo.CoroInit, F, DT, Suspends, CoroInfo.SharedAllocas);
 
     // move this into PrepareFrame func
     prepareFrame(CoroInfo);
