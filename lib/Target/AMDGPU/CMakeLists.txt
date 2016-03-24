@@ -10,14 +10,15 @@ tablegen(LLVM AMDGPUGenMCCodeEmitter.inc -gen-emitter)
 tablegen(LLVM AMDGPUGenDFAPacketizer.inc -gen-dfa-packetizer)
 tablegen(LLVM AMDGPUGenAsmWriter.inc -gen-asm-writer)
 tablegen(LLVM AMDGPUGenAsmMatcher.inc -gen-asm-matcher)
+tablegen(LLVM AMDGPUGenDisassemblerTables.inc -gen-disassembler)
 add_public_tablegen_target(AMDGPUCommonTableGen)
 
 add_llvm_target(AMDGPUCodeGen
   AMDILCFGStructurizer.cpp
   AMDGPUAlwaysInlinePass.cpp
   AMDGPUAnnotateKernelFeatures.cpp
+  AMDGPUAnnotateUniformValues.cpp
   AMDGPUAsmPrinter.cpp
-  AMDGPUDiagnosticInfoUnsupported.cpp
   AMDGPUFrameLowering.cpp
   AMDGPUTargetObjectFile.cpp
   AMDGPUIntrinsicInfo.cpp
@@ -50,6 +51,7 @@ add_llvm_target(AMDGPUCodeGen
   SIFixSGPRLiveRanges.cpp
   SIFoldOperands.cpp
   SIFrameLowering.cpp
+  SIInsertNopsPass.cpp
   SIInsertWaits.cpp
   SIInstrInfo.cpp
   SIISelLowering.cpp
@@ -57,13 +59,16 @@ add_llvm_target(AMDGPUCodeGen
   SILowerControlFlow.cpp
   SILowerI1Copies.cpp
   SIMachineFunctionInfo.cpp
+  SIMachineScheduler.cpp
   SIRegisterInfo.cpp
   SIShrinkInstructions.cpp
   SITypeRewriter.cpp
+  SIWholeQuadMode.cpp
   )
 
 add_subdirectory(AsmParser)
 add_subdirectory(InstPrinter)
+add_subdirectory(Disassembler)
 add_subdirectory(TargetInfo)
 add_subdirectory(MCTargetDesc)
 add_subdirectory(Utils)

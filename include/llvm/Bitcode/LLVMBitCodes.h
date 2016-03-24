@@ -48,7 +48,7 @@ enum BlockIDs {
   USELIST_BLOCK_ID,
 
   MODULE_STRTAB_BLOCK_ID,
-  FUNCTION_SUMMARY_BLOCK_ID,
+  GLOBALVAL_SUMMARY_BLOCK_ID,
 
   OPERAND_BUNDLE_TAGS_BLOCK_ID,
 
@@ -105,6 +105,9 @@ enum { BITCODE_CURRENT_EPOCH = 0 };
 
     // METADATA_VALUES: [numvals]
     MODULE_CODE_METADATA_VALUES = 15,
+
+    // SOURCE_FILENAME: [namechar x N]
+    MODULE_CODE_SOURCE_FILENAME = 16,
   };
 
   /// PARAMATTR blocks have code for defining a parameter attribute set.
@@ -172,8 +175,10 @@ enum { BITCODE_CURRENT_EPOCH = 0 };
     VST_CODE_ENTRY   = 1,   // VST_ENTRY: [valueid, namechar x N]
     VST_CODE_BBENTRY = 2,   // VST_BBENTRY: [bbid, namechar x N]
     VST_CODE_FNENTRY = 3,   // VST_FNENTRY: [valueid, offset, namechar x N]
-    // VST_COMBINED_FNENTRY: [offset, namechar x N]
-    VST_CODE_COMBINED_FNENTRY = 4
+    // VST_COMBINED_GVDEFENTRY: [valueid, sumoffset, guid]
+    VST_CODE_COMBINED_GVDEFENTRY = 4,
+    // VST_COMBINED_ENTRY: [valueid, refguid]
+    VST_CODE_COMBINED_ENTRY = 5
   };
 
   // The module path symbol table only has one code (MST_CODE_ENTRY).
@@ -181,11 +186,27 @@ enum { BITCODE_CURRENT_EPOCH = 0 };
     MST_CODE_ENTRY   = 1,  // MST_ENTRY: [modid, namechar x N]
   };
 
-  // The function summary section uses different codes in the per-module
+  // The summary section uses different codes in the per-module
   // and combined index cases.
-  enum FunctionSummarySymtabCodes {
-    FS_CODE_PERMODULE_ENTRY = 1,  // FS_ENTRY: [valueid, islocal, instcount]
-    FS_CODE_COMBINED_ENTRY  = 2,  // FS_ENTRY: [modid, instcount]
+  enum GlobalValueSummarySymtabCodes {
+    // PERMODULE: [valueid, linkage, instcount, numrefs, numrefs x valueid,
+    //             n x (valueid, callsitecount)]
+    FS_PERMODULE = 1,
+    // PERMODULE_PROFILE: [valueid, linkage, instcount, numrefs,
+    //                     numrefs x valueid,
+    //                     n x (valueid, callsitecount, profilecount)]
+    FS_PERMODULE_PROFILE = 2,
+    // PERMODULE_GLOBALVAR_INIT_REFS: [valueid, linkage, n x valueid]
+    FS_PERMODULE_GLOBALVAR_INIT_REFS = 3,
+    // COMBINED: [modid, linkage, instcount, numrefs, numrefs x valueid,
+    //            n x (valueid, callsitecount)]
+    FS_COMBINED = 4,
+    // COMBINED_PROFILE: [modid, linkage, instcount, numrefs,
+    //                    numrefs x valueid,
+    //                    n x (valueid, callsitecount, profilecount)]
+    FS_COMBINED_PROFILE = 5,
+    // COMBINED_GLOBALVAR_INIT_REFS: [modid, linkage, n x valueid]
+    FS_COMBINED_GLOBALVAR_INIT_REFS = 6,
   };
 
   enum MetadataCodes {
@@ -348,7 +369,8 @@ enum { BITCODE_CURRENT_EPOCH = 0 };
     CALL_CCONV = 1,
     CALL_MUSTTAIL = 14,
     CALL_EXPLICIT_TYPE = 15,
-    CALL_NOTAIL = 16
+    CALL_NOTAIL = 16,
+    CALL_FMF = 17  // Call has optional fast-math-flags.
   };
 
   // The function body block (FUNCTION_BLOCK_ID) describes function bodies.  It
@@ -421,11 +443,10 @@ enum { BITCODE_CURRENT_EPOCH = 0 };
     FUNC_CODE_INST_CLEANUPRET  = 48, // CLEANUPRET: [val] or [val,bb#]
     FUNC_CODE_INST_CATCHRET    = 49, // CATCHRET: [val,bb#]
     FUNC_CODE_INST_CATCHPAD  = 50, // CATCHPAD: [bb#,bb#,num,args...]
-    FUNC_CODE_INST_TERMINATEPAD = 51, // TERMINATEPAD: [bb#,num,args...]
-    FUNC_CODE_INST_CLEANUPPAD = 52, // CLEANUPPAD: [num,args...]
-    FUNC_CODE_INST_CATCHENDPAD = 53, // CATCHENDPAD: [] or [bb#]
-    FUNC_CODE_INST_CLEANUPENDPAD = 54, // CLEANUPENDPAD: [val] or [val,bb#]
-
+    FUNC_CODE_INST_CLEANUPPAD = 51, // CLEANUPPAD: [num,args...]
+    FUNC_CODE_INST_CATCHSWITCH = 52, // CATCHSWITCH: [num,args...] or [num,args...,bb]
+    // 53 is unused.
+    // 54 is unused.
     FUNC_CODE_OPERAND_BUNDLE = 55, // OPERAND_BUNDLE: [tag#, value...]
   };
 
@@ -484,7 +505,9 @@ enum { BITCODE_CURRENT_EPOCH = 0 };
     ATTR_KIND_SWIFT_SELF = 46,
     ATTR_KIND_SWIFT_ERROR = 47,
     ATTR_KIND_NO_RECURSE = 48,
-    ATTR_KIND_COROUTINE = 49
+    ATTR_KIND_INACCESSIBLEMEM_ONLY = 49,
+    ATTR_KIND_INACCESSIBLEMEM_OR_ARGMEMONLY = 50,
+    ATTR_KIND_COROUTINE = 51
   };
 
   enum ComdatSelectionKindCodes {

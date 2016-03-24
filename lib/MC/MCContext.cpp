@@ -12,6 +12,7 @@
 #include "llvm/ADT/Twine.h"
 #include "llvm/MC/MCAssembler.h"
 #include "llvm/MC/MCAsmInfo.h"
+#include "llvm/MC/MCCodeView.h"
 #include "llvm/MC/MCDwarf.h"
 #include "llvm/MC/MCLabel.h"
 #include "llvm/MC/MCObjectFileInfo.h"
@@ -43,11 +44,6 @@ MCContext::MCContext(const MCAsmInfo *mai, const MCRegisterInfo *mri,
       GenDwarfForAssembly(false), GenDwarfFileNumber(0), DwarfVersion(4),
       AllowTemporaryLabels(true), DwarfCompileUnitID(0),
       AutoReset(DoAutoReset), HadError(false) {
-
-  std::error_code EC = llvm::sys::fs::current_path(CompilationDir);
-  if (EC)
-    CompilationDir.clear();
-
   SecureLogFile = getenv("AS_SECURE_LOG_FILE");
   SecureLog = nullptr;
   SecureLogUsed = false;
@@ -63,9 +59,6 @@ MCContext::~MCContext() {
 
   // NOTE: The symbols are all allocated out of a bump pointer allocator,
   // we don't need to free them here.
-
-  // If the stream for the .secure_log_unique directive was created free it.
-  delete (raw_ostream *)SecureLog;
 }
 
 //===----------------------------------------------------------------------===//
@@ -92,6 +85,8 @@ void MCContext::reset() {
   DwarfDebugFlags = StringRef();
   DwarfCompileUnitID = 0;
   CurrentDwarfLoc = MCDwarfLoc(0, 0, 0, DWARF2_FLAG_IS_STMT, 0, 0);
+
+  CVContext.reset();
 
   MachOUniquingMap.clear();
   ELFUniquingMap.clear();
@@ -475,6 +470,20 @@ bool MCContext::isValidDwarfFileNumber(unsigned FileNumber, unsigned CUID) {
 void MCContext::finalizeDwarfSections(MCStreamer &MCOS) {
   SectionsForRanges.remove_if(
       [&](MCSection *Sec) { return !MCOS.mayHaveInstructions(*Sec); });
+}
+
+CodeViewContext &MCContext::getCVContext() {
+  if (!CVContext.get())
+    CVContext.reset(new CodeViewContext);
+  return *CVContext.get();
+}
+
+unsigned MCContext::getCVFile(StringRef FileName, unsigned FileNumber) {
+  return getCVContext().addFile(FileNumber, FileName) ? FileNumber : 0;
+}
+
+bool MCContext::isValidCVFileNumber(unsigned FileNumber) {
+  return getCVContext().isValidFileNumber(FileNumber);
 }
 
 //===----------------------------------------------------------------------===//

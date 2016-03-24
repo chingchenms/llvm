@@ -18,9 +18,9 @@
 #include "PPCISelLowering.h"
 #include "PPCInstrInfo.h"
 #include "llvm/ADT/Triple.h"
+#include "llvm/CodeGen/SelectionDAGTargetInfo.h"
 #include "llvm/IR/DataLayout.h"
 #include "llvm/MC/MCInstrItineraries.h"
-#include "llvm/Target/TargetSelectionDAGInfo.h"
 #include "llvm/Target/TargetSubtargetInfo.h"
 #include <string>
 
@@ -83,6 +83,7 @@ protected:
   bool Has64BitSupport;
   bool Use64BitRegs;
   bool UseCRBits;
+  bool UseSoftFloat;
   bool IsPPC64;
   bool HasAltivec;
   bool HasSPE;
@@ -91,6 +92,8 @@ protected:
   bool HasP8Vector;
   bool HasP8Altivec;
   bool HasP8Crypto;
+  bool HasP9Vector;
+  bool HasP9Altivec;
   bool HasFCPSGN;
   bool HasFSQRT;
   bool HasFRE, HasFRES, HasFRSQRTE, HasFRSQRTES;
@@ -120,6 +123,7 @@ protected:
   bool HasDirectMove;
   bool HasHTM;
   bool HasFusion;
+  bool HasFloat128;
 
   /// When targeting QPX running a stock PPC64 Linux kernel where the stack
   /// alignment has not been changed, we need to keep the 16-byte alignment
@@ -130,7 +134,7 @@ protected:
   PPCFrameLowering FrameLowering;
   PPCInstrInfo InstrInfo;
   PPCTargetLowering TLInfo;
-  TargetSelectionDAGInfo TSInfo;
+  SelectionDAGTargetInfo TSInfo;
 
 public:
   /// This constructor initializes the data members to match that
@@ -165,7 +169,7 @@ public:
   const PPCTargetLowering *getTargetLowering() const override {
     return &TLInfo;
   }
-  const TargetSelectionDAGInfo *getSelectionDAGInfo() const override {
+  const SelectionDAGTargetInfo *getSelectionDAGInfo() const override {
     return &TSInfo;
   }
   const PPCRegisterInfo *getRegisterInfo() const override {
@@ -189,6 +193,8 @@ public:
   /// has64BitSupport - Return true if the selected CPU supports 64-bit
   /// instructions, regardless of whether we are in 32-bit or 64-bit mode.
   bool has64BitSupport() const { return Has64BitSupport; }
+  // useSoftFloat - Return true if soft-float option is turned on.
+  bool useSoftFloat() const { return UseSoftFloat; }
 
   /// use64BitRegs - Return true if in 64-bit mode or if we should use 64-bit
   /// registers in 32-bit mode when possible.  This can only true if
@@ -226,6 +232,8 @@ public:
   bool hasP8Vector() const { return HasP8Vector; }
   bool hasP8Altivec() const { return HasP8Altivec; }
   bool hasP8Crypto() const { return HasP8Crypto; }
+  bool hasP9Vector() const { return HasP9Vector; }
+  bool hasP9Altivec() const { return HasP9Altivec; }
   bool hasMFOCRF() const { return HasMFOCRF; }
   bool hasISEL() const { return HasISEL; }
   bool hasPOPCNTD() const { return HasPOPCNTD; }
@@ -256,6 +264,7 @@ public:
   }
   bool hasHTM() const { return HasHTM; }
   bool hasFusion() const { return HasFusion; }
+  bool hasFloat128() const { return HasFloat128; }
 
   const Triple &getTargetTriple() const { return TargetTriple; }
 

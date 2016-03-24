@@ -377,7 +377,7 @@ public:
 
   /// \brief This performs the main chunk of the work of cloning the loops for
   /// the partitions.
-  void cloneLoops(Pass *P) {
+  void cloneLoops() {
     BasicBlock *OrigPH = L->getLoopPreheader();
     // At this point the predecessor of the preheader is either the memcheck
     // block or the top part of the original preheader.
@@ -792,11 +792,12 @@ private:
       LVer.setAliasChecks(std::move(Checks));
       LVer.setSCEVChecks(LAI.PSE.getUnionPredicate());
       LVer.versionLoop(DefsUsedOutside);
+      LVer.annotateLoopWithNoAlias();
     }
 
     // Create identical copies of the original loop for each partition and hook
     // them up sequentially.
-    Partitions.cloneLoops(this);
+    Partitions.cloneLoops();
 
     // Now, we remove the instruction from each loop that don't belong to that
     // partition.

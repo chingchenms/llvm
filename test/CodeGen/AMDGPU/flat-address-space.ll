@@ -11,10 +11,13 @@
 ; remove generic pointers.
 
 ; CHECK-LABEL: {{^}}store_flat_i32:
-; CHECK: v_mov_b32_e32 v[[DATA:[0-9]+]], {{s[0-9]+}}
-; CHECK: v_mov_b32_e32 v[[LO_VREG:[0-9]+]], {{s[0-9]+}}
-; CHECK: v_mov_b32_e32 v[[HI_VREG:[0-9]+]], {{s[0-9]+}}
-; CHECK: flat_store_dword v[[DATA]], v{{\[}}[[LO_VREG]]:[[HI_VREG]]{{\]}}
+; CHECK-DAG: s_load_dwordx2 s{{\[}}[[LO_SREG:[0-9]+]]:[[HI_SREG:[0-9]+]]],
+; CHECK-DAG: s_load_dword s[[SDATA:[0-9]+]],
+; CHECK: s_waitcnt lgkmcnt(0)
+; CHECK-DAG: v_mov_b32_e32 v[[DATA:[0-9]+]], s[[SDATA]]
+; CHECK-DAG: v_mov_b32_e32 v[[LO_VREG:[0-9]+]], s[[LO_SREG]]
+; CHECK-DAG: v_mov_b32_e32 v[[HI_VREG:[0-9]+]], s[[HI_SREG]]
+; CHECK: flat_store_dword v{{\[}}[[LO_VREG]]:[[HI_VREG]]{{\]}}, v[[DATA]]
 define void @store_flat_i32(i32 addrspace(1)* %gptr, i32 %x) #0 {
   %fptr = addrspacecast i32 addrspace(1)* %gptr to i32 addrspace(4)*
   store i32 %x, i32 addrspace(4)* %fptr, align 4
@@ -124,9 +127,6 @@ define void @zextload_flat_i16(i32 addrspace(1)* noalias %out, i16 addrspace(1)*
   ret void
 }
 
-declare void @llvm.AMDGPU.barrier.local() #1
-declare i32 @llvm.r600.read.tidig.x() #3
-
 attributes #0 = { nounwind }
-attributes #1 = { nounwind noduplicate }
+attributes #1 = { nounwind convergent }
 attributes #3 = { nounwind readnone }

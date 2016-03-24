@@ -15,6 +15,7 @@
 #include "AArch64RegisterInfo.h"
 #include "AArch64FrameLowering.h"
 #include "AArch64InstrInfo.h"
+#include "AArch64MachineFunctionInfo.h"
 #include "AArch64Subtarget.h"
 #include "MCTargetDesc/AArch64AddressingModes.h"
 #include "llvm/ADT/BitVector.h"
@@ -47,9 +48,22 @@ AArch64RegisterInfo::getCalleeSavedRegs(const MachineFunction *MF) const {
   if (MF->getFunction()->getCallingConv() == CallingConv::AnyReg)
     return CSR_AArch64_AllRegs_SaveList;
   if (MF->getFunction()->getCallingConv() == CallingConv::CXX_FAST_TLS)
-    return CSR_AArch64_CXX_TLS_Darwin_SaveList;
+    return MF->getInfo<AArch64FunctionInfo>()->isSplitCSR() ?
+           CSR_AArch64_CXX_TLS_Darwin_PE_SaveList :
+           CSR_AArch64_CXX_TLS_Darwin_SaveList;
+  if (MF->getFunction()->getCallingConv() == CallingConv::PreserveMost)
+    return CSR_AArch64_RT_MostRegs_SaveList;
   else
     return CSR_AArch64_AAPCS_SaveList;
+}
+
+const MCPhysReg *AArch64RegisterInfo::getCalleeSavedRegsViaCopy(
+    const MachineFunction *MF) const {
+  assert(MF && "Invalid MachineFunction pointer.");
+  if (MF->getFunction()->getCallingConv() == CallingConv::CXX_FAST_TLS &&
+      MF->getInfo<AArch64FunctionInfo>()->isSplitCSR())
+    return CSR_AArch64_CXX_TLS_Darwin_ViaCopy_SaveList;
+  return nullptr;
 }
 
 const uint32_t *
@@ -62,6 +76,8 @@ AArch64RegisterInfo::getCallPreservedMask(const MachineFunction &MF,
     return CSR_AArch64_AllRegs_RegMask;
   if (CC == CallingConv::CXX_FAST_TLS)
     return CSR_AArch64_CXX_TLS_Darwin_RegMask;
+  if (CC == CallingConv::PreserveMost)
+    return CSR_AArch64_RT_MostRegs_RegMask;
   else
     return CSR_AArch64_AAPCS_RegMask;
 }
@@ -178,9 +194,7 @@ bool AArch64RegisterInfo::hasBasePointer(const MachineFunction &MF) const {
     // If it's wrong, we'll materialize the constant and still get to the
     // object; it's just suboptimal. Negative offsets use the unscaled
     // load/store instructions, which have a 9-bit signed immediate.
-    if (MFI->getLocalFrameSize() < 256)
-      return false;
-    return true;
+    return MFI->getLocalFrameSize() >= 256;
   }
 
   return false;
@@ -219,9 +233,7 @@ bool AArch64RegisterInfo::requiresFrameIndexScavenging(
 bool
 AArch64RegisterInfo::cannotEliminateFrame(const MachineFunction &MF) const {
   const MachineFrameInfo *MFI = MF.getFrameInfo();
-  // Only consider eliminating leaf frames.
-  if (MFI->hasCalls() || (MF.getTarget().Options.DisableFramePointerElim(MF) &&
-                          MFI->adjustsStack()))
+  if (MF.getTarget().Options.DisableFramePointerElim(MF) && MFI->adjustsStack())
     return true;
   return MFI->hasVarSizedObjects() || MFI->isFrameAddressTaken();
 }

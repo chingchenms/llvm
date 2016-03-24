@@ -400,6 +400,7 @@ LowerFormalArguments_32(SDValue Chain,
   CCInfo.AnalyzeFormalArguments(Ins, CC_Sparc32);
 
   const unsigned StackOffset = 92;
+  bool IsLittleEndian = DAG.getDataLayout().isLittleEndian();
 
   unsigned InIdx = 0;
   for (unsigned i = 0, e = ArgLocs.size(); i != e; ++i, ++InIdx) {
@@ -442,6 +443,10 @@ LowerFormalArguments_32(SDValue Chain,
                                         &SP::IntRegsRegClass);
           LoVal = DAG.getCopyFromReg(Chain, dl, loReg, MVT::i32);
         }
+
+        if (IsLittleEndian)
+          std::swap(LoVal, HiVal);
+
         SDValue WholeValue =
           DAG.getNode(ISD::BUILD_PAIR, dl, MVT::i64, LoVal, HiVal);
         WholeValue = DAG.getNode(ISD::BITCAST, dl, VA.getLocVT(), WholeValue);
@@ -498,6 +503,9 @@ LowerFormalArguments_32(SDValue Chain,
                                   MachinePointerInfo(),
                                   false, false, false, 0);
 
+      if (IsLittleEndian)
+        std::swap(LoVal, HiVal);
+
       SDValue WholeValue =
         DAG.getNode(ISD::BUILD_PAIR, dl, MVT::i64, LoVal, HiVal);
       WholeValue = DAG.getNode(ISD::BITCAST, dl, VA.getValVT(), WholeValue);
@@ -514,16 +522,12 @@ LowerFormalArguments_32(SDValue Chain,
       Load = DAG.getLoad(VA.getValVT(), dl, Chain, FIPtr,
                          MachinePointerInfo(),
                          false, false, false, 0);
+    } else if (VA.getValVT() == MVT::f128) {
+      report_fatal_error("SPARCv8 does not handle f128 in calls; "
+                         "pass indirectly");
     } else {
-      ISD::LoadExtType LoadOp = ISD::SEXTLOAD;
-      // Sparc is big endian, so add an offset based on the ObjectVT.
-      unsigned Offset = 4-std::max(1U, VA.getValVT().getSizeInBits()/8);
-      FIPtr = DAG.getNode(ISD::ADD, dl, MVT::i32, FIPtr,
-                          DAG.getConstant(Offset, dl, MVT::i32));
-      Load = DAG.getExtLoad(LoadOp, dl, MVT::i32, Chain, FIPtr,
-                            MachinePointerInfo(),
-                            VA.getValVT(), false, false, false,0);
-      Load = DAG.getNode(ISD::TRUNCATE, dl, VA.getValVT(), Load);
+      // We shouldn't see any other value types here.
+      llvm_unreachable("Unexpected ValVT encountered in frame lowering.");
     }
     InVals.push_back(Load);
   }
@@ -995,10 +999,29 @@ SparcTargetLowering::LowerCall_32(TargetLowering::CallLoweringInfo &CLI,
 
   // Copy all of the result registers out of their specified physreg.
   for (unsigned i = 0; i != RVLocs.size(); ++i) {
-    Chain = DAG.getCopyFromReg(Chain, dl, toCallerWindow(RVLocs[i].getLocReg()),
-                               RVLocs[i].getValVT(), InFlag).getValue(1);
-    InFlag = Chain.getValue(2);
-    InVals.push_back(Chain.getValue(0));
+    if (RVLocs[i].getLocVT() == MVT::v2i32) {
+      SDValue Vec = DAG.getNode(ISD::UNDEF, dl, MVT::v2i32);
+      SDValue Lo = DAG.getCopyFromReg(
+          Chain, dl, toCallerWindow(RVLocs[i++].getLocReg()), MVT::i32, InFlag);
+      Chain = Lo.getValue(1);
+      InFlag = Lo.getValue(2);
+      Vec = DAG.getNode(ISD::INSERT_VECTOR_ELT, dl, MVT::v2i32, Vec, Lo,
+                        DAG.getConstant(0, dl, MVT::i32));
+      SDValue Hi = DAG.getCopyFromReg(
+          Chain, dl, toCallerWindow(RVLocs[i].getLocReg()), MVT::i32, InFlag);
+      Chain = Hi.getValue(1);
+      InFlag = Hi.getValue(2);
+      Vec = DAG.getNode(ISD::INSERT_VECTOR_ELT, dl, MVT::v2i32, Vec, Hi,
+                        DAG.getConstant(1, dl, MVT::i32));
+      InVals.push_back(Vec);
+    } else {
+      Chain =
+          DAG.getCopyFromReg(Chain, dl, toCallerWindow(RVLocs[i].getLocReg()),
+                             RVLocs[i].getValVT(), InFlag)
+              .getValue(1);
+      InFlag = Chain.getValue(2);
+      InVals.push_back(Chain.getValue(0));
+    }
   }
 
   return Chain;
@@ -1127,7 +1150,7 @@ SparcTargetLowering::LowerCall_64(TargetLowering::CallLoweringInfo &CLI,
   unsigned ArgsSize = std::max(6*8u, CCInfo.getNextStackOffset());
 
   // Keep stack frames 16-byte aligned.
-  ArgsSize = RoundUpToAlignment(ArgsSize, 16);
+  ArgsSize = alignTo(ArgsSize, 16);
 
   // Varargs calls require special treatment.
   if (CLI.IsVarArg)
@@ -1580,10 +1603,6 @@ SparcTargetLowering::SparcTargetLowering(TargetMachine &TM,
   }
 
   // ATOMICs.
-  // FIXME: We insert fences for each atomics and generate sub-optimal code
-  // for PSO/TSO. Also, implement other atomicrmw operations.
-
-  setInsertFencesForAtomic(true);
 
   setOperationAction(ISD::ATOMIC_SWAP, MVT::i32, Legal);
   setOperationAction(ISD::ATOMIC_CMP_SWAP, MVT::i32,
@@ -2648,7 +2667,7 @@ static SDValue LowerF128Load(SDValue Op, SelectionDAG &DAG)
 {
   SDLoc dl(Op);
   LoadSDNode *LdNode = dyn_cast<LoadSDNode>(Op.getNode());
-  assert(LdNode && LdNode->getOffset().getOpcode() == ISD::UNDEF
+  assert(LdNode && LdNode->getOffset().isUndef()
          && "Unexpected node type");
 
   unsigned alignment = LdNode->getAlignment();
@@ -2709,7 +2728,7 @@ static SDValue LowerLOAD(SDValue Op, SelectionDAG &DAG)
 static SDValue LowerF128Store(SDValue Op, SelectionDAG &DAG) {
   SDLoc dl(Op);
   StoreSDNode *StNode = dyn_cast<StoreSDNode>(Op.getNode());
-  assert(StNode && StNode->getOffset().getOpcode() == ISD::UNDEF
+  assert(StNode && StNode->getOffset().isUndef()
          && "Unexpected node type");
   SDValue SubRegEven = DAG.getTargetConstant(SP::sub_even64, dl, MVT::i32);
   SDValue SubRegOdd  = DAG.getTargetConstant(SP::sub_odd64, dl, MVT::i32);

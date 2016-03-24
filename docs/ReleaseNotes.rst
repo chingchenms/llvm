@@ -1,13 +1,13 @@
 ======================
-LLVM 3.8 Release Notes
+LLVM 3.9 Release Notes
 ======================
 
 .. contents::
     :local:
 
 .. warning::
-   These are in-progress notes for the upcoming LLVM 3.8 release.  You may
-   prefer the `LLVM 3.7 Release Notes <http://llvm.org/releases/3.7.0/docs
+   These are in-progress notes for the upcoming LLVM 3.9 release.  You may
+   prefer the `LLVM 3.8 Release Notes <http://llvm.org/releases/3.8.0/docs
    /ReleaseNotes.html>`_.
 
 
@@ -15,7 +15,7 @@ Introduction
 ============
 
 This document contains the release notes for the LLVM Compiler Infrastructure,
-release 3.8.  Here we describe the status of LLVM, including major improvements
+release 3.9.  Here we describe the status of LLVM, including major improvements
 from the previous release, improvements in various subprojects of LLVM, and
 some of the current users of the code.  All LLVM releases may be downloaded
 from the `LLVM releases web site <http://llvm.org/releases/>`_.
@@ -33,13 +33,24 @@ page <http://llvm.org/releases/>`_.
 
 Non-comprehensive list of changes in this release
 =================================================
-* With this release, the minimum Windows version required for running LLVM is
-  Windows 7. Earlier versions, including Windows Vista and XP are no longer
-  supported.
+* The LLVMContext gains a new runtime check (see
+  LLVMContext::discardValueNames()) that can be set to discard Value names
+  (other than GlobalValue). This is intended to be used in release builds by
+  clients that are interested in saving CPU/memory as much as possible.
 
-* With this release, the autoconf build system is deprecated. It will be removed
-  in the 3.9 release. Please migrate to using CMake. For more information see:
-  `Building LLVM with CMake <CMake.html>`_
+* .. note about autoconf build having been removed.
+
+* .. note about C API functions LLVMParseBitcode,
+   LLVMParseBitcodeInContext, LLVMGetBitcodeModuleInContext and
+   LLVMGetBitcodeModule having been removed. LLVMGetTargetMachineData has been
+   removed (use LLVMGetDataLayout instead).
+
+* The C API function LLVMLinkModules has been removed.
+
+* The C API function LLVMAddTargetData has been removed.
+
+* The C API function LLVMGetDataLayout is deprecated
+  in favor of LLVMGetDataLayoutStr.
 
 .. NOTE
    For small 1-3 sentence descriptions, just add an entry at the end of
@@ -78,18 +89,35 @@ Changes to the PowerPC Target
  During this release ...
 
 
+Changes to the X86 Target
+-----------------------------
+
+ During this release ...
+
+Changes to the AMDGPU Target
+-----------------------------
+
+ * Mesa 11.0.x is no longer supported
+
+
 Changes to the OCaml bindings
 -----------------------------
 
  During this release ...
 
+Support for attribute 'notail' has been added
+---------------------------------------------
 
-External Open Source Projects Using LLVM 3.8
+This marker prevents optimization passes from adding 'tail' or
+'musttail' markers to a call. It is used to prevent tail call
+optimization from being performed on the call.
+
+External Open Source Projects Using LLVM 3.9
 ============================================
 
 An exciting aspect of LLVM is that it is used as an enabling technology for
 a lot of other language and tools projects. This section lists some of the
-projects that have already been updated to work with LLVM 3.8.
+projects that have already been updated to work with LLVM 3.9.
 
 * A project
 

@@ -243,13 +243,14 @@ FunctionModRefBehavior
 GlobalsAAResult::getModRefBehavior(ImmutableCallSite CS) {
   FunctionModRefBehavior Min = FMRB_UnknownModRefBehavior;
 
-  if (const Function *F = CS.getCalledFunction())
-    if (FunctionInfo *FI = getFunctionInfo(F)) {
-      if (FI->getModRefInfo() == MRI_NoModRef)
-        Min = FMRB_DoesNotAccessMemory;
-      else if ((FI->getModRefInfo() & MRI_Mod) == 0)
-        Min = FMRB_OnlyReadsMemory;
-    }
+  if (!CS.hasOperandBundles())
+    if (const Function *F = CS.getCalledFunction())
+      if (FunctionInfo *FI = getFunctionInfo(F)) {
+        if (FI->getModRefInfo() == MRI_NoModRef)
+          Min = FMRB_DoesNotAccessMemory;
+        else if ((FI->getModRefInfo() & MRI_Mod) == 0)
+          Min = FMRB_OnlyReadsMemory;
+      }
 
   return FunctionModRefBehavior(AAResultBase::getModRefBehavior(CS) & Min);
 }
@@ -269,7 +270,7 @@ GlobalsAAResult::getFunctionInfo(const Function *F) {
 /// (really, their address passed to something nontrivial), record this fact,
 /// and record the functions that they are used directly in.
 void GlobalsAAResult::AnalyzeGlobals(Module &M) {
-  SmallPtrSet<Function *, 64> TrackedFunctions;
+  SmallPtrSet<Function *, 32> TrackedFunctions;
   for (Function &F : M)
     if (F.hasLocalLinkage())
       if (!AnalyzeUsesOfPointer(&F)) {
@@ -281,7 +282,7 @@ void GlobalsAAResult::AnalyzeGlobals(Module &M) {
         ++NumNonAddrTakenFunctions;
       }
 
-  SmallPtrSet<Function *, 64> Readers, Writers;
+  SmallPtrSet<Function *, 16> Readers, Writers;
   for (GlobalVariable &GV : M.globals())
     if (GV.hasLocalLinkage()) {
       if (!AnalyzeUsesOfPointer(&GV, &Readers,
@@ -310,7 +311,7 @@ void GlobalsAAResult::AnalyzeGlobals(Module &M) {
         ++NumNonAddrTakenGlobalVars;
 
         // If this global holds a pointer type, see if it is an indirect global.
-        if (GV.getType()->getElementType()->isPointerTy() &&
+        if (GV.getValueType()->isPointerTy() &&
             AnalyzeIndirectGlobalMemory(&GV))
           ++NumIndirectGlobalVars;
       }
@@ -353,26 +354,11 @@ bool GlobalsAAResult::AnalyzeUsesOfPointer(Value *V,
     } else if (auto CS = CallSite(I)) {
       // Make sure that this is just the function being called, not that it is
       // passing into the function.
-      if (!CS.isCallee(&U)) {
+      if (CS.isDataOperand(&U)) {
         // Detect calls to free.
-        if (isFreeCall(I, &TLI)) {
+        if (CS.isArgOperand(&U) && isFreeCall(I, &TLI)) {
           if (Writers)
             Writers->insert(CS->getParent()->getParent());
-        } else if (CS.doesNotCapture(CS.getArgumentNo(&U))) {
-          Function *ParentF = CS->getParent()->getParent();
-          // A nocapture argument may be read from or written to, but does not
-          // escape unless the call can somehow recurse.
-          //
-          // nocapture "indicates that the callee does not make any copies of
-          // the pointer that outlive itself". Therefore if we directly or
-          // indirectly recurse, we must treat the pointer as escaping.
-          if (FunctionToSCCMap[ParentF] ==
-              FunctionToSCCMap[CS.getCalledFunction()])
-            return true;
-          if (Readers)
-            Readers->insert(ParentF);
-          if (Writers)
-            Writers->insert(ParentF);
         } else {
           return true; // Argument of an unknown call.
         }
@@ -878,7 +864,11 @@ ModRefInfo GlobalsAAResult::getModRefInfoForArgument(ImmutableCallSite CS,
     GetUnderlyingObjects(A, Objects, DL);
     
     // All objects must be identified.
-    if (!std::all_of(Objects.begin(), Objects.end(), isIdentifiedObject))
+    if (!std::all_of(Objects.begin(), Objects.end(), isIdentifiedObject) &&
+        // Try ::alias to see if all objects are known not to alias GV.
+        !std::all_of(Objects.begin(), Objects.end(), [&](Value *V) {
+          return this->alias(MemoryLocation(V), MemoryLocation(GV)) == NoAlias;
+          }))
       return ConservativeResult;
 
     if (std::find(Objects.begin(), Objects.end(), GV) != Objects.end())
@@ -911,10 +901,10 @@ ModRefInfo GlobalsAAResult::getModRefInfo(ImmutableCallSite CS,
 
 GlobalsAAResult::GlobalsAAResult(const DataLayout &DL,
                                  const TargetLibraryInfo &TLI)
-    : AAResultBase(TLI), DL(DL) {}
+    : AAResultBase(), DL(DL), TLI(TLI) {}
 
 GlobalsAAResult::GlobalsAAResult(GlobalsAAResult &&Arg)
-    : AAResultBase(std::move(Arg)), DL(Arg.DL),
+    : AAResultBase(std::move(Arg)), DL(Arg.DL), TLI(Arg.TLI),
       NonAddressTakenGlobals(std::move(Arg.NonAddressTakenGlobals)),
       IndirectGlobals(std::move(Arg.IndirectGlobals)),
       AllocsForIndirectGlobals(std::move(Arg.AllocsForIndirectGlobals)),
@@ -926,6 +916,8 @@ GlobalsAAResult::GlobalsAAResult(GlobalsAAResult &&Arg)
     H.GAR = this;
   }
 }
+
+GlobalsAAResult::~GlobalsAAResult() {}
 
 /*static*/ GlobalsAAResult
 GlobalsAAResult::analyzeModule(Module &M, const TargetLibraryInfo &TLI,
@@ -944,13 +936,13 @@ GlobalsAAResult::analyzeModule(Module &M, const TargetLibraryInfo &TLI,
   return Result;
 }
 
-GlobalsAAResult GlobalsAA::run(Module &M, AnalysisManager<Module> *AM) {
-  return GlobalsAAResult::analyzeModule(M,
-                                        AM->getResult<TargetLibraryAnalysis>(M),
-                                        AM->getResult<CallGraphAnalysis>(M));
-}
-
 char GlobalsAA::PassID;
+
+GlobalsAAResult GlobalsAA::run(Module &M, AnalysisManager<Module> &AM) {
+  return GlobalsAAResult::analyzeModule(M,
+                                        AM.getResult<TargetLibraryAnalysis>(M),
+                                        AM.getResult<CallGraphAnalysis>(M));
+}
 
 char GlobalsAAWrapperPass::ID = 0;
 INITIALIZE_PASS_BEGIN(GlobalsAAWrapperPass, "globals-aa",

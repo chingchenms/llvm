@@ -19,7 +19,7 @@
 #include "llvm/ExecutionEngine/RuntimeDyldChecker.h"
 #include "llvm/MC/MCAsmInfo.h"
 #include "llvm/MC/MCContext.h"
-#include "llvm/MC/MCDisassembler.h"
+#include "llvm/MC/MCDisassembler/MCDisassembler.h"
 #include "llvm/MC/MCInstPrinter.h"
 #include "llvm/MC/MCInstrInfo.h"
 #include "llvm/MC/MCRegisterInfo.h"
@@ -191,7 +191,7 @@ public:
   }
 
   uint8_t *allocateFromSlab(uintptr_t Size, unsigned Alignment, bool isCode) {
-    Size = RoundUpToAlignment(Size, Alignment);
+    Size = alignTo(Size, Alignment);
     if (CurrentSlabOffset + Size > SlabSize)
       report_fatal_error("Can't allocate enough memory. Tune --preallocate");
 
@@ -330,7 +330,11 @@ static int printLineInfoForInput(bool LoadObjects, bool UseDebugObj) {
     // Use symbol info to iterate functions in the object.
     for (const auto &P : SymAddr) {
       object::SymbolRef Sym = P.first;
-      if (Sym.getType() == object::SymbolRef::ST_Function) {
+      ErrorOr<SymbolRef::Type> TypeOrErr = Sym.getType();
+      if (!TypeOrErr)
+        continue;
+      SymbolRef::Type Type = *TypeOrErr;
+      if (Type == object::SymbolRef::ST_Function) {
         ErrorOr<StringRef> Name = Sym.getName();
         if (!Name)
           continue;

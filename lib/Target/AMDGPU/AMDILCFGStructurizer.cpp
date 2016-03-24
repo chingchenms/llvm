@@ -923,7 +923,7 @@ bool AMDGPUCFGStructurizer::run() {
 
   if (!Finish) {
     DEBUG(FuncRep->viewCFG());
-    llvm_unreachable("IRREDUCIBLE_CFG");
+    report_fatal_error("IRREDUCIBLE_CFG");
   }
 
   return true;
@@ -1164,7 +1164,7 @@ int AMDGPUCFGStructurizer::loopcontPatternMatch(MachineLoop *LoopRep,
 
   for (SmallVectorImpl<MachineBasicBlock *>::iterator It = ContMBB.begin(),
       E = ContMBB.end(); It != E; ++It) {
-    (*It)->removeSuccessor(LoopHeader);
+    (*It)->removeSuccessor(LoopHeader, true);
   }
 
   numLoopcontPatternMatch += NumCont;
@@ -1413,10 +1413,10 @@ int AMDGPUCFGStructurizer::improveSimpleJumpintoIf(MachineBasicBlock *HeadMBB,
   MachineBasicBlock::iterator I = insertInstrBefore(LandBlk, AMDGPU::ENDIF);
 
   if (LandBlkHasOtherPred) {
-    llvm_unreachable("Extra register needed to handle CFG");
+    report_fatal_error("Extra register needed to handle CFG");
     unsigned CmpResReg =
       HeadMBB->getParent()->getRegInfo().createVirtualRegister(I32RC);
-    llvm_unreachable("Extra compare instruction needed to handle CFG");
+    report_fatal_error("Extra compare instruction needed to handle CFG");
     insertCondBranchBefore(LandBlk, I, AMDGPU::IF_PREDICATE_SET,
         CmpResReg, DebugLoc());
   }
@@ -1433,7 +1433,7 @@ int AMDGPUCFGStructurizer::improveSimpleJumpintoIf(MachineBasicBlock *HeadMBB,
     // need to uncondionally insert the assignment to ensure a path from its
     // predecessor rather than headBlk has valid value in initReg if
     // (initVal != 1).
-    llvm_unreachable("Extra register needed to handle CFG");
+    report_fatal_error("Extra register needed to handle CFG");
   }
   insertInstrBefore(I, AMDGPU::ELSE);
 
@@ -1442,7 +1442,7 @@ int AMDGPUCFGStructurizer::improveSimpleJumpintoIf(MachineBasicBlock *HeadMBB,
     // need to uncondionally insert the assignment to ensure a path from its
     // predecessor rather than headBlk has valid value in initReg if
     // (initVal != 0)
-    llvm_unreachable("Extra register needed to handle CFG");
+    report_fatal_error("Extra register needed to handle CFG");
   }
 
   if (LandBlkHasOtherPred) {
@@ -1454,7 +1454,7 @@ int AMDGPUCFGStructurizer::improveSimpleJumpintoIf(MachineBasicBlock *HeadMBB,
          PE = LandBlk->pred_end(); PI != PE; ++PI) {
       MachineBasicBlock *MBB = *PI;
       if (MBB != TrueMBB && MBB != FalseMBB)
-        llvm_unreachable("Extra register needed to handle CFG");
+        report_fatal_error("Extra register needed to handle CFG");
     }
   }
   DEBUG(
@@ -1487,7 +1487,7 @@ void AMDGPUCFGStructurizer::mergeSerialBlock(MachineBasicBlock *DstMBB,
   );
   DstMBB->splice(DstMBB->end(), SrcMBB, SrcMBB->begin(), SrcMBB->end());
 
-  DstMBB->removeSuccessor(SrcMBB);
+  DstMBB->removeSuccessor(SrcMBB, true);
   cloneSuccessorList(DstMBB, SrcMBB);
 
   removeSuccessor(SrcMBB);
@@ -1537,9 +1537,9 @@ void AMDGPUCFGStructurizer::mergeIfthenelseBlock(MachineInstr *BranchMI,
 
   if (TrueMBB) {
     MBB->splice(I, TrueMBB, TrueMBB->begin(), TrueMBB->end());
-    MBB->removeSuccessor(TrueMBB);
+    MBB->removeSuccessor(TrueMBB, true);
     if (LandMBB && TrueMBB->succ_size()!=0)
-      TrueMBB->removeSuccessor(LandMBB);
+      TrueMBB->removeSuccessor(LandMBB, true);
     retireBlock(TrueMBB);
     MLI->removeBlock(TrueMBB);
   }
@@ -1548,9 +1548,9 @@ void AMDGPUCFGStructurizer::mergeIfthenelseBlock(MachineInstr *BranchMI,
     insertInstrBefore(I, AMDGPU::ELSE);
     MBB->splice(I, FalseMBB, FalseMBB->begin(),
                    FalseMBB->end());
-    MBB->removeSuccessor(FalseMBB);
+    MBB->removeSuccessor(FalseMBB, true);
     if (LandMBB && FalseMBB->succ_size() != 0)
-      FalseMBB->removeSuccessor(LandMBB);
+      FalseMBB->removeSuccessor(LandMBB, true);
     retireBlock(FalseMBB);
     MLI->removeBlock(FalseMBB);
   }
@@ -1591,7 +1591,7 @@ void AMDGPUCFGStructurizer::mergeLoopbreakBlock(MachineBasicBlock *ExitingMBB,
   //now branchInst can be erase safely
   BranchMI->eraseFromParent();
   //now take care of successors, retire blocks
-  ExitingMBB->removeSuccessor(LandMBB);
+  ExitingMBB->removeSuccessor(LandMBB, true);
 }
 
 void AMDGPUCFGStructurizer::settleLoopcontBlock(MachineBasicBlock *ContingMBB,
@@ -1757,7 +1757,7 @@ void AMDGPUCFGStructurizer::removeRedundantConditionalBranch(
   DEBUG(dbgs() << "Removing unneeded cond branch instr: " << *BranchMI);
   BranchMI->eraseFromParent();
   SHOWNEWBLK(MBB1, "Removing redundant successor");
-  MBB->removeSuccessor(MBB1);
+  MBB->removeSuccessor(MBB1, true);
 }
 
 void AMDGPUCFGStructurizer::addDummyExitBlock(

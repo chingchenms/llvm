@@ -54,7 +54,7 @@ class InstrProfReader {
   std::error_code LastError;
 
 public:
-  InstrProfReader() : LastError(instrprof_error::success) {}
+  InstrProfReader() : LastError(instrprof_error::success), Symtab() {}
   virtual ~InstrProfReader() {}
 
   /// Read the header.  Required before reading first record.
@@ -64,8 +64,22 @@ public:
   /// Iterator over profile data.
   InstrProfIterator begin() { return InstrProfIterator(this); }
   InstrProfIterator end() { return InstrProfIterator(); }
+  virtual bool isIRLevelProfile() const = 0;
 
- protected:
+  /// Return the PGO symtab. There are three different readers:
+  /// Raw, Text, and Indexed profile readers. The first two types
+  /// of readers are used only by llvm-profdata tool, while the indexed
+  /// profile reader is also used by llvm-cov tool and the compiler (
+  /// backend or frontend). Since creating PGO symtab can create
+  /// significant runtime and memory overhead (as it touches data
+  /// for the whole program), InstrProfSymtab for the indexed profile
+  /// reader should be created on demand and it is recommended to be
+  /// only used for dumping purpose with llvm-proftool, not with the
+  /// compiler.
+  virtual InstrProfSymtab &getSymtab() = 0;
+
+protected:
+  std::unique_ptr<InstrProfSymtab> Symtab;
   /// Set the current std::error_code and return same.
   std::error_code error(std::error_code EC) {
     LastError = EC;
@@ -105,20 +119,31 @@ private:
   std::unique_ptr<MemoryBuffer> DataBuffer;
   /// Iterator over the profile data.
   line_iterator Line;
+  bool IsIRLevelProfile;
 
   TextInstrProfReader(const TextInstrProfReader &) = delete;
   TextInstrProfReader &operator=(const TextInstrProfReader &) = delete;
+  std::error_code readValueProfileData(InstrProfRecord &Record);
+
 public:
   TextInstrProfReader(std::unique_ptr<MemoryBuffer> DataBuffer_)
-      : DataBuffer(std::move(DataBuffer_)), Line(*DataBuffer, true, '#') {}
+      : DataBuffer(std::move(DataBuffer_)), Line(*DataBuffer, true, '#'),
+        IsIRLevelProfile(false) {}
 
   /// Return true if the given buffer is in text instrprof format.
   static bool hasFormat(const MemoryBuffer &Buffer);
 
+  bool isIRLevelProfile() const override { return IsIRLevelProfile; }
+
   /// Read the header.
-  std::error_code readHeader() override { return success(); }
+  std::error_code readHeader() override;
   /// Read a single record.
   std::error_code readNextRecord(InstrProfRecord &Record) override;
+
+  InstrProfSymtab &getSymtab() override {
+    assert(Symtab.get());
+    return *Symtab.get();
+  }
 };
 
 /// Reader for the raw instrprof binary format from runtime.
@@ -134,19 +159,22 @@ private:
   /// The profile data file contents.
   std::unique_ptr<MemoryBuffer> DataBuffer;
   bool ShouldSwapBytes;
+  // The value of the version field of the raw profile data header. The lower 56
+  // bits specifies the format version and the most significant 8 bits specify
+  // the variant types of the profile.
+  uint64_t Version;
   uint64_t CountersDelta;
   uint64_t NamesDelta;
-  uint64_t ValueDataDelta;
   const RawInstrProf::ProfileData<IntPtrT> *Data;
   const RawInstrProf::ProfileData<IntPtrT> *DataEnd;
   const uint64_t *CountersStart;
   const char *NamesStart;
+  uint64_t NamesSize;
   const uint8_t *ValueDataStart;
   const char *ProfileEnd;
   uint32_t ValueKindLast;
+  uint32_t CurValueDataSize;
 
-  // String table for holding a unique copy of all the strings in the profile.
-  InstrProfStringTable StringTable;
   InstrProfRecord::ValueMapType FunctionPtrToNameMap;
 
   RawInstrProfReader(const RawInstrProfReader &) = delete;
@@ -158,8 +186,17 @@ public:
   static bool hasFormat(const MemoryBuffer &DataBuffer);
   std::error_code readHeader() override;
   std::error_code readNextRecord(InstrProfRecord &Record) override;
+  bool isIRLevelProfile() const override {
+    return (Version & VARIANT_MASK_IR_PROF) != 0;
+  }
+
+  InstrProfSymtab &getSymtab() override {
+    assert(Symtab.get());
+    return *Symtab.get();
+  }
 
 private:
+  void createSymtab(InstrProfSymtab &Symtab);
   std::error_code readNextHeader(const char *CurrentPos);
   std::error_code readHeader(const RawInstrProf::Header &Header);
   template <class IntT> IntT swap(IntT Int) const {
@@ -183,26 +220,17 @@ private:
   std::error_code readRawCounts(InstrProfRecord &Record);
   std::error_code readValueProfilingData(InstrProfRecord &Record);
   bool atEnd() const { return Data == DataEnd; }
-  void advanceData() { Data++; }
+  void advanceData() {
+    Data++;
+    ValueDataStart += CurValueDataSize;
+  }
 
   const uint64_t *getCounter(IntPtrT CounterPtr) const {
     ptrdiff_t Offset = (swap(CounterPtr) - CountersDelta) / sizeof(uint64_t);
     return CountersStart + Offset;
   }
-  const char *getName(IntPtrT NamePtr) const {
-    ptrdiff_t Offset = (swap(NamePtr) - NamesDelta) / sizeof(char);
-    return NamesStart + Offset;
-  }
-  const uint8_t *getValueDataCounts(IntPtrT ValueCountsPtr) const {
-    ptrdiff_t Offset =
-        (swap(ValueCountsPtr) - ValueDataDelta) / sizeof(uint8_t);
-    return ValueDataStart + Offset;
-  }
-  // This accepts an already byte-swapped ValueDataPtr argument.
-  const InstrProfValueData *getValueData(IntPtrT ValueDataPtr) const {
-    ptrdiff_t Offset = (ValueDataPtr - ValueDataDelta) / sizeof(uint8_t);
-    return reinterpret_cast<const InstrProfValueData *>(ValueDataStart +
-                                                        Offset);
+  StringRef getName(uint64_t NameRef) const {
+    return Symtab->getFuncName(swap(NameRef));
   }
 };
 
@@ -223,7 +251,6 @@ class InstrProfLookupTrait {
   // It should be LE by default, but can be changed
   // for testing purpose.
   support::endianness ValueProfDataEndianness;
-  std::vector<std::pair<uint64_t, const char *>> HashKeys;
 
 public:
   InstrProfLookupTrait(IndexedInstrProf::HashT HashType, unsigned FormatVersion)
@@ -243,9 +270,6 @@ public:
 
   hash_value_type ComputeHash(StringRef K);
 
-  void setHashKeys(std::vector<std::pair<uint64_t, const char *>> HashKeys) {
-    this->HashKeys = std::move(HashKeys);
-  }
   static std::pair<offset_type, offset_type>
   ReadKeyDataLength(const unsigned char *&D) {
     using namespace support;
@@ -280,6 +304,8 @@ struct InstrProfReaderIndexBase {
   virtual void setValueProfDataEndianness(support::endianness Endianness) = 0;
   virtual ~InstrProfReaderIndexBase() {}
   virtual uint64_t getVersion() const = 0;
+  virtual bool isIRLevelProfile() const = 0;
+  virtual void populateSymtab(InstrProfSymtab &) = 0;
 };
 
 typedef OnDiskIterableChainedHashTable<InstrProfLookupTrait>
@@ -292,9 +318,6 @@ private:
   std::unique_ptr<HashTableImpl> HashTable;
   typename HashTableImpl::data_iterator RecordIterator;
   uint64_t FormatVersion;
-
-  // String table for holding a unique copy of all the strings in the profile.
-  InstrProfStringTable StringTable;
 
 public:
   InstrProfReaderIndex(const unsigned char *Buckets,
@@ -313,7 +336,13 @@ public:
     HashTable->getInfoObj().setValueProfDataEndianness(Endianness);
   }
   ~InstrProfReaderIndex() override {}
-  uint64_t getVersion() const override { return FormatVersion; }
+  uint64_t getVersion() const override { return GET_VERSION(FormatVersion); }
+  bool isIRLevelProfile() const override {
+    return (FormatVersion & VARIANT_MASK_IR_PROF) != 0;
+  }
+  void populateSymtab(InstrProfSymtab &Symtab) override {
+    Symtab.create(HashTable->keys());
+  }
 };
 
 /// Reader for the indexed binary instrprof format.
@@ -323,14 +352,21 @@ private:
   std::unique_ptr<MemoryBuffer> DataBuffer;
   /// The index into the profile data.
   std::unique_ptr<InstrProfReaderIndexBase> Index;
-  /// The maximal execution count among all functions.
-  uint64_t MaxFunctionCount;
+  /// Profile summary data.
+  std::unique_ptr<InstrProfSummary> Summary;
 
   IndexedInstrProfReader(const IndexedInstrProfReader &) = delete;
   IndexedInstrProfReader &operator=(const IndexedInstrProfReader &) = delete;
 
+  // Read the profile summary. Return a pointer pointing to one byte past the
+  // end of the summary data if it exists or the input \c Cur.
+  const unsigned char *readSummary(IndexedInstrProf::ProfVersion Version,
+                                   const unsigned char *Cur);
+
 public:
+  /// Return the profile version.
   uint64_t getVersion() const { return Index->getVersion(); }
+  bool isIRLevelProfile() const override { return Index->isIRLevelProfile(); }
   IndexedInstrProfReader(std::unique_ptr<MemoryBuffer> DataBuffer)
       : DataBuffer(std::move(DataBuffer)), Index(nullptr) {}
 
@@ -352,7 +388,7 @@ public:
                                     std::vector<uint64_t> &Counts);
 
   /// Return the maximum of all known function counts.
-  uint64_t getMaximumFunctionCount() { return MaxFunctionCount; }
+  uint64_t getMaximumFunctionCount() { return Summary->getMaxFunctionCount(); }
 
   /// Factory method to create an indexed reader.
   static ErrorOr<std::unique_ptr<IndexedInstrProfReader>>
@@ -365,6 +401,12 @@ public:
   void setValueProfDataEndianness(support::endianness Endianness) {
     Index->setValueProfDataEndianness(Endianness);
   }
+
+  // See description in the base class. This interface is designed
+  // to be used by llvm-profdata (for dumping). Avoid using this when
+  // the client is the compiler.
+  InstrProfSymtab &getSymtab() override;
+  InstrProfSummary &getSummary() { return *(Summary.get()); }
 };
 
 } // end namespace llvm

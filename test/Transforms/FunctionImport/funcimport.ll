@@ -1,6 +1,6 @@
 ; Do setup work for all below tests: generate bitcode and combined index
-; RUN: llvm-as -function-summary %s -o %t.bc
-; RUN: llvm-as -function-summary %p/Inputs/funcimport.ll -o %t2.bc
+; RUN: llvm-as -module-summary %s -o %t.bc
+; RUN: llvm-as -module-summary %p/Inputs/funcimport.ll -o %t2.bc
 ; RUN: llvm-lto -thinlto -o %t3 %t.bc %t2.bc
 
 ; Do the import now
@@ -65,7 +65,7 @@ declare void @callfuncptr(...) #1
 
 ; Ensure that all uses of local variable @P which has used in setfuncptr
 ; and callfuncptr are to the same promoted/renamed global.
-; CHECK-DAG: @P.llvm.2 = available_externally hidden global void ()* null
+; CHECK-DAG: @P.llvm.2 = external hidden global void ()*
 ; CHECK-DAG: %0 = load void ()*, void ()** @P.llvm.2,
 ; CHECK-DAG: store void ()* @staticfunc2.llvm.2, void ()** @P.llvm.2,
 
@@ -73,3 +73,5 @@ declare void @callfuncptr(...) #1
 ; CHECK-DAG: declare void @weakfunc(...)
 declare void @weakfunc(...) #1
 
+; INSTLIMDEF-DAG: define available_externally hidden void @funcwithpersonality.llvm.2() personality i8* bitcast (i32 (...)* @__gxx_personality_v0 to i8*) {
+; INSTLIM5-DAG: declare hidden void @funcwithpersonality.llvm.2()

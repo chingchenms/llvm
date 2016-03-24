@@ -15,6 +15,7 @@
 #define LLVM_LIB_CODEGEN_ASMPRINTER_DWARFCOMPILEUNIT_H
 
 #include "DwarfUnit.h"
+#include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/IR/DebugInfo.h"
 #include "llvm/Support/Dwarf.h"
@@ -29,6 +30,12 @@ class MCSymbol;
 class LexicalScope;
 
 class DwarfCompileUnit : public DwarfUnit {
+  /// A numeric ID unique among all CUs in the module
+  unsigned UniqueID;
+
+  /// Offset of the UnitDie from beginning of debug info section.
+  unsigned DebugInfoOffset = 0;
+
   /// The attribute index of DW_AT_stmt_list in the compile unit DIE, avoiding
   /// the need to search for it in applyStmtList.
   DIE::value_iterator StmtListValue;
@@ -39,11 +46,13 @@ class DwarfCompileUnit : public DwarfUnit {
   /// The start of the unit within its section.
   MCSymbol *LabelBegin;
 
-  typedef llvm::SmallVector<const MDNode *, 8> ImportedEntityList;
-  typedef llvm::DenseMap<const MDNode *, ImportedEntityList>
-  ImportedEntityMap;
+  /// The start of the unit macro info within macro section.
+  MCSymbol *MacroLabelBegin;
 
-  ImportedEntityMap ImportedEntities;
+  typedef llvm::SmallVector<const MDNode *, 8> LocalDeclNodeList;
+  typedef llvm::DenseMap<const MDNode *, LocalDeclNodeList> LocalScopesMap;
+
+  LocalScopesMap LocalDeclNodes;
 
   /// GlobalNames - A map of globally visible named entities for this unit.
   StringMap<const DIE *> GlobalNames;
@@ -62,6 +71,15 @@ class DwarfCompileUnit : public DwarfUnit {
   // ranges/locs.
   const MCSymbol *BaseAddress;
 
+  struct LocalScopeDieInfo {
+    DIE *ConcreteLSDie = nullptr;
+    DIE *AbstractLSDie = nullptr;
+    SetVector<DIE *> InlineLSDies;
+    SetVector<DIE *> LocalDclDies;
+  };
+  // Collection of local scope DIE info.
+  DenseMap<const MDNode *, LocalScopeDieInfo> LocalScopeDieInfoMap;
+
   /// \brief Construct a DIE for the given DbgVariable without initializing the
   /// DbgVariable's DIE reference.
   DIE *constructVariableDIEImpl(const DbgVariable &DV, bool Abstract);
@@ -73,6 +91,10 @@ class DwarfCompileUnit : public DwarfUnit {
 public:
   DwarfCompileUnit(unsigned UID, const DICompileUnit *Node, AsmPrinter *A,
                    DwarfDebug *DW, DwarfFile *DWU);
+
+  unsigned getUniqueID() const { return UniqueID; }
+  unsigned getDebugInfoOffset() const { return DebugInfoOffset; }
+  void setDebugInfoOffset(unsigned DbgInfoOff) { DebugInfoOffset = DbgInfoOff; }
 
   DwarfCompileUnit *getSkeleton() const {
     return Skeleton;
@@ -104,8 +126,16 @@ public:
 
   unsigned getOrCreateSourceID(StringRef FileName, StringRef DirName) override;
 
-  void addImportedEntity(const DIImportedEntity* IE) {
-    ImportedEntities[IE->getScope()].push_back(IE);
+  void addLocalDeclNode(const DINode *DI, DILocalScope *Scope) {
+    // LocalDeclNodes maps local declaration DIEs to their parent DILocalScope.
+    // These local declaration entities will be processed when processing the
+    // lexical scopes collected by LexicalScopes component.
+    // DILexicalBlockFile is skipped by LexicalScopes and it collect its parent,
+    // which is of a DILexicalBlock. Thus, LocalDeclNodes must not map to
+    // DILexicalBlockFile but to its parent DILexicalBlock.
+    if (auto *File = dyn_cast<DILexicalBlockFile>(Scope))
+      Scope = File->getScope();
+    LocalDeclNodes[Scope].push_back(DI);
   }
 
   /// addRange - Add an address range to the list of ranges for this unit.
@@ -153,7 +183,7 @@ public:
   /// A helper function to create children of a Scope DIE.
   DIE *createScopeChildrenDIE(LexicalScope *Scope,
                               SmallVectorImpl<DIE *> &Children,
-                              unsigned *ChildScopeCount = nullptr);
+                              bool *HasNonScopeChildren = nullptr);
 
   /// \brief Construct a DIE for this subprogram scope.
   void constructSubprogramScopeDIE(LexicalScope *Scope);
@@ -162,10 +192,14 @@ public:
 
   void constructAbstractSubprogramScopeDIE(LexicalScope *Scope);
 
+  /// \brief Get or create import_module DIE.
+  DIE *getOrCreateImportedEntityDIE(const DIImportedEntity *Module);
   /// \brief Construct import_module DIE.
   DIE *constructImportedEntityDIE(const DIImportedEntity *Module);
 
   void finishSubprogramDefinition(const DISubprogram *SP);
+
+  void finishLocalScopeDefinitions();
 
   void collectDeadVariables(const DISubprogram *SP);
 
@@ -187,6 +221,10 @@ public:
   MCSymbol *getLabelBegin() const {
     assert(Section);
     return LabelBegin;
+  }
+
+  MCSymbol *getMacroLabelBegin() const {
+    return MacroLabelBegin;
   }
 
   /// Add a new global name to the compile unit.
@@ -236,6 +274,15 @@ public:
 
   void setBaseAddress(const MCSymbol *Base) { BaseAddress = Base; }
   const MCSymbol *getBaseAddress() const { return BaseAddress; }
+
+  DenseMap<const MDNode *, LocalScopeDieInfo> &getLSDieInfoMap() {
+    return LocalScopeDieInfoMap;
+  }
+
+  /// Add local scope DIE entry to lexical scope info.
+  void addLocalScopeDieToLexicalScope(LexicalScope *LS, DIE *D);
+  /// Add local declaration DIE entry to lexical scope info.
+  void addLocalDclDieToLexicalScope(LexicalScope *LS, DIE *D);
 };
 
 } // end llvm namespace

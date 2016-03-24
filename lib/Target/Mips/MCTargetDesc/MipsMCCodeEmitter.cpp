@@ -81,16 +81,10 @@ static void LowerLargeShift(MCInst& Inst) {
   }
 }
 
-// Pick a DEXT or DINS instruction variant based on the pos and size operands
-static void LowerDextDins(MCInst& InstIn) {
-  int Opcode = InstIn.getOpcode();
-
-  if (Opcode == Mips::DEXT)
-    assert(InstIn.getNumOperands() == 4 &&
-           "Invalid no. of machine operands for DEXT!");
-  else // Only DEXT and DINS are possible
-    assert(InstIn.getNumOperands() == 5 &&
-           "Invalid no. of machine operands for DINS!");
+// Pick a DINS instruction variant based on the pos and size operands
+static void LowerDins(MCInst& InstIn) {
+  assert(InstIn.getNumOperands() == 5 &&
+         "Invalid no. of machine operands for DINS!");
 
   assert(InstIn.getOperand(2).isImm());
   int64_t pos = InstIn.getOperand(2).getImm();
@@ -98,17 +92,17 @@ static void LowerDextDins(MCInst& InstIn) {
   int64_t size = InstIn.getOperand(3).getImm();
 
   if (size <= 32) {
-    if (pos < 32)  // DEXT/DINS, do nothing
+    if (pos < 32)  // DINS, do nothing
       return;
-    // DEXTU/DINSU
+    // DINSU
     InstIn.getOperand(2).setImm(pos - 32);
-    InstIn.setOpcode((Opcode == Mips::DEXT) ? Mips::DEXTU : Mips::DINSU);
+    InstIn.setOpcode(Mips::DINSU);
     return;
   }
-  // DEXTM/DINSM
-  assert(pos < 32 && "DEXT/DINS cannot have both size and pos > 32");
+  // DINSM
+  assert(pos < 32 && "DINS cannot have both size and pos > 32");
   InstIn.getOperand(3).setImm(size - 32);
-  InstIn.setOpcode((Opcode == Mips::DEXT) ? Mips::DEXTM : Mips::DINSM);
+  InstIn.setOpcode(Mips::DINSM);
   return;
 }
 
@@ -164,9 +158,8 @@ encodeInstruction(const MCInst &MI, raw_ostream &OS,
     LowerLargeShift(TmpInst);
     break;
     // Double extract instruction is chosen by pos and size operands
-  case Mips::DEXT:
   case Mips::DINS:
-    LowerDextDins(TmpInst);
+    LowerDins(TmpInst);
   }
 
   unsigned long N = Fixups.size();
@@ -863,15 +856,6 @@ getMemEncodingMMImm4sp(const MCInst &MI, unsigned OpNo,
   unsigned OffBits = getMachineOpValue(MI, MI.getOperand(OpNo+1), Fixups, STI);
 
   return ((OffBits >> 2) & 0x0F);
-}
-
-unsigned
-MipsMCCodeEmitter::getSizeExtEncoding(const MCInst &MI, unsigned OpNo,
-                                      SmallVectorImpl<MCFixup> &Fixups,
-                                      const MCSubtargetInfo &STI) const {
-  assert(MI.getOperand(OpNo).isImm());
-  unsigned SizeEncoding = getMachineOpValue(MI, MI.getOperand(OpNo), Fixups, STI);
-  return SizeEncoding - 1;
 }
 
 // FIXME: should be called getMSBEncoding

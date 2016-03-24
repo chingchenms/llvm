@@ -13,6 +13,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/LTO/LTOCodeGenerator.h"
+#include "llvm/ADT/Statistic.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/Analysis/Passes.h"
 #include "llvm/Analysis/TargetLibraryInfo.h"
@@ -64,11 +65,22 @@ const char* LTOCodeGenerator::getVersionString() {
 #endif
 }
 
+namespace llvm {
+cl::opt<bool> LTODiscardValueNames(
+    "lto-discard-value-names",
+    cl::desc("Strip names from Value during LTO (other than GlobalValue)."),
+#ifdef NDEBUG
+    cl::init(true),
+#else
+    cl::init(false),
+#endif
+    cl::Hidden);
+}
+
 LTOCodeGenerator::LTOCodeGenerator(LLVMContext &Context)
     : Context(Context), MergedModule(new Module("ld-temp.o", Context)),
-      IRLinker(new Linker(*MergedModule, [this](const DiagnosticInfo &DI) {
-        MergedModule->getContext().diagnose(DI);
-      })) {
+      TheLinker(new Linker(*MergedModule)) {
+  Context.setDiscardValueNames(LTODiscardValueNames);
   initializeLTOPasses();
 }
 
@@ -94,11 +106,12 @@ void LTOCodeGenerator::initializeLTOPasses() {
   initializeSROALegacyPassPass(R);
   initializeSROA_DTPass(R);
   initializeSROA_SSAUpPass(R);
-  initializeFunctionAttrsPass(R);
+  initializePostOrderFunctionAttrsLegacyPassPass(R);
+  initializeReversePostOrderFunctionAttrsPass(R);
   initializeGlobalsAAWrapperPassPass(R);
   initializeLICMPass(R);
   initializeMergedLoadStoreMotionPass(R);
-  initializeGVNPass(R);
+  initializeGVNLegacyPassPass(R);
   initializeMemCpyOptPass(R);
   initializeDCEPass(R);
   initializeCFGSimplifyPassPass(R);
@@ -108,7 +121,7 @@ bool LTOCodeGenerator::addModule(LTOModule *Mod) {
   assert(&Mod->getModule().getContext() == &Context &&
          "Expected module in same context");
 
-  bool ret = IRLinker->linkInModule(Mod->getModule());
+  bool ret = TheLinker->linkInModule(Mod->takeModule());
 
   const std::vector<const char *> &undefs = Mod->getAsmUndefinedRefs();
   for (int i = 0, e = undefs.size(); i != e; ++i)
@@ -124,8 +137,7 @@ void LTOCodeGenerator::setModule(std::unique_ptr<LTOModule> Mod) {
   AsmUndefinedRefs.clear();
 
   MergedModule = Mod->takeModule();
-  IRLinker = llvm::make_unique<Linker>(*MergedModule,
-                                       IRLinker->getDiagnosticHandler());
+  TheLinker = make_unique<Linker>(*MergedModule);
 
   const std::vector<const char*> &Undefs = Mod->getAsmUndefinedRefs();
   for (int I = 0, E = Undefs.size(); I != E; ++I)
@@ -349,6 +361,12 @@ applyRestriction(GlobalValue &GV,
   if (isa<Function>(GV) &&
       std::binary_search(Libcalls.begin(), Libcalls.end(), GV.getName()))
     AsmUsed.insert(&GV);
+
+  // Record the linkage type of non-local symbols so they can be restored prior
+  // to module splitting.
+  if (ShouldRestoreGlobalsLinkage && !GV.hasAvailableExternallyLinkage() &&
+      !GV.hasLocalLinkage() && GV.hasName())
+    ExternalSymbols.insert(std::make_pair(GV.getName(), GV.getLinkage()));
 }
 
 static void findUsedValues(GlobalVariable *LLVMUsed,
@@ -456,6 +474,35 @@ void LTOCodeGenerator::applyScopeRestrictions() {
   ScopeRestrictionsDone = true;
 }
 
+/// Restore original linkage for symbols that may have been internalized
+void LTOCodeGenerator::restoreLinkageForExternals() {
+  if (!ShouldInternalize || !ShouldRestoreGlobalsLinkage)
+    return;
+
+  assert(ScopeRestrictionsDone &&
+         "Cannot externalize without internalization!");
+
+  if (ExternalSymbols.empty())
+    return;
+
+  auto externalize = [this](GlobalValue &GV) {
+    if (!GV.hasLocalLinkage() || !GV.hasName())
+      return;
+
+    auto I = ExternalSymbols.find(GV.getName());
+    if (I == ExternalSymbols.end())
+      return;
+
+    GV.setLinkage(I->second);
+  };
+
+  std::for_each(MergedModule->begin(), MergedModule->end(), externalize);
+  std::for_each(MergedModule->global_begin(), MergedModule->global_end(),
+                externalize);
+  std::for_each(MergedModule->alias_begin(), MergedModule->alias_end(),
+                externalize);
+}
+
 /// Optimize merged modules using various IPO passes
 bool LTOCodeGenerator::optimize(bool DisableVerify, bool DisableInline,
                                 bool DisableGVNLoadPRE,
@@ -506,6 +553,10 @@ bool LTOCodeGenerator::compileOptimized(ArrayRef<raw_pwrite_stream *> Out) {
   preCodeGenPasses.add(createObjCARCContractPass());
   preCodeGenPasses.run(*MergedModule);
 
+  // Re-externalize globals that may have been internalized to increase scope
+  // for splitting
+  restoreLinkageForExternals();
+
   // Do code generation. We need to preserve the module in case the client calls
   // writeMergedModules() after compilation, but we only need to allow this at
   // parallelism level 1. This is achieved by having splitCodeGen return the
@@ -513,7 +564,12 @@ bool LTOCodeGenerator::compileOptimized(ArrayRef<raw_pwrite_stream *> Out) {
   // MergedModule.
   MergedModule =
       splitCodeGen(std::move(MergedModule), Out, MCpu, FeatureStr, Options,
-                   RelocModel, CodeModel::Default, CGOptLevel, FileType);
+                   RelocModel, CodeModel::Default, CGOptLevel, FileType,
+                   ShouldRestoreGlobalsLinkage);
+
+  // If statistics were requested, print them out after codegen.
+  if (llvm::AreStatisticsEnabled())
+    llvm::PrintStatistics();
 
   return true;
 }

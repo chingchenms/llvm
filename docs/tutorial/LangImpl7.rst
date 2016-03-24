@@ -118,7 +118,7 @@ that @G defines *space* for an i32 in the global data area, but its
 *name* actually refers to the address for that space. Stack variables
 work the same way, except that instead of being declared with global
 variable definitions, they are declared with the `LLVM alloca
-instruction <../LangRef.html#i_alloca>`_:
+instruction <../LangRef.html#alloca-instruction>`_:
 
 .. code-block:: llvm
 
@@ -221,7 +221,7 @@ variables in certain circumstances:
    funny pointer arithmetic is involved, the alloca will not be
    promoted.
 #. mem2reg only works on allocas of `first
-   class <../LangRef.html#t_classifications>`_ values (such as pointers,
+   class <../LangRef.html#first-class-types>`_ values (such as pointers,
    scalars and vectors), and only if the array size of the allocation is
    1 (or missing in the .ll file). mem2reg is not capable of promoting
    structs or arrays to registers. Note that the "scalarrepl" pass is
@@ -252,13 +252,13 @@ is:
    technique dovetails very naturally with this style of debug info.
 
 If nothing else, this makes it much easier to get your front-end up and
-running, and is very simple to implement. Lets extend Kaleidoscope with
+running, and is very simple to implement. Let's extend Kaleidoscope with
 mutable variables now!
 
 Mutable Variables in Kaleidoscope
 =================================
 
-Now that we know the sort of problem we want to tackle, lets see what
+Now that we know the sort of problem we want to tackle, let's see what
 this looks like in the context of our little Kaleidoscope language.
 We're going to add two features:
 
@@ -306,7 +306,7 @@ Adjusting Existing Variables for Mutation
 The symbol table in Kaleidoscope is managed at code generation time by
 the '``NamedValues``' map. This map currently keeps track of the LLVM
 "Value\*" that holds the double value for the named variable. In order
-to support mutation, we need to change this slightly, so that it
+to support mutation, we need to change this slightly, so that
 ``NamedValues`` holds the *memory location* of the variable in question.
 Note that this change is a refactoring: it changes the structure of the
 code, but does not (by itself) change the behavior of the compiler. All
@@ -367,7 +367,7 @@ from the stack slot:
 
 As you can see, this is pretty straightforward. Now we need to update
 the things that define the variables to set up the alloca. We'll start
-with ``ForExprAST::codegen()`` (see the `full code listing <#code>`_ for
+with ``ForExprAST::codegen()`` (see the `full code listing <#id1>`_ for
 the unabridged code):
 
 .. code-block:: c++
@@ -399,7 +399,7 @@ the unabridged code):
       ...
 
 This code is virtually identical to the code `before we allowed mutable
-variables <LangImpl5.html#forcodegen>`_. The big difference is that we
+variables <LangImpl5.html#code-generation-for-the-for-loop>`_. The big difference is that we
 no longer have to construct a PHI node, and we use load/store to access
 the variable as needed.
 
@@ -632,7 +632,7 @@ When run, this example prints "123" and then "4", showing that we did
 actually mutate the value! Okay, we have now officially implemented our
 goal: getting this to work requires SSA construction in the general
 case. However, to be really useful, we want the ability to define our
-own local variables, lets add this next!
+own local variables, let's add this next!
 
 User-defined Local Variables
 ============================

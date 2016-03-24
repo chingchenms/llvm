@@ -27,6 +27,7 @@
 #include "llvm/IR/ModuleSlotTracker.h"
 #include "llvm/MC/MCAsmInfo.h"
 #include "llvm/MC/MCContext.h"
+#include "llvm/Support/DataTypes.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Target/TargetInstrInfo.h"
@@ -216,7 +217,7 @@ bool MachineBasicBlock::hasEHPadSuccessor() const {
 }
 
 #if !defined(NDEBUG) || defined(LLVM_ENABLE_DUMP)
-void MachineBasicBlock::dump() const {
+LLVM_DUMP_METHOD void MachineBasicBlock::dump() const {
   print(dbgs());
 }
 #endif
@@ -301,16 +302,16 @@ void MachineBasicBlock::print(raw_ostream &OS, ModuleSlotTracker &MST,
     OS << '\n';
   }
 
-  for (const_instr_iterator I = instr_begin(); I != instr_end(); ++I) {
+  for (auto &I : instrs()) {
     if (Indexes) {
-      if (Indexes->hasIndex(&*I))
-        OS << Indexes->getInstructionIndex(&*I);
+      if (Indexes->hasIndex(I))
+        OS << Indexes->getInstructionIndex(I);
       OS << '\t';
     }
     OS << '\t';
-    if (I->isInsideBundle())
+    if (I.isInsideBundle())
       OS << "  * ";
-    I->print(OS, MST);
+    I.print(OS, MST);
   }
 
   // Print the successors of this block according to the CFG.
@@ -506,6 +507,20 @@ void MachineBasicBlock::updateTerminator() {
   }
 }
 
+void MachineBasicBlock::validateSuccProbs() const {
+#ifndef NDEBUG
+  int64_t Sum = 0;
+  for (auto Prob : Probs)
+    Sum += Prob.getNumerator();
+  // Due to precision issue, we assume that the sum of probabilities is one if
+  // the difference between the sum of their numerators and the denominator is
+  // no greater than the number of successors.
+  assert((uint64_t)std::abs(Sum - BranchProbability::getDenominator()) <=
+             Probs.size() &&
+         "The sum of successors's probabilities exceeds one.");
+#endif // NDEBUG
+}
+
 void MachineBasicBlock::addSuccessor(MachineBasicBlock *Succ,
                                      BranchProbability Prob) {
   // Probability list is either empty (if successor list isn't empty, this means
@@ -525,13 +540,14 @@ void MachineBasicBlock::addSuccessorWithoutProb(MachineBasicBlock *Succ) {
   Succ->addPredecessor(this);
 }
 
-void MachineBasicBlock::removeSuccessor(MachineBasicBlock *Succ) {
+void MachineBasicBlock::removeSuccessor(MachineBasicBlock *Succ,
+                                        bool NormalizeSuccProbs) {
   succ_iterator I = std::find(Successors.begin(), Successors.end(), Succ);
-  removeSuccessor(I);
+  removeSuccessor(I, NormalizeSuccProbs);
 }
 
 MachineBasicBlock::succ_iterator
-MachineBasicBlock::removeSuccessor(succ_iterator I) {
+MachineBasicBlock::removeSuccessor(succ_iterator I, bool NormalizeSuccProbs) {
   assert(I != Successors.end() && "Not a current successor!");
 
   // If probability list is empty it means we don't use it (disabled
@@ -539,6 +555,8 @@ MachineBasicBlock::removeSuccessor(succ_iterator I) {
   if (!Probs.empty()) {
     probability_iterator WI = getProbabilityIterator(I);
     Probs.erase(WI);
+    if (NormalizeSuccProbs)
+      normalizeSuccProbs();
   }
 
   (*I)->removePredecessor(this);
@@ -636,6 +654,7 @@ MachineBasicBlock::transferSuccessorsAndUpdatePHIs(MachineBasicBlock *FromMBB) {
           MO.setMBB(this);
       }
   }
+  normalizeSuccProbs();
 }
 
 bool MachineBasicBlock::isPredecessor(const MachineBasicBlock *MBB) const {
@@ -672,7 +691,7 @@ bool MachineBasicBlock::canFallThrough() {
     // is possible. The isPredicated check is needed because this code can be
     // called during IfConversion, where an instruction which is normally a
     // Barrier is predicated and thus no longer an actual control barrier.
-    return empty() || !back().isBarrier() || TII->isPredicated(&back());
+    return empty() || !back().isBarrier() || TII->isPredicated(back());
   }
 
   // If there is no branch, control always falls through.
@@ -807,7 +826,7 @@ MachineBasicBlock::SplitCriticalEdge(MachineBasicBlock *Succ, Pass *P) {
         E = Terminators.end(); I != E; ++I) {
       if (std::find(NewTerminators.begin(), NewTerminators.end(), *I) ==
           NewTerminators.end())
-       Indexes->removeMachineInstrFromMaps(*I);
+       Indexes->removeMachineInstrFromMaps(**I);
     }
   }
 
@@ -818,13 +837,12 @@ MachineBasicBlock::SplitCriticalEdge(MachineBasicBlock *Succ, Pass *P) {
     TII->InsertBranch(*NMBB, Succ, nullptr, Cond, DL);
 
     if (Indexes) {
-      for (instr_iterator I = NMBB->instr_begin(), E = NMBB->instr_end();
-           I != E; ++I) {
+      for (MachineInstr &MI : NMBB->instrs()) {
         // Some instructions may have been moved to NMBB by updateTerminator(),
         // so we first remove any instruction that already has an index.
-        if (Indexes->hasIndex(&*I))
-          Indexes->removeMachineInstrFromMaps(&*I);
-        Indexes->insertMachineInstrInMaps(&*I);
+        if (Indexes->hasIndex(MI))
+          Indexes->removeMachineInstrFromMaps(MI);
+        Indexes->insertMachineInstrInMaps(MI);
       }
     }
   }
@@ -1088,6 +1106,8 @@ bool MachineBasicBlock::CorrectExtraCFGEdges(MachineBasicBlock *DestA,
     }
   }
 
+  if (Changed)
+    normalizeSuccProbs();
   return Changed;
 }
 
@@ -1161,7 +1181,7 @@ MachineBasicBlock::getProbabilityIterator(MachineBasicBlock::succ_iterator I) {
 
 /// Return whether (physical) register "Reg" has been <def>ined and not <kill>ed
 /// as of just before "MI".
-/// 
+///
 /// Search is localised to a neighborhood of
 /// Neighborhood instructions before (searching for defs or kills) and N
 /// instructions after (searching just for defs) MI.
@@ -1178,33 +1198,33 @@ MachineBasicBlock::computeRegisterLiveness(const TargetRegisterInfo *TRI,
     do {
       --I;
 
-      MachineOperandIteratorBase::PhysRegInfo Analysis =
-        ConstMIOperands(I).analyzePhysReg(Reg, TRI);
+      MachineOperandIteratorBase::PhysRegInfo Info =
+          ConstMIOperands(*I).analyzePhysReg(Reg, TRI);
 
-      if (Analysis.Defines)
-        // Outputs happen after inputs so they take precedence if both are
-        // present.
-        return Analysis.DefinesDead ? LQR_Dead : LQR_Live;
+      // Defs happen after uses so they take precedence if both are present.
 
-      if (Analysis.Kills || Analysis.Clobbers)
-        // Register killed, so isn't live.
+      // Register is dead after a dead def of the full register.
+      if (Info.DeadDef)
         return LQR_Dead;
-
-      else if (Analysis.ReadsOverlap)
-        // Defined or read without a previous kill - live.
-        return Analysis.Reads ? LQR_Live : LQR_OverlappingLive;
-
+      // Register is (at least partially) live after a def.
+      if (Info.Defined)
+        return LQR_Live;
+      // Register is dead after a full kill or clobber and no def.
+      if (Info.Killed || Info.Clobbered)
+        return LQR_Dead;
+      // Register must be live if we read it.
+      if (Info.Read)
+        return LQR_Live;
     } while (I != begin() && --N > 0);
   }
 
   // Did we get to the start of the block?
   if (I == begin()) {
     // If so, the register's state is definitely defined by the live-in state.
-    for (MCRegAliasIterator RAI(Reg, TRI, /*IncludeSelf=*/true);
-         RAI.isValid(); ++RAI) {
+    for (MCRegAliasIterator RAI(Reg, TRI, /*IncludeSelf=*/true); RAI.isValid();
+         ++RAI)
       if (isLiveIn(*RAI))
-        return (*RAI == Reg) ? LQR_Live : LQR_OverlappingLive;
-    }
+        return LQR_Live;
 
     return LQR_Dead;
   }
@@ -1216,16 +1236,14 @@ MachineBasicBlock::computeRegisterLiveness(const TargetRegisterInfo *TRI,
   // If this is the last insn in the block, don't search forwards.
   if (I != end()) {
     for (++I; I != end() && N > 0; ++I, --N) {
-      MachineOperandIteratorBase::PhysRegInfo Analysis =
-        ConstMIOperands(I).analyzePhysReg(Reg, TRI);
+      MachineOperandIteratorBase::PhysRegInfo Info =
+          ConstMIOperands(*I).analyzePhysReg(Reg, TRI);
 
-      if (Analysis.ReadsOverlap)
-        // Used, therefore must have been live.
-        return (Analysis.Reads) ?
-          LQR_Live : LQR_OverlappingLive;
-
-      else if (Analysis.Clobbers || Analysis.Defines)
-        // Defined (but not read) therefore cannot have been live.
+      // Register is live when we read it here.
+      if (Info.Read)
+        return LQR_Live;
+      // Register is dead if we can fully overwrite or clobber it here.
+      if (Info.FullyDefined || Info.Clobbered)
         return LQR_Dead;
     }
   }

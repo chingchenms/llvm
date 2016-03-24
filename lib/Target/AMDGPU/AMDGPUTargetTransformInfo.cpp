@@ -21,6 +21,7 @@
 #include "llvm/Analysis/ValueTracking.h"
 #include "llvm/CodeGen/BasicTTIImpl.h"
 #include "llvm/IR/Module.h"
+#include "llvm/IR/Intrinsics.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Target/CostTable.h"
 #include "llvm/Target/TargetLowering.h"
@@ -74,11 +75,24 @@ unsigned AMDGPUTTIImpl::getNumberOfRegisters(bool Vec) {
   return 4 * 128; // XXX - 4 channels. Should these count as vector instead?
 }
 
-unsigned AMDGPUTTIImpl::getRegisterBitWidth(bool) { return 32; }
+unsigned AMDGPUTTIImpl::getRegisterBitWidth(bool Vector) {
+  return Vector ? 0 : 32;
+}
 
 unsigned AMDGPUTTIImpl::getMaxInterleaveFactor(unsigned VF) {
   // Semi-arbitrary large amount.
   return 64;
+}
+
+unsigned AMDGPUTTIImpl::getCFInstrCost(unsigned Opcode) {
+  // XXX - For some reason this isn't called for switch.
+  switch (Opcode) {
+  case Instruction::Br:
+  case Instruction::Ret:
+    return 10;
+  default:
+    return BaseT::getCFInstrCost(Opcode);
+  }
 }
 
 int AMDGPUTTIImpl::getVectorInstrCost(unsigned Opcode, Type *ValTy,
@@ -90,4 +104,114 @@ int AMDGPUTTIImpl::getVectorInstrCost(unsigned Opcode, Type *ValTy,
   default:
     return BaseT::getVectorInstrCost(Opcode, ValTy, Index);
   }
+}
+
+static bool isIntrinsicSourceOfDivergence(const TargetIntrinsicInfo *TII,
+                                          const IntrinsicInst *I) {
+  switch (I->getIntrinsicID()) {
+  default:
+    return false;
+  case Intrinsic::not_intrinsic:
+    // This means we have an intrinsic that isn't defined in
+    // IntrinsicsAMDGPU.td
+    break;
+
+  case Intrinsic::amdgcn_workitem_id_x:
+  case Intrinsic::amdgcn_workitem_id_y:
+  case Intrinsic::amdgcn_workitem_id_z:
+  case Intrinsic::amdgcn_interp_p1:
+  case Intrinsic::amdgcn_interp_p2:
+  case Intrinsic::amdgcn_mbcnt_hi:
+  case Intrinsic::amdgcn_mbcnt_lo:
+  case Intrinsic::r600_read_tidig_x:
+  case Intrinsic::r600_read_tidig_y:
+  case Intrinsic::r600_read_tidig_z:
+  case Intrinsic::amdgcn_image_atomic_swap:
+  case Intrinsic::amdgcn_image_atomic_add:
+  case Intrinsic::amdgcn_image_atomic_sub:
+  case Intrinsic::amdgcn_image_atomic_smin:
+  case Intrinsic::amdgcn_image_atomic_umin:
+  case Intrinsic::amdgcn_image_atomic_smax:
+  case Intrinsic::amdgcn_image_atomic_umax:
+  case Intrinsic::amdgcn_image_atomic_and:
+  case Intrinsic::amdgcn_image_atomic_or:
+  case Intrinsic::amdgcn_image_atomic_xor:
+  case Intrinsic::amdgcn_image_atomic_inc:
+  case Intrinsic::amdgcn_image_atomic_dec:
+  case Intrinsic::amdgcn_image_atomic_cmpswap:
+  case Intrinsic::amdgcn_buffer_atomic_swap:
+  case Intrinsic::amdgcn_buffer_atomic_add:
+  case Intrinsic::amdgcn_buffer_atomic_sub:
+  case Intrinsic::amdgcn_buffer_atomic_smin:
+  case Intrinsic::amdgcn_buffer_atomic_umin:
+  case Intrinsic::amdgcn_buffer_atomic_smax:
+  case Intrinsic::amdgcn_buffer_atomic_umax:
+  case Intrinsic::amdgcn_buffer_atomic_and:
+  case Intrinsic::amdgcn_buffer_atomic_or:
+  case Intrinsic::amdgcn_buffer_atomic_xor:
+  case Intrinsic::amdgcn_buffer_atomic_cmpswap:
+    return true;
+  }
+
+  StringRef Name = I->getCalledFunction()->getName();
+  switch (TII->lookupName((const char *)Name.bytes_begin(), Name.size())) {
+  default:
+    return false;
+  case AMDGPUIntrinsic::SI_tid:
+  case AMDGPUIntrinsic::SI_fs_interp:
+    return true;
+  }
+}
+
+static bool isArgPassedInSGPR(const Argument *A) {
+  const Function *F = A->getParent();
+  unsigned ShaderType = AMDGPU::getShaderType(*F);
+
+  // Arguments to compute shaders are never a source of divergence.
+  if (ShaderType == ShaderType::COMPUTE)
+    return true;
+
+  // For non-compute shaders, SGPR inputs are marked with either inreg or byval.
+  if (F->getAttributes().hasAttribute(A->getArgNo() + 1, Attribute::InReg) ||
+      F->getAttributes().hasAttribute(A->getArgNo() + 1, Attribute::ByVal))
+    return true;
+
+  // Everything else is in VGPRs.
+  return false;
+}
+
+///
+/// \returns true if the result of the value could potentially be
+/// different across workitems in a wavefront.
+bool AMDGPUTTIImpl::isSourceOfDivergence(const Value *V) const {
+
+  if (const Argument *A = dyn_cast<Argument>(V))
+    return !isArgPassedInSGPR(A);
+
+  // Loads from the private address space are divergent, because threads
+  // can execute the load instruction with the same inputs and get different
+  // results.
+  //
+  // All other loads are not divergent, because if threads issue loads with the
+  // same arguments, they will always get the same result.
+  if (const LoadInst *Load = dyn_cast<LoadInst>(V))
+    return Load->getPointerAddressSpace() == AMDGPUAS::PRIVATE_ADDRESS;
+
+  // Atomics are divergent because they are executed sequentially: when an
+  // atomic operation refers to the same address in each thread, then each
+  // thread after the first sees the value written by the previous thread as
+  // original value.
+  if (isa<AtomicRMWInst>(V) || isa<AtomicCmpXchgInst>(V))
+    return true;
+
+  if (const IntrinsicInst *Intrinsic = dyn_cast<IntrinsicInst>(V)) {
+    const TargetMachine &TM = getTLI()->getTargetMachine();
+    return isIntrinsicSourceOfDivergence(TM.getIntrinsicInfo(), Intrinsic);
+  }
+
+  // Assume all function calls are a source of divergence.
+  if (isa<CallInst>(V) || isa<InvokeInst>(V))
+    return true;
+
+  return false;
 }

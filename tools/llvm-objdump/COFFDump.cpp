@@ -252,6 +252,56 @@ printSEHTable(const COFFObjectFile *Obj, uint32_t TableVA, int Count) {
   outs() << "\n\n";
 }
 
+template <typename T>
+static void printTLSDirectoryT(const coff_tls_directory<T> *TLSDir) {
+  size_t FormatWidth = sizeof(T) * 2;
+  outs() << "TLS directory:"
+         << "\n  StartAddressOfRawData: "
+         << format_hex(TLSDir->StartAddressOfRawData, FormatWidth)
+         << "\n  EndAddressOfRawData: "
+         << format_hex(TLSDir->EndAddressOfRawData, FormatWidth)
+         << "\n  AddressOfIndex: "
+         << format_hex(TLSDir->AddressOfIndex, FormatWidth)
+         << "\n  AddressOfCallBacks: "
+         << format_hex(TLSDir->AddressOfCallBacks, FormatWidth)
+         << "\n  SizeOfZeroFill: "
+         << TLSDir->SizeOfZeroFill
+         << "\n  Characteristics: "
+         << TLSDir->Characteristics
+         << "\n  Alignment: "
+         << TLSDir->getAlignment()
+         << "\n\n";
+}
+
+static void printTLSDirectory(const COFFObjectFile *Obj) {
+  const pe32_header *PE32Header;
+  error(Obj->getPE32Header(PE32Header));
+
+  const pe32plus_header *PE32PlusHeader;
+  error(Obj->getPE32PlusHeader(PE32PlusHeader));
+
+  // Skip if it's not executable.
+  if (!PE32Header && !PE32PlusHeader)
+    return;
+
+  const data_directory *DataDir;
+  error(Obj->getDataDirectory(COFF::TLS_TABLE, DataDir));
+  uintptr_t IntPtr = 0;
+  if (DataDir->RelativeVirtualAddress == 0)
+    return;
+  error(Obj->getRvaPtr(DataDir->RelativeVirtualAddress, IntPtr));
+
+  if (PE32Header) {
+    auto *TLSDir = reinterpret_cast<const coff_tls_directory32 *>(IntPtr);
+    printTLSDirectoryT(TLSDir);
+  } else {
+    auto *TLSDir = reinterpret_cast<const coff_tls_directory64 *>(IntPtr);
+    printTLSDirectoryT(TLSDir);
+  }
+
+  outs() << "\n";
+}
+
 static void printLoadConfiguration(const COFFObjectFile *Obj) {
   // Skip if it's not executable.
   const pe32_header *PE32Header;
@@ -358,13 +408,30 @@ static void printExportTable(const COFFObjectFile *Obj) {
     uint32_t RVA;
     if (I->getExportRVA(RVA))
       return;
-    outs() << format("    % 4d %# 8x", Ordinal, RVA);
+    bool IsForwarder;
+    if (I->isForwarder(IsForwarder))
+      return;
+
+    if (IsForwarder) {
+      // Export table entries can be used to re-export symbols that
+      // this COFF file is imported from some DLLs. This is rare.
+      // In most cases IsForwarder is false.
+      outs() << format("    % 4d         ", Ordinal);
+    } else {
+      outs() << format("    % 4d %# 8x", Ordinal, RVA);
+    }
 
     StringRef Name;
     if (I->getSymbolName(Name))
       continue;
     if (!Name.empty())
       outs() << "  " << Name;
+    if (IsForwarder) {
+      StringRef S;
+      if (I->getForwardTo(S))
+        return;
+      outs() << " (forwarded to " << S << ")";
+    }
     outs() << "\n";
   }
 }
@@ -538,7 +605,57 @@ void llvm::printCOFFUnwindInfo(const COFFObjectFile *Obj) {
 
 void llvm::printCOFFFileHeader(const object::ObjectFile *Obj) {
   const COFFObjectFile *file = dyn_cast<const COFFObjectFile>(Obj);
+  printTLSDirectory(file);
   printLoadConfiguration(file);
   printImportTables(file);
   printExportTable(file);
+}
+
+void llvm::printCOFFSymbolTable(const COFFObjectFile *coff) {
+  for (unsigned SI = 0, SE = coff->getNumberOfSymbols(); SI != SE; ++SI) {
+    ErrorOr<COFFSymbolRef> Symbol = coff->getSymbol(SI);
+    StringRef Name;
+    error(Symbol.getError());
+    error(coff->getSymbolName(*Symbol, Name));
+
+    outs() << "[" << format("%2d", SI) << "]"
+           << "(sec " << format("%2d", int(Symbol->getSectionNumber())) << ")"
+           << "(fl 0x00)" // Flag bits, which COFF doesn't have.
+           << "(ty " << format("%3x", unsigned(Symbol->getType())) << ")"
+           << "(scl " << format("%3x", unsigned(Symbol->getStorageClass())) << ") "
+           << "(nx " << unsigned(Symbol->getNumberOfAuxSymbols()) << ") "
+           << "0x" << format("%08x", unsigned(Symbol->getValue())) << " "
+           << Name << "\n";
+
+    for (unsigned AI = 0, AE = Symbol->getNumberOfAuxSymbols(); AI < AE; ++AI, ++SI) {
+      if (Symbol->isSectionDefinition()) {
+        const coff_aux_section_definition *asd;
+        error(coff->getAuxSymbol<coff_aux_section_definition>(SI + 1, asd));
+
+        int32_t AuxNumber = asd->getNumber(Symbol->isBigObj());
+
+        outs() << "AUX "
+               << format("scnlen 0x%x nreloc %d nlnno %d checksum 0x%x "
+                         , unsigned(asd->Length)
+                         , unsigned(asd->NumberOfRelocations)
+                         , unsigned(asd->NumberOfLinenumbers)
+                         , unsigned(asd->CheckSum))
+               << format("assoc %d comdat %d\n"
+                         , unsigned(AuxNumber)
+                         , unsigned(asd->Selection));
+      } else if (Symbol->isFileRecord()) {
+        const char *FileName;
+        error(coff->getAuxSymbol<char>(SI + 1, FileName));
+
+        StringRef Name(FileName, Symbol->getNumberOfAuxSymbols() *
+                                     coff->getSymbolTableEntrySize());
+        outs() << "AUX " << Name.rtrim(StringRef("\0", 1))  << '\n';
+
+        SI = SI + Symbol->getNumberOfAuxSymbols();
+        break;
+      } else {
+        outs() << "AUX Unknown\n";
+      }
+    }
+  }
 }

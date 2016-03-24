@@ -1,5 +1,5 @@
-; RUN: llc -mtriple=i686-pc-windows-msvc < %s | FileCheck --check-prefix=X86 %s
-; RUN: llc -mtriple=x86_64-pc-windows-msvc < %s | FileCheck --check-prefix=X64 %s
+; RUN: llc -mtriple=i686-pc-windows-msvc -stack-symbol-ordering=0 < %s | FileCheck --check-prefix=X86 %s
+; RUN: llc -mtriple=x86_64-pc-windows-msvc -stack-symbol-ordering=0 < %s | FileCheck --check-prefix=X64 %s
 
 declare i32 @__CxxFrameHandler3(...)
 declare void @Dtor(i64* %o)
@@ -17,9 +17,9 @@ invoke.cont:                                      ; preds = %entry
   ret void
 
 ehcleanup:                                        ; preds = %entry
-  %0 = cleanuppad []
-  call void @Dtor(i64* %o)
-  cleanupret %0 unwind to caller
+  %0 = cleanuppad within none []
+  call void @Dtor(i64* %o) [ "funclet"(token %0) ]
+  cleanupret from %0 unwind to caller
 }
 
 ; X86-LABEL: _realigned_cleanup: # @realigned_cleanup

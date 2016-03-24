@@ -204,14 +204,15 @@ linkage:
     (``STB_LOCAL`` in the case of ELF) in the object file. This
     corresponds to the notion of the '``static``' keyword in C.
 ``available_externally``
-    Globals with "``available_externally``" linkage are never emitted
-    into the object file corresponding to the LLVM module. They exist to
-    allow inlining and other optimizations to take place given knowledge
-    of the definition of the global, which is known to be somewhere
-    outside the module. Globals with ``available_externally`` linkage
-    are allowed to be discarded at will, and are otherwise the same as
-    ``linkonce_odr``. This linkage type is only allowed on definitions,
-    not declarations.
+    Globals with "``available_externally``" linkage are never emitted into
+    the object file corresponding to the LLVM module. From the linker's
+    perspective, an ``available_externally`` global is equivalent to
+    an external declaration. They exist to allow inlining and other
+    optimizations to take place given knowledge of the definition of the
+    global, which is known to be somewhere outside the module. Globals
+    with ``available_externally`` linkage are allowed to be discarded at
+    will, and allow inlining and other optimizations. This linkage type is
+    only allowed on definitions, not declarations.
 ``linkonce``
     Globals with "``linkonce``" linkage are merged with other globals of
     the same name when linkage occurs. This can be used to implement
@@ -906,8 +907,7 @@ Currently, only the following parameter attributes are defined:
 ``zeroext``
     This indicates to the code generator that the parameter or return
     value should be zero-extended to the extent required by the target's
-    ABI (which is usually 32-bits, but is 8-bits for a i1 on x86-64) by
-    the caller (for a parameter) or the callee (for a return value).
+    ABI by the caller (for a parameter) or the callee (for a return value).
 ``signext``
     This indicates to the code generator that the parameter or return
     value should be sign-extended to the extent required by the target's
@@ -1238,10 +1238,34 @@ example:
     function call are also considered to be cold; and, thus, given low
     weight.
 ``convergent``
-    This attribute indicates that the callee is dependent on a convergent
-    thread execution pattern under certain parallel execution models.
-    Transformations that are execution model agnostic may not make the execution
-    of a convergent operation control dependent on any additional values.
+    In some parallel execution models, there exist operations that cannot be
+    made control-dependent on any additional values.  We call such operations
+    ``convergent``, and mark them with this attribute.
+
+    The ``convergent`` attribute may appear on functions or call/invoke
+    instructions.  When it appears on a function, it indicates that calls to
+    this function should not be made control-dependent on additional values.
+    For example, the intrinsic ``llvm.cuda.syncthreads`` is ``convergent``, so
+    calls to this intrinsic cannot be made control-dependent on additional
+    values.
+
+    When it appears on a call/invoke, the ``convergent`` attribute indicates
+    that we should treat the call as though we're calling a convergent
+    function.  This is particularly useful on indirect calls; without this we
+    may treat such calls as though the target is non-convergent.
+
+    The optimizer may remove the ``convergent`` attribute on functions when it
+    can prove that the function does not execute any convergent operations.
+    Similarly, the optimizer may remove ``convergent`` on calls/invokes when it
+    can prove that the call/invoke cannot call a convergent function.
+``inaccessiblememonly``
+    This attribute indicates that the function may only access memory that
+    is not accessible by the module being compiled. This is a weaker form
+    of ``readnone``.
+``inaccessiblemem_or_argmemonly``
+    This attribute indicates that the function may only access memory that is
+    either not accessible by the module being compiled, or is pointed to
+    by its pointer arguments. This is a weaker form of  ``argmemonly``
 ``inlinehint``
     This attribute indicates that the source code contained a hint that
     inlining this function is desirable (such as the "inline" keyword in
@@ -1502,13 +1526,15 @@ operand bundle to not miscompile programs containing it.
   ways before control is transferred to the callee or invokee.
 - Calls and invokes with operand bundles have unknown read / write
   effect on the heap on entry and exit (even if the call target is
-  ``readnone`` or ``readonly``), unless they're overriden with
+  ``readnone`` or ``readonly``), unless they're overridden with
   callsite specific attributes.
 - An operand bundle at a call site cannot change the implementation
   of the called function.  Inter-procedural optimizations work as
   usual as long as they take into account the first two properties.
 
 More specific types of operand bundles are described below.
+
+.. _deopt_opbundles:
 
 Deoptimization Operand Bundles
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -1569,6 +1595,41 @@ deoptimization state in a way that syntactically prepending the
 caller's deoptimization state to the callee's deoptimization state is
 semantically equivalent to composing the caller's deoptimization
 continuation after the callee's deoptimization continuation.
+
+.. _ob_funclet:
+
+Funclet Operand Bundles
+^^^^^^^^^^^^^^^^^^^^^^^
+
+Funclet operand bundles are characterized by the ``"funclet"``
+operand bundle tag.  These operand bundles indicate that a call site
+is within a particular funclet.  There can be at most one
+``"funclet"`` operand bundle attached to a call site and it must have
+exactly one bundle operand.
+
+If any funclet EH pads have been "entered" but not "exited" (per the
+`description in the EH doc\ <ExceptionHandling.html#wineh-constraints>`_),
+it is undefined behavior to execute a ``call`` or ``invoke`` which:
+
+* does not have a ``"funclet"`` bundle and is not a ``call`` to a nounwind
+  intrinsic, or
+* has a ``"funclet"`` bundle whose operand is not the most-recently-entered
+  not-yet-exited funclet EH pad.
+
+Similarly, if no funclet EH pads have been entered-but-not-yet-exited,
+executing a ``call`` or ``invoke`` with a ``"funclet"`` bundle is undefined behavior.
+
+GC Transition Operand Bundles
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+GC transition operand bundles are characterized by the
+``"gc-transition"`` operand bundle tag. These operand bundles mark a
+call as a transition between a function with one GC strategy to a
+function with a different GC strategy. If coordinating the transition
+between GC strategies requires additional code generation at the call
+site, these bundles may contain any values that are needed by the
+generated code.  For more details, see :ref:`GC Transitions
+<gc_transition_args>`.
 
 .. _moduleasm:
 
@@ -3087,7 +3148,7 @@ the same register to an output and an input. If this is not safe (e.g. if the
 assembly contains two instructions, where the first writes to one output, and
 the second reads an input and writes to a second output), then the "``&``"
 modifier must be used (e.g. "``=&r``") to specify that the output is an
-"early-clobber" output. Marking an ouput as "early-clobber" ensures that LLVM
+"early-clobber" output. Marking an output as "early-clobber" ensures that LLVM
 will not use the same register for any inputs (other than an input tied to this
 output).
 
@@ -4510,6 +4571,17 @@ For example:
 
    !0 = !{!"llvm.loop.unroll.full"}
 
+'``llvm.loop.licm_versioning.disable``' Metadata
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+This metadata indicates that the loop should not be versioned for the purpose
+of enabling loop-invariant code motion (LICM). The metadata has a single operand
+which is the string ``llvm.loop.licm_versioning.disable``. For example:
+
+.. code-block:: llvm
+
+   !0 = !{!"llvm.loop.licm_versioning.disable"}
+
 '``llvm.mem``'
 ^^^^^^^^^^^^^^^
 
@@ -5001,12 +5073,9 @@ control flow, not values (the one exception being the
 The terminator instructions are: ':ref:`ret <i_ret>`',
 ':ref:`br <i_br>`', ':ref:`switch <i_switch>`',
 ':ref:`indirectbr <i_indirectbr>`', ':ref:`invoke <i_invoke>`',
-':ref:`resume <i_resume>`', ':ref:`catchpad <i_catchpad>`',
-':ref:`catchendpad <i_catchendpad>`',
+':ref:`resume <i_resume>`', ':ref:`catchswitch <i_catchswitch>`',
 ':ref:`catchret <i_catchret>`',
-':ref:`cleanupendpad <i_cleanupendpad>`',
 ':ref:`cleanupret <i_cleanupret>`',
-':ref:`terminatepad <i_terminatepad>`',
 and ':ref:`unreachable <i_unreachable>`'.
 
 .. _i_ret:
@@ -5362,165 +5431,61 @@ Example:
 
       resume { i8*, i32 } %exn
 
-.. _i_catchpad:
+.. _i_catchswitch:
 
-'``catchpad``' Instruction
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-Syntax:
-"""""""
-
-::
-
-      <resultval> = catchpad [<args>*]
-          to label <normal label> unwind label <exception label>
-
-Overview:
-"""""""""
-
-The '``catchpad``' instruction is used by `LLVM's exception handling
-system <ExceptionHandling.html#overview>`_ to specify that a basic block
-is a catch block --- one where a personality routine attempts to transfer
-control to catch an exception.
-The ``args`` correspond to whatever information the personality
-routine requires to know if this is an appropriate place to catch the
-exception. Control is transfered to the ``exception`` label if the
-``catchpad`` is not an appropriate handler for the in-flight exception.
-The ``normal`` label should contain the code found in the ``catch``
-portion of a ``try``/``catch`` sequence. The ``resultval`` has the type
-:ref:`token <t_token>` and is used to match the ``catchpad`` to
-corresponding :ref:`catchrets <i_catchret>`.
-
-Arguments:
-""""""""""
-
-The instruction takes a list of arbitrary values which are interpreted
-by the :ref:`personality function <personalityfn>`.
-
-The ``catchpad`` must be provided a ``normal`` label to transfer control
-to if the ``catchpad`` matches the exception and an ``exception``
-label to transfer control to if it doesn't.
-
-Semantics:
-""""""""""
-
-When the call stack is being unwound due to an exception being thrown,
-the exception is compared against the ``args``. If it doesn't match,
-then control is transfered to the ``exception`` basic block.
-As with calling conventions, how the personality function results are
-represented in LLVM IR is target specific.
-
-The ``catchpad`` instruction has several restrictions:
-
--  A catch block is a basic block which is the unwind destination of
-   an exceptional instruction.
--  A catch block must have a '``catchpad``' instruction as its
-   first non-PHI instruction.
--  A catch block's ``exception`` edge must refer to a catch block or a
-   catch-end block.
--  There can be only one '``catchpad``' instruction within the
-   catch block.
--  A basic block that is not a catch block may not include a
-   '``catchpad``' instruction.
--  A catch block which has another catch block as a predecessor may not have
-   any other predecessors.
--  It is undefined behavior for control to transfer from a ``catchpad`` to a
-   ``ret`` without first executing a ``catchret`` that consumes the
-   ``catchpad`` or unwinding through its ``catchendpad``.
--  It is undefined behavior for control to transfer from a ``catchpad`` to
-   itself without first executing a ``catchret`` that consumes the
-   ``catchpad`` or unwinding through its ``catchendpad``.
-
-Example:
-""""""""
-
-.. code-block:: llvm
-
-      ;; A catch block which can catch an integer.
-      %tok = catchpad [i8** @_ZTIi]
-        to label %int.handler unwind label %terminate
-
-.. _i_catchendpad:
-
-'``catchendpad``' Instruction
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+'``catchswitch``' Instruction
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 Syntax:
 """""""
 
 ::
 
-      catchendpad unwind label <nextaction>
-      catchendpad unwind to caller
+      <resultval> = catchswitch within <parent> [ label <handler1>, label <handler2>, ... ] unwind to caller
+      <resultval> = catchswitch within <parent> [ label <handler1>, label <handler2>, ... ] unwind label <default>
 
 Overview:
 """""""""
 
-The '``catchendpad``' instruction is used by `LLVM's exception handling
-system <ExceptionHandling.html#overview>`_ to communicate to the
-:ref:`personality function <personalityfn>` which invokes are associated
-with a chain of :ref:`catchpad <i_catchpad>` instructions; propagating an
-exception out of a catch handler is represented by unwinding through its
-``catchendpad``.  Unwinding to the outer scope when a chain of catch handlers
-do not handle an exception is also represented by unwinding through their
-``catchendpad``.
-
-The ``nextaction`` label indicates where control should transfer to if
-none of the ``catchpad`` instructions are suitable for catching the
-in-flight exception.
-
-If a ``nextaction`` label is not present, the instruction unwinds out of
-its parent function. The
-:ref:`personality function <personalityfn>` will continue processing
-exception handling actions in the caller.
+The '``catchswitch``' instruction is used by `LLVM's exception handling system
+<ExceptionHandling.html#overview>`_ to describe the set of possible catch handlers
+that may be executed by the :ref:`EH personality routine <personalityfn>`.
 
 Arguments:
 """"""""""
 
-The instruction optionally takes a label, ``nextaction``, indicating
-where control should transfer to if none of the preceding
-``catchpad`` instructions are suitable for the in-flight exception.
+The ``parent`` argument is the token of the funclet that contains the
+``catchswitch`` instruction. If the ``catchswitch`` is not inside a funclet,
+this operand may be the token ``none``.
+
+The ``default`` argument is the label of another basic block beginning with
+either a ``cleanuppad`` or ``catchswitch`` instruction.  This unwind destination
+must be a legal target with respect to the ``parent`` links, as described in
+the `exception handling documentation\ <ExceptionHandling.html#wineh-constraints>`_.
+
+The ``handlers`` are a nonempty list of successor blocks that each begin with a
+:ref:`catchpad <i_catchpad>` instruction.
 
 Semantics:
 """"""""""
 
-When the call stack is being unwound due to an exception being thrown
-and none of the constituent ``catchpad`` instructions match, then
-control is transfered to ``nextaction`` if it is present. If it is not
-present, control is transfered to the caller.
+Executing this instruction transfers control to one of the successors in
+``handlers``, if appropriate, or continues to unwind via the unwind label if
+present.
 
-The ``catchendpad`` instruction has several restrictions:
-
--  A catch-end block is a basic block which is the unwind destination of
-   an exceptional instruction.
--  A catch-end block must have a '``catchendpad``' instruction as its
-   first non-PHI instruction.
--  There can be only one '``catchendpad``' instruction within the
-   catch-end block.
--  A basic block that is not a catch-end block may not include a
-   '``catchendpad``' instruction.
--  Exactly one catch block may unwind to a ``catchendpad``.
-- It is undefined behavior to execute a ``catchendpad`` if none of the
-  '``catchpad``'s chained to it have been executed.
-- It is undefined behavior to execute a ``catchendpad`` twice without an
-  intervening execution of one or more of the '``catchpad``'s chained to it.
-- It is undefined behavior to execute a ``catchendpad`` if, after the most
-  recent execution of the normal successor edge of any ``catchpad`` chained
-  to it, some ``catchret`` consuming that ``catchpad`` has already been
-  executed.
-- It is undefined behavior to execute a ``catchendpad`` if, after the most
-  recent execution of the normal successor edge of any ``catchpad`` chained
-  to it, any other ``catchpad`` or ``cleanuppad`` has been executed but has
-  not had a corresponding
-  ``catchret``/``cleanupret``/``catchendpad``/``cleanupendpad`` executed.
+The ``catchswitch`` is both a terminator and a "pad" instruction, meaning that
+it must be both the first non-phi instruction and last instruction in the basic
+block. Therefore, it must be the only non-phi instruction in the block.
 
 Example:
 """"""""
 
 .. code-block:: llvm
 
-      catchendpad unwind label %terminate
-      catchendpad unwind to caller
+    dispatch1:
+      %cs1 = catchswitch within none [label %handler0, label %handler1] unwind to caller
+    dispatch2:
+      %cs2 = catchswitch within %parenthandler [label %handler0] unwind label %cleanup
 
 .. _i_catchret:
 
@@ -5532,7 +5497,7 @@ Syntax:
 
 ::
 
-      catchret <value> to label <normal>
+      catchret from <token> to label <normal>
 
 Overview:
 """""""""
@@ -5552,105 +5517,23 @@ transfer to next.
 Semantics:
 """"""""""
 
-The '``catchret``' instruction ends the existing (in-flight) exception
-whose unwinding was interrupted with a
-:ref:`catchpad <i_catchpad>` instruction.
-The :ref:`personality function <personalityfn>` gets a chance to execute
-arbitrary code to, for example, run a C++ destructor.
-Control then transfers to ``normal``.
-It may be passed an optional, personality specific, value.
+The '``catchret``' instruction ends an existing (in-flight) exception whose
+unwinding was interrupted with a :ref:`catchpad <i_catchpad>` instruction.  The
+:ref:`personality function <personalityfn>` gets a chance to execute arbitrary
+code to, for example, destroy the active exception.  Control then transfers to
+``normal``.
 
-It is undefined behavior to execute a ``catchret`` whose ``catchpad`` has
-not been executed.
-
-It is undefined behavior to execute a ``catchret`` if, after the most recent
-execution of its ``catchpad``, some ``catchret`` or ``catchendpad`` linked
-to the same ``catchpad`` has already been executed.
-
-It is undefined behavior to execute a ``catchret`` if, after the most recent
-execution of its ``catchpad``, any other ``catchpad`` or ``cleanuppad`` has
-been executed but has not had a corresponding
-``catchret``/``cleanupret``/``catchendpad``/``cleanupendpad`` executed.
+The ``token`` argument must be a token produced by a ``catchpad`` instruction.
+If the specified ``catchpad`` is not the most-recently-entered not-yet-exited
+funclet pad (as described in the `EH documentation\ <ExceptionHandling.html#wineh-constraints>`_),
+the ``catchret``'s behavior is undefined.
 
 Example:
 """"""""
 
 .. code-block:: llvm
 
-      catchret %catch label %continue
-
-.. _i_cleanupendpad:
-
-'``cleanupendpad``' Instruction
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-Syntax:
-"""""""
-
-::
-
-      cleanupendpad <value> unwind label <nextaction>
-      cleanupendpad <value> unwind to caller
-
-Overview:
-"""""""""
-
-The '``cleanupendpad``' instruction is used by `LLVM's exception handling
-system <ExceptionHandling.html#overview>`_ to communicate to the
-:ref:`personality function <personalityfn>` which invokes are associated
-with a :ref:`cleanuppad <i_cleanuppad>` instructions; propagating an exception
-out of a cleanup is represented by unwinding through its ``cleanupendpad``.
-
-The ``nextaction`` label indicates where control should unwind to next, in the
-event that a cleanup is exited by means of an(other) exception being raised.
-
-If a ``nextaction`` label is not present, the instruction unwinds out of
-its parent function. The
-:ref:`personality function <personalityfn>` will continue processing
-exception handling actions in the caller.
-
-Arguments:
-""""""""""
-
-The '``cleanupendpad``' instruction requires one argument, which indicates
-which ``cleanuppad`` it exits, and must be a :ref:`cleanuppad <i_cleanuppad>`.
-It also has an optional successor, ``nextaction``, indicating where control
-should transfer to.
-
-Semantics:
-""""""""""
-
-When and exception propagates to a ``cleanupendpad``, control is transfered to
-``nextaction`` if it is present. If it is not present, control is transfered to
-the caller.
-
-The ``cleanupendpad`` instruction has several restrictions:
-
--  A cleanup-end block is a basic block which is the unwind destination of
-   an exceptional instruction.
--  A cleanup-end block must have a '``cleanupendpad``' instruction as its
-   first non-PHI instruction.
--  There can be only one '``cleanupendpad``' instruction within the
-   cleanup-end block.
--  A basic block that is not a cleanup-end block may not include a
-   '``cleanupendpad``' instruction.
-- It is undefined behavior to execute a ``cleanupendpad`` whose ``cleanuppad``
-  has not been executed.
-- It is undefined behavior to execute a ``cleanupendpad`` if, after the most
-  recent execution of its ``cleanuppad``, some ``cleanupret`` or ``cleanupendpad``
-  consuming the same ``cleanuppad`` has already been executed.
-- It is undefined behavior to execute a ``cleanupendpad`` if, after the most
-  recent execution of its ``cleanuppad``, any other ``cleanuppad`` or
-  ``catchpad`` has been executed but has not had a corresponding
-  ``cleanupret``/``catchret``/``cleanupendpad``/``catchendpad`` executed.
-
-Example:
-""""""""
-
-.. code-block:: llvm
-
-      cleanupendpad %cleanup unwind label %terminate
-      cleanupendpad %cleanup unwind to caller
+      catchret from %catch label %continue
 
 .. _i_cleanupret:
 
@@ -5662,8 +5545,8 @@ Syntax:
 
 ::
 
-      cleanupret <value> unwind label <continue>
-      cleanupret <value> unwind to caller
+      cleanupret from <value> unwind label <continue>
+      cleanupret from <value> unwind to caller
 
 Overview:
 """""""""
@@ -5677,7 +5560,15 @@ Arguments:
 
 The '``cleanupret``' instruction requires one argument, which indicates
 which ``cleanuppad`` it exits, and must be a :ref:`cleanuppad <i_cleanuppad>`.
-It also has an optional successor, ``continue``.
+If the specified ``cleanuppad`` is not the most-recently-entered not-yet-exited
+funclet pad (as described in the `EH documentation\ <ExceptionHandling.html#wineh-constraints>`_),
+the ``cleanupret``'s behavior is undefined.
+
+The '``cleanupret``' instruction also has an optional successor, ``continue``,
+which must be the label of another basic block beginning with either a
+``cleanuppad`` or ``catchswitch`` instruction.  This unwind destination must
+be a legal target with respect to the ``parent`` links, as described in the
+`exception handling documentation\ <ExceptionHandling.html#wineh-constraints>`_.
 
 Semantics:
 """"""""""
@@ -5687,89 +5578,13 @@ The '``cleanupret``' instruction indicates to the
 :ref:`cleanuppad <i_cleanuppad>` it transferred control to has ended.
 It transfers control to ``continue`` or unwinds out of the function.
 
-It is undefined behavior to execute a ``cleanupret`` whose ``cleanuppad`` has
-not been executed.
-
-It is undefined behavior to execute a ``cleanupret`` if, after the most recent
-execution of its ``cleanuppad``, some ``cleanupret`` or ``cleanupendpad``
-consuming the same ``cleanuppad`` has already been executed.
-
-It is undefined behavior to execute a ``cleanupret`` if, after the most recent
-execution of its ``cleanuppad``, any other ``cleanuppad`` or ``catchpad`` has
-been executed but has not had a corresponding
-``cleanupret``/``catchret``/``cleanupendpad``/``catchendpad`` executed.
-
 Example:
 """"""""
 
 .. code-block:: llvm
 
-      cleanupret %cleanup unwind to caller
-      cleanupret %cleanup unwind label %continue
-
-.. _i_terminatepad:
-
-'``terminatepad``' Instruction
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-Syntax:
-"""""""
-
-::
-
-      terminatepad [<args>*] unwind label <exception label>
-      terminatepad [<args>*] unwind to caller
-
-Overview:
-"""""""""
-
-The '``terminatepad``' instruction is used by `LLVM's exception handling
-system <ExceptionHandling.html#overview>`_ to specify that a basic block
-is a terminate block --- one where a personality routine may decide to
-terminate the program.
-The ``args`` correspond to whatever information the personality
-routine requires to know if this is an appropriate place to terminate the
-program. Control is transferred to the ``exception`` label if the
-personality routine decides not to terminate the program for the
-in-flight exception.
-
-Arguments:
-""""""""""
-
-The instruction takes a list of arbitrary values which are interpreted
-by the :ref:`personality function <personalityfn>`.
-
-The ``terminatepad`` may be given an ``exception`` label to
-transfer control to if the in-flight exception matches the ``args``.
-
-Semantics:
-""""""""""
-
-When the call stack is being unwound due to an exception being thrown,
-the exception is compared against the ``args``. If it matches,
-then control is transfered to the ``exception`` basic block. Otherwise,
-the program is terminated via personality-specific means. Typically,
-the first argument to ``terminatepad`` specifies what function the
-personality should defer to in order to terminate the program.
-
-The ``terminatepad`` instruction has several restrictions:
-
--  A terminate block is a basic block which is the unwind destination of
-   an exceptional instruction.
--  A terminate block must have a '``terminatepad``' instruction as its
-   first non-PHI instruction.
--  There can be only one '``terminatepad``' instruction within the
-   terminate block.
--  A basic block that is not a terminate block may not include a
-   '``terminatepad``' instruction.
-
-Example:
-""""""""
-
-.. code-block:: llvm
-
-      ;; A terminate block which only permits integers.
-      terminatepad [i8** @_ZTIi] unwind label %continue
+      cleanupret from %cleanup unwind to caller
+      cleanupret from %cleanup unwind label %continue
 
 .. _i_unreachable:
 
@@ -7012,17 +6827,16 @@ then the optimizer is not allowed to modify the number or order of
 execution of this ``load`` with other :ref:`volatile
 operations <volatile>`.
 
-If the ``load`` is marked as ``atomic``, it takes an extra
-:ref:`ordering <ordering>` and optional ``singlethread`` argument. The
-``release`` and ``acq_rel`` orderings are not valid on ``load``
-instructions. Atomic loads produce :ref:`defined <memmodel>` results
-when they may see multiple atomic stores. The type of the pointee must
-be an integer type whose bit width is a power of two greater than or
-equal to eight and less than or equal to a target-specific size limit.
-``align`` must be explicitly specified on atomic loads, and the load has
-undefined behavior if the alignment is not set to a value which is at
-least the size in bytes of the pointee. ``!nontemporal`` does not have
-any defined semantics for atomic loads.
+If the ``load`` is marked as ``atomic``, it takes an extra :ref:`ordering
+<ordering>` and optional ``singlethread`` argument. The ``release`` and
+``acq_rel`` orderings are not valid on ``load`` instructions. Atomic loads
+produce :ref:`defined <memmodel>` results when they may see multiple atomic
+stores. The type of the pointee must be an integer, pointer, or floating-point
+type whose bit width is a power of two greater than or equal to eight and less
+than or equal to a target-specific size limit.  ``align`` must be explicitly
+specified on atomic loads, and the load has undefined behavior if the alignment
+is not set to a value which is at least the size in bytes of the
+pointee. ``!nontemporal`` does not have any defined semantics for atomic loads.
 
 The optional constant ``align`` argument specifies the alignment of the
 operation (that is, the alignment of the memory address). A value of 0
@@ -7137,17 +6951,16 @@ then the optimizer is not allowed to modify the number or order of
 execution of this ``store`` with other :ref:`volatile
 operations <volatile>`.
 
-If the ``store`` is marked as ``atomic``, it takes an extra
-:ref:`ordering <ordering>` and optional ``singlethread`` argument. The
-``acquire`` and ``acq_rel`` orderings aren't valid on ``store``
-instructions. Atomic loads produce :ref:`defined <memmodel>` results
-when they may see multiple atomic stores. The type of the pointee must
-be an integer type whose bit width is a power of two greater than or
-equal to eight and less than or equal to a target-specific size limit.
-``align`` must be explicitly specified on atomic stores, and the store
-has undefined behavior if the alignment is not set to a value which is
-at least the size in bytes of the pointee. ``!nontemporal`` does not
-have any defined semantics for atomic stores.
+If the ``store`` is marked as ``atomic``, it takes an extra :ref:`ordering
+<ordering>` and optional ``singlethread`` argument. The ``acquire`` and
+``acq_rel`` orderings aren't valid on ``store`` instructions. Atomic loads
+produce :ref:`defined <memmodel>` results when they may see multiple atomic
+stores. The type of the pointee must be an integer, pointer, or floating-point
+type whose bit width is a power of two greater than or equal to eight and less
+than or equal to a target-specific size limit.  ``align`` must be explicitly
+specified on atomic stores, and the store has undefined behavior if the
+alignment is not set to a value which is at least the size in bytes of the
+pointee. ``!nontemporal`` does not have any defined semantics for atomic stores.
 
 The optional constant ``align`` argument specifies the alignment of the
 operation (that is, the alignment of the memory address). A value of 0
@@ -7163,7 +6976,7 @@ name ``<index>`` corresponding to a metadata node with one ``i32`` entry of
 value 1. The existence of the ``!nontemporal`` metadata on the instruction
 tells the optimizer and code generator that this load is not expected to
 be reused in the cache. The code generator may select special
-instructions to save cache bandwidth, such as the MOVNT instruction on
+instructions to save cache bandwidth, such as the ``MOVNT`` instruction on
 x86.
 
 The optional ``!invariant.group`` metadata must reference a 
@@ -7271,13 +7084,13 @@ Arguments:
 There are three arguments to the '``cmpxchg``' instruction: an address
 to operate on, a value to compare to the value currently be at that
 address, and a new value to place at that address if the compared values
-are equal. The type of '<cmp>' must be an integer type whose bit width
-is a power of two greater than or equal to eight and less than or equal
-to a target-specific size limit. '<cmp>' and '<new>' must have the same
-type, and the type of '<pointer>' must be a pointer to that type. If the
-``cmpxchg`` is marked as ``volatile``, then the optimizer is not allowed
-to modify the number or order of execution of this ``cmpxchg`` with
-other :ref:`volatile operations <volatile>`.
+are equal. The type of '<cmp>' must be an integer or pointer type whose
+bit width is a power of two greater than or equal to eight and less 
+than or equal to a target-specific size limit. '<cmp>' and '<new>' must
+have the same type, and the type of '<pointer>' must be a pointer to 
+that type. If the ``cmpxchg`` is marked as ``volatile``, then the 
+optimizer is not allowed to modify the number or order of execution of
+this ``cmpxchg`` with other :ref:`volatile operations <volatile>`.
 
 The success and failure :ref:`ordering <ordering>` arguments specify how this
 ``cmpxchg`` synchronizes with other atomic operations. Both ordering parameters
@@ -7318,11 +7131,11 @@ Example:
 .. code-block:: llvm
 
     entry:
-      %orig = atomic load i32, i32* %ptr unordered                ; yields i32
+      %orig = load atomic i32, i32* %ptr unordered, align 4                      ; yields i32
       br label %loop
 
     loop:
-      %cmp = phi i32 [ %orig, %entry ], [%old, %loop]
+      %cmp = phi i32 [ %orig, %entry ], [%value_loaded, %loop]
       %squared = mul i32 %cmp, %cmp
       %val_success = cmpxchg i32* %ptr, i32 %cmp, i32 %squared acq_rel monotonic ; yields  { i32, i1 }
       %value_loaded = extractvalue { i32, i1 } %val_success, 0
@@ -8497,7 +8310,7 @@ Syntax:
 
 ::
 
-      <result> = [tail | musttail | notail ] call [cconv] [ret attrs] <ty> [<fnty>*] <fnptrval>(<function args>) [fn attrs]
+      <result> = [tail | musttail | notail ] call [fast-math flags] [cconv] [ret attrs] <ty> [<fnty>*] <fnptrval>(<function args>) [fn attrs]
                    [ operand bundles ]
 
 Overview:
@@ -8553,6 +8366,11 @@ This instruction requires several arguments:
 #. The optional ``notail`` marker indicates that the optimizers should not add
    ``tail`` or ``musttail`` markers to the call. It is used to prevent tail
    call optimization from being performed on the call.
+
+#. The optional ``fast-math flags`` marker indicates that the call has one or more 
+   :ref:`fast-math flags <fastmath>`, which are optimization hints to enable
+   otherwise unsafe floating-point optimizations. Fast-math flags are only valid
+   for calls that return a floating-point scalar or vector type.
 
 #. The optional "cconv" marker indicates which :ref:`calling
    convention <callingconv>` the call should use. If none is
@@ -8752,6 +8570,74 @@ Example:
                catch i8** @_ZTIi
                filter [1 x i8**] [@_ZTId]
 
+.. _i_catchpad:
+
+'``catchpad``' Instruction
+^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Syntax:
+"""""""
+
+::
+
+      <resultval> = catchpad within <catchswitch> [<args>*]
+
+Overview:
+"""""""""
+
+The '``catchpad``' instruction is used by `LLVM's exception handling
+system <ExceptionHandling.html#overview>`_ to specify that a basic block
+begins a catch handler --- one where a personality routine attempts to transfer
+control to catch an exception.
+
+Arguments:
+""""""""""
+
+The ``catchswitch`` operand must always be a token produced by a
+:ref:`catchswitch <i_catchswitch>` instruction in a predecessor block. This
+ensures that each ``catchpad`` has exactly one predecessor block, and it always
+terminates in a ``catchswitch``.
+
+The ``args`` correspond to whatever information the personality routine
+requires to know if this is an appropriate handler for the exception. Control
+will transfer to the ``catchpad`` if this is the first appropriate handler for
+the exception.
+
+The ``resultval`` has the type :ref:`token <t_token>` and is used to match the
+``catchpad`` to corresponding :ref:`catchrets <i_catchret>` and other nested EH
+pads.
+
+Semantics:
+""""""""""
+
+When the call stack is being unwound due to an exception being thrown, the
+exception is compared against the ``args``. If it doesn't match, control will
+not reach the ``catchpad`` instruction.  The representation of ``args`` is
+entirely target and personality function-specific.
+
+Like the :ref:`landingpad <i_landingpad>` instruction, the ``catchpad``
+instruction must be the first non-phi of its parent basic block.
+
+The meaning of the tokens produced and consumed by ``catchpad`` and other "pad"
+instructions is described in the
+`Windows exception handling documentation\ <ExceptionHandling.html#wineh>`_.
+
+When a ``catchpad`` has been "entered" but not yet "exited" (as
+described in the `EH documentation\ <ExceptionHandling.html#wineh-constraints>`_),
+it is undefined behavior to execute a :ref:`call <i_call>` or :ref:`invoke <i_invoke>`
+that does not carry an appropriate :ref:`"funclet" bundle <ob_funclet>`.
+
+Example:
+""""""""
+
+.. code-block:: llvm
+
+    dispatch:
+      %cs = catchswitch within none [label %handler0] unwind to caller
+      ;; A catch block which can catch an integer.
+    handler0:
+      %tok = catchpad within %cs [i8** @_ZTIi]
+
 .. _i_cleanuppad:
 
 '``cleanuppad``' Instruction
@@ -8762,7 +8648,7 @@ Syntax:
 
 ::
 
-      <resultval> = cleanuppad [<args>*]
+      <resultval> = cleanuppad within <parent> [<args>*]
 
 Overview:
 """""""""
@@ -8775,8 +8661,10 @@ The ``args`` correspond to whatever additional
 information the :ref:`personality function <personalityfn>` requires to
 execute the cleanup.
 The ``resultval`` has the type :ref:`token <t_token>` and is used to
-match the ``cleanuppad`` to corresponding :ref:`cleanuprets <i_cleanupret>`
-and :ref:`cleanupendpads <i_cleanupendpad>`.
+match the ``cleanuppad`` to corresponding :ref:`cleanuprets <i_cleanupret>`.
+The ``parent`` argument is the token of the funclet that contains the
+``cleanuppad`` instruction. If the ``cleanuppad`` is not inside a funclet,
+this operand may be the token ``none``.
 
 Arguments:
 """"""""""
@@ -8803,21 +8691,18 @@ The ``cleanuppad`` instruction has several restrictions:
    cleanup block.
 -  A basic block that is not a cleanup block may not include a
    '``cleanuppad``' instruction.
--  All '``cleanupret``'s and '``cleanupendpad``'s which consume a ``cleanuppad``
-   must have the same exceptional successor.
--  It is undefined behavior for control to transfer from a ``cleanuppad`` to a
-   ``ret`` without first executing a ``cleanupret`` or ``cleanupendpad`` that
-   consumes the ``cleanuppad``.
--  It is undefined behavior for control to transfer from a ``cleanuppad`` to
-   itself without first executing a ``cleanupret`` or ``cleanupendpad`` that
-   consumes the ``cleanuppad``.
+
+When a ``cleanuppad`` has been "entered" but not yet "exited" (as
+described in the `EH documentation\ <ExceptionHandling.html#wineh-constraints>`_),
+it is undefined behavior to execute a :ref:`call <i_call>` or :ref:`invoke <i_invoke>`
+that does not carry an appropriate :ref:`"funclet" bundle <ob_funclet>`.
 
 Example:
 """"""""
 
 .. code-block:: llvm
 
-      %tok = cleanuppad []
+      %tok = cleanuppad within %cs []
 
 .. _intrinsics:
 
@@ -10614,8 +10499,8 @@ Overview:
 """""""""
 
 The '``llvm.bitreverse``' family of intrinsics is used to reverse the
-bitpattern of an integer value; for example ``0b1234567`` becomes
-``0b7654321``.
+bitpattern of an integer value; for example ``0b10110110`` becomes
+``0b01101101``.
 
 Semantics:
 """"""""""
@@ -10713,7 +10598,7 @@ targets support all bit widths or vector types, however.
       declare i32  @llvm.ctlz.i32 (i32  <src>, i1 <is_zero_undef>)
       declare i64  @llvm.ctlz.i64 (i64  <src>, i1 <is_zero_undef>)
       declare i256 @llvm.ctlz.i256(i256 <src>, i1 <is_zero_undef>)
-      declase <2 x i32> @llvm.ctlz.v2i32(<2 x i32> <src>, i1 <is_zero_undef>)
+      declare <2 x i32> @llvm.ctlz.v2i32(<2 x i32> <src>, i1 <is_zero_undef>)
 
 Overview:
 """""""""
@@ -10760,7 +10645,7 @@ support all bit widths or vector types, however.
       declare i32  @llvm.cttz.i32 (i32  <src>, i1 <is_zero_undef>)
       declare i64  @llvm.cttz.i64 (i64  <src>, i1 <is_zero_undef>)
       declare i256 @llvm.cttz.i256(i256 <src>, i1 <is_zero_undef>)
-      declase <2 x i32> @llvm.cttz.v2i32(<2 x i32> <src>, i1 <is_zero_undef>)
+      declare <2 x i32> @llvm.cttz.v2i32(<2 x i32> <src>, i1 <is_zero_undef>)
 
 Overview:
 """""""""
@@ -11135,7 +11020,7 @@ Examples of non-canonical encodings:
 - Many normal decimal floating point numbers have non-canonical alternative
   encodings.
 - Some machines, like GPUs or ARMv7 NEON, do not support subnormal values.
-  These are treated as non-canonical encodings of zero and with be flushed to
+  These are treated as non-canonical encodings of zero and will be flushed to
   a zero of the same sign by this operation.
 
 Note that per IEEE-754-2008 6.2, systems that support signaling NaNs with
@@ -11216,68 +11101,6 @@ Examples:
 .. code-block:: llvm
 
       %r2 = call float @llvm.fmuladd.f32(float %a, float %b, float %c) ; yields float:r2 = (a * b) + c
-
-
-'``llvm.uabsdiff.*``' and '``llvm.sabsdiff.*``' Intrinsics
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-Syntax:
-"""""""
-This is an overloaded intrinsic. The loaded data is a vector of any integer bit width.
-
-.. code-block:: llvm
-
-      declare <4 x integer> @llvm.uabsdiff.v4i32(<4 x integer> %a, <4 x integer> %b)
-
-
-Overview:
-"""""""""
-
-The ``llvm.uabsdiff`` intrinsic returns a vector result of the absolute difference
-of the two operands, treating them both as unsigned integers. The intermediate
-calculations are computed using infinitely precise unsigned arithmetic. The final
-result will be truncated to the given type.
-
-The ``llvm.sabsdiff`` intrinsic returns a vector result of the absolute difference of
-the two operands, treating them both as signed integers. If the result overflows, the
-behavior is undefined.
-
-.. note::
-
-    These intrinsics are primarily used during the code generation stage of compilation.
-    They are generated by compiler passes such as the Loop and SLP vectorizers. It is not
-    recommended for users to create them manually.
-
-Arguments:
-""""""""""
-
-Both intrinsics take two integer of the same bitwidth.
-
-Semantics:
-""""""""""
-
-The expression::
-
-    call <4 x i32> @llvm.uabsdiff.v4i32(<4 x i32> %a, <4 x i32> %b)
-
-is equivalent to::
-
-    %1 = zext <4 x i32> %a to <4 x i64>
-    %2 = zext <4 x i32> %b to <4 x i64>
-    %sub = sub <4 x i64> %1, %2
-    %trunc = trunc <4 x i64> to <4 x i32>
-
-and the expression::
-
-    call <4 x i32> @llvm.sabsdiff.v4i32(<4 x i32> %a, <4 x i32> %b)
-
-is equivalent to::
-
-    %sub = sub nsw <4 x i32> %a, %b
-    %ispos = icmp sge <4 x i32> %sub, zeroinitializer
-    %neg = sub nsw <4 x i32> zeroinitializer, %sub
-    %1 = select <4 x i1> %ispos, <4 x i32> %sub, <4 x i32> %neg
-
 
 Half Precision Floating Point Intrinsics
 ----------------------------------------
@@ -11692,7 +11515,7 @@ The '``llvm.masked.scatter``' intrinsics is designed for writing selected vector
 
 ::
 
-       ;; This instruction unconditionaly stores data vector in multiple addresses
+       ;; This instruction unconditionally stores data vector in multiple addresses
        call @llvm.masked.scatter.v8i32 (<8 x i32> %value, <8 x i32*> %ptrs, i32 4,  <8 x i1>  <true, true, .. true>)
 
        ;; It is equivalent to a list of scalar stores
@@ -12266,8 +12089,9 @@ Overview:
 """""""""
 
 The ``llvm.donothing`` intrinsic doesn't perform any operation. It's one of only
-two intrinsics (besides ``llvm.experimental.patchpoint``) that can be called
-with an invoke instruction.
+three intrinsics (besides ``llvm.experimental.patchpoint`` and
+``llvm.experimental.gc.statepoint``) that can be called with an invoke
+instruction.
 
 Arguments:
 """"""""""
@@ -12279,6 +12103,74 @@ Semantics:
 
 This intrinsic does nothing, and it's removed by optimizers and ignored
 by codegen.
+
+'``llvm.experimental.deoptimize``' Intrinsic
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Syntax:
+"""""""
+
+::
+
+      declare type @llvm.experimental.deoptimize(...) [ "deopt"(...) ]
+
+Overview:
+"""""""""
+
+This intrinsic, together with :ref:`deoptimization operand bundles
+<deopt_opbundles>`, allow frontends to express transfer of control and
+frame-local state from the currently executing (typically more specialized,
+hence faster) version of a function into another (typically more generic, hence
+slower) version.
+
+In languages with a fully integrated managed runtime like Java and JavaScript
+this intrinsic can be used to implement "uncommon trap" or "side exit" like
+functionality.  In unmanaged languages like C and C++, this intrinsic can be
+used to represent the slow paths of specialized functions.
+
+
+Arguments:
+""""""""""
+
+The intrinsic takes an arbitrary number of arguments, whose meaning is
+decided by the :ref:`lowering strategy<deoptimize_lowering>`.
+
+Semantics:
+""""""""""
+
+The ``@llvm.experimental.deoptimize`` intrinsic executes an attached
+deoptimization continuation (denoted using a :ref:`deoptimization
+operand bundle <deopt_opbundles>`) and returns the value returned by
+the deoptimization continuation.  Defining the semantic properties of
+the continuation itself is out of scope of the language reference --
+as far as LLVM is concerned, the deoptimization continuation can
+invoke arbitrary side effects, including reading from and writing to
+the entire heap.
+
+Deoptimization continuations expressed using ``"deopt"`` operand bundles always
+continue execution to the end of the physical frame containing them, so all
+calls to ``@llvm.experimental.deoptimize`` must be in "tail position":
+
+   - ``@llvm.experimental.deoptimize`` cannot be invoked.
+   - The call must immediately precede a :ref:`ret <i_ret>` instruction.
+   - The ``ret`` instruction must return the value produced by the
+     ``@llvm.experimental.deoptimize`` call if there is one, or void.
+
+Note that the above restrictions imply that the return type for a call to
+``@llvm.experimental.deoptimize`` will match the return type of its immediate
+caller.
+
+The inliner composes the ``"deopt"`` continuations of the caller into the
+``"deopt"`` continuations present in the inlinee, and also updates calls to this
+intrinsic to return directly from the frame of the function it inlined into.
+
+.. _deoptimize_lowering:
+
+Lowering:
+"""""""""
+
+Lowering for ``@llvm.experimental.deoptimize`` is not yet implemented,
+and is a work in progress.
 
 Stack Map Intrinsics
 --------------------
