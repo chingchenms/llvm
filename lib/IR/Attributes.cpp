@@ -448,12 +448,9 @@ uint64_t AttributeImpl::getAttrMask(Attribute::AttrKind Val) {
   case Attribute::Convergent:      return 1ULL << 46;
   case Attribute::SafeStack:       return 1ULL << 47;
   case Attribute::NoRecurse:       return 1ULL << 48;
-<<<<<<< HEAD
-  case Attribute::Coroutine:       return 1ULL << 49;
-=======
   case Attribute::InaccessibleMemOnly:         return 1ULL << 49;
   case Attribute::InaccessibleMemOrArgMemOnly: return 1ULL << 50;
->>>>>>> pristine
+  case Attribute::Coroutine:       return 1ULL << 51;
   case Attribute::Dereferenceable:
     llvm_unreachable("dereferenceable attribute not supported in raw format");
     break;

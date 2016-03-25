@@ -273,7 +273,6 @@ INITIALIZE_PASS_BEGIN(CoroModuleEarly, "CoroModuleEarly",
                       "CoroModuleEarly Pass", false, false)
 INITIALIZE_PASS_DEPENDENCY(AssumptionCacheTracker)
 INITIALIZE_PASS_DEPENDENCY(CallGraphWrapperPass)
-INITIALIZE_PASS_DEPENDENCY(InlineCostAnalysis)
 INITIALIZE_PASS_DEPENDENCY(TargetLibraryInfoWrapperPass)
 INITIALIZE_PASS_END(CoroModuleEarly, "CoroModuleEarly", "CoroModuleEarly Pass",
                     false, false)

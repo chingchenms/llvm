@@ -16,8 +16,10 @@
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/SmallBitVector.h"
 #include "llvm/Transforms/Coroutines.h"
+#include "llvm/Analysis/AssumptionCache.h"
 #include "llvm/Analysis/CallGraphSCCPass.h"
 #include "llvm/Analysis/InlineCost.h"
+#include "llvm/Analysis/TargetTransformInfo.h"
 #include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/InstIterator.h"
 #include "llvm/Transforms/Utils/Cloning.h"
@@ -72,7 +74,9 @@ namespace {
 
       for (auto& CS : CoroCalls) {
         // TODO: get proper inline threshold Inliner::getInlineThreshold(CS))
-        if (ICA->getInlineCost(CS, 100)) {
+        Function *Callee = CS.getCalledFunction();
+        TargetTransformInfo &TTI = TTIWP->getTTI(*Callee);
+        if (getInlineCost(CS, 100, TTI, ACT)) {
           InlineFunctionInfo IFI;
           InlineFunction(CS, IFI);
         }
@@ -363,10 +367,10 @@ namespace {
       }
     }
 
-    InlineCostAnalysis *ICA;
     bool runOnSCC(CallGraphSCC &SCC) override {
       bool changed = false;
-      ICA = &getAnalysis<InlineCostAnalysis>();
+      TTIWP = &getAnalysis<TargetTransformInfoWrapperPass>();
+      ACT = &getAnalysis<AssumptionCacheTracker>(); 
 
       if (HasCoroInit)
         changed |= tryCoroElide(SCC);
@@ -408,7 +412,8 @@ namespace {
     }
 
     void getAnalysisUsage(AnalysisUsage &AU) const {
-      AU.addRequired<InlineCostAnalysis>();
+      AU.addRequired<TargetTransformInfoWrapperPass>();
+      AU.addRequired<AssumptionCacheTracker>();
       //Inliner::getAnalysisUsage(AU);
     }
 
@@ -416,6 +421,9 @@ namespace {
     //  return Inliner->doFinalization(CG);
     //}
 
+  private:
+    TargetTransformInfoWrapperPass *TTIWP;
+    AssumptionCacheTracker* ACT;
   };
 
 } // end anonymous namespace.
@@ -425,7 +433,7 @@ INITIALIZE_PASS_BEGIN(CoroInline, "coro-inline",
   "Coroutine Integration/Inlining", false, false)
   INITIALIZE_PASS_DEPENDENCY(AssumptionCacheTracker)
   INITIALIZE_PASS_DEPENDENCY(CallGraphWrapperPass)
-  INITIALIZE_PASS_DEPENDENCY(InlineCostAnalysis)
+  INITIALIZE_PASS_DEPENDENCY(TargetTransformInfoWrapperPass)
   INITIALIZE_PASS_DEPENDENCY(TargetLibraryInfoWrapperPass)
   INITIALIZE_PASS_END(CoroInline, "coro-inline",
     "Coroutine Integration/Inlining", false, false)
