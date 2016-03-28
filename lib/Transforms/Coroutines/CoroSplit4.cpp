@@ -193,14 +193,19 @@ struct CoroSplit4 : CoroutineCommon {
     Instruction* StoreInsertPt = nullptr;
     BasicBlock* DefBlock = nullptr;
     if (auto I = dyn_cast<Instruction>(DefInst)) {
-      DefBlock = I->getParent();
-      StoreInsertPt = I->getNextNode();
-      while (isa<PHINode>(StoreInsertPt))
-        StoreInsertPt = StoreInsertPt->getNextNode();
+      if (auto Inv = dyn_cast<InvokeInst>(I)) {
+        DefBlock = Inv->getNormalDest();
+        StoreInsertPt = DefBlock->getFirstNonPHI();
+      }
+      else {
+        DefBlock = I->getParent();
+        StoreInsertPt = I->getNextNode();
+        while (isa<PHINode>(StoreInsertPt))
+          StoreInsertPt = StoreInsertPt->getNextNode();
+      }
     }
     else {
       StoreInsertPt = CoroInit->getNextNode();
-      // TODO: handle copy/dtor for parameter
     }
 
     AllocaInst* Spill = nullptr;
