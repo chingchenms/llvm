@@ -787,9 +787,11 @@ struct CoroPreSplit : public FunctionPass, CoroutineCommon {
           ReplaceCoroPromise(intrin, /*From=*/true);
           changed = true;
           break;
+#if 0          
         case Intrinsic::coro_suspend:
           replaceCoroSuspend(*intrin);
           changed = true;
+#endif        
         }
       }
     }
