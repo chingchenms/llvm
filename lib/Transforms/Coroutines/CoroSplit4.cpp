@@ -320,30 +320,31 @@ struct CoroSplit4 : CoroutineCommon {
     SmallPtrSet<BasicBlock*, 16> StartBlocks;
     BasicBlock* ReturnBlock;
     IntrinsicInst* CoroInit;
-    IntrinsicInst* CoroDone;
+    IntrinsicInst* CoroFork;
     BasicBlock* Unreachable;
 
     CoroutineInfo() {}
     CoroutineInfo(CoroutineInfo const&) = delete;
     CoroutineInfo& operator=(CoroutineInfo const&) = delete;
 
-    BasicBlock* findReturnBlock(Function& F) {
-      for (auto& I : instructions(F))
+    BasicBlock *findReturnBlock(Function &F) {
+      for (auto &I : instructions(F))
         if (auto II = dyn_cast<IntrinsicInst>(&I))
-          if (II->getIntrinsicID() == Intrinsic::coro_done)
-            if (isa<ConstantPointerNull>(II->getOperand(0))) {
-              assert(II->getNumUses() == 1 && "@llvm.coro.done unexpected num users");
-              CoroDone = II;
-              auto BR = cast<BranchInst>(II->user_back());
-              auto ReturnBlock = BR->getSuccessor(0);
-              assert(isa<ReturnInst>(ReturnBlock->getTerminator()));
-              return ReturnBlock;
-            }
+          if (II->getIntrinsicID() == Intrinsic::experimental_coro_fork) {
+            assert(II->getNumUses() == 1 &&
+                   "@llvm.coro.done unexpected num users");
+            CoroFork = II;
+            auto BR = cast<BranchInst>(II->user_back());
+            auto ReturnBlock = BR->getSuccessor(0);
+            assert(isa<ReturnInst>(ReturnBlock->getTerminator()));
+            return ReturnBlock;
+          }
       llvm_unreachable("did not find @llvm.coro.done marking the return block");
     }
 
     void ComputeAllSuccessorsButDontFollowSuspendBlocks(
-      BasicBlock *B, SuspendInfo &Info, SmallPtrSetImpl<BasicBlock *> &result) {
+        BasicBlock *B, SuspendInfo &Info,
+        SmallPtrSetImpl<BasicBlock *> &result) {
       SmallSetVector<BasicBlock *, 16> workList;
 
       workList.insert(B);
@@ -659,7 +660,8 @@ struct CoroSplit4 : CoroutineCommon {
 
     createResumeOrDestroy(CD->Resume.Func, ResumeEntry, CD->Resume.Frame, CoroInfo, Suspends);
     createResumeOrDestroy(CD->Destroy.Func, DestroyEntry, CD->Destroy.Frame, CoroInfo, Suspends);
-    CoroInfo.CoroDone->replaceAllUsesWith(ConstantInt::getFalse(M->getContext()));
+    CoroInfo.CoroFork->replaceAllUsesWith(ConstantInt::getFalse(M->getContext()));
+    CoroInfo.CoroFork->eraseFromParent();
     removeUnreachableBlocks(F);
     simplifyAndConstantFoldTerminators(F);
     removeUnreachableBlocks(F);
