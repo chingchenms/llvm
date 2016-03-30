@@ -305,6 +305,10 @@ struct CoroSplit4 : CoroutineCommon {
       processValue(CoroInit, Value, DT, Info, SharedAllocas);
     }
     for (auto& Arg : F.getArgumentList()) {
+      if (Arg.hasInAllocaAttr()) {
+        llvm_unreachable("cannot handle coroutines with inalloca arguments yet");
+        return;
+      }
       processValue(CoroInit, &Arg, DT, Info, SharedAllocas);
     }
   }
