@@ -634,11 +634,12 @@ def int_experimental_coro_frame : Intrinsic<[llvm_ptr_ty], [], []>;
 def int_experimental_coro_size : Intrinsic<[llvm_i32_ty], [], [IntrNoMem]>;
 
 def int_experimental_coro_elide : Intrinsic<[llvm_ptr_ty], [], []>;
+def int_experimental_coro_end : Intrinsic<[], [], []>;
+def int_experimental_coro_alloc : Intrinsic<[llvm_ptr_ty], [], []>;
 def int_experimental_coro_delete : Intrinsic<[llvm_i1_ty], [], []>;
 
 def int_experimental_coro_save : Intrinsic<[llvm_ptr_ty], [llvm_i32_ty], []>;
 def int_experimental_coro_suspend : Intrinsic<[llvm_i1_ty], [llvm_ptr_ty], []>;
-def int_experimental_coro_end :  Intrinsic<[], [], [IntrNoReturn]>;
 
 def int_experimental_coro_resume : Intrinsic<[], [llvm_ptr_ty], []>;
 def int_experimental_coro_destroy : Intrinsic<[], [llvm_ptr_ty], []>;
