@@ -384,27 +384,6 @@ struct CoroSplit4 : CoroutineCommon {
             workList.insert(SI);
       }
     }
-#if 0
-    void ComputeAllSuccessorsButDontFollowSuspendBlocks(
-        BasicBlock *B, SuspendInfo &Info,
-        SmallPtrSetImpl<BasicBlock *> &result) {
-      SmallSetVector<BasicBlock *, 16> workList;
-
-      workList.insert(B);
-      while (!workList.empty()) {
-        B = workList.pop_back_val();
-        result.insert(B);
-
-        // do not follow successors of suspend blocks
-        if (Info.isSuspendBlock(B))
-          continue;
-
-        for (BasicBlock *SI : successors(B))
-          if (result.count(SI) == 0)
-            workList.insert(SI);
-      }
-    }
-#endif
 
     void analyzeFunction(Function &F, SuspendInfo &Info) {
       ReturnBlock = findReturnBlock(F);
