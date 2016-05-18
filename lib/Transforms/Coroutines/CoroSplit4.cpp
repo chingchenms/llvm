@@ -35,6 +35,7 @@
 #include "llvm/Transforms/Utils/Cloning.h"
 #include "llvm/Transforms/Utils/Local.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
+#include "llvm/Transforms/Scalar.h"
 using namespace llvm;
 
 #define DEBUG_TYPE "coro-split4"
@@ -148,8 +149,29 @@ struct CoroSplit4 : CoroutineCommon {
 
   struct SuspendInfo {
     SmallPtrSet<BasicBlock*, 8> SuspendBlocks;
+    SmallPtrSet<BasicBlock*, 8> EndBlocks;
     SmallVector<SuspendPoint, 8> SuspendPoints;
     bool HasFinalSuspend;
+
+    void splitBlockOnCoroEnd(BasicBlock& BB) {
+      for (auto &I : BB)
+        if (auto II = dyn_cast<IntrinsicInst>(&I))
+          if (II->getIntrinsicID() == Intrinsic::experimental_coro_end) {
+            EndBlocks.insert(&BB);
+            Instruction* NextInstr = II->getNextNode();
+            if (!NextInstr->isTerminator())
+              SplitBlock(&BB, NextInstr);
+            return;
+          }
+    }
+
+    // go through all blocks and split blocks on coro end
+    // COMMENT: explain why we need to split
+    void splitEnds(Function& F) {
+      EndBlocks.clear();
+      for (auto BI = F.begin(), BE = F.end(); BI != BE;)
+        splitBlockOnCoroEnd(*BI++);
+    }
 
     // Canonical suspend is where
     // an @llvm.coro.suspend is followed by a
@@ -342,6 +364,27 @@ struct CoroSplit4 : CoroutineCommon {
       llvm_unreachable("did not find @llvm.coro.done marking the return block");
     }
 
+    void ComputeAllSuccessorsButDontFollowTheseBlocks(
+        SmallPtrSetImpl<BasicBlock *> const &NotThese, BasicBlock *B,
+        SmallPtrSetImpl<BasicBlock *> &result) {
+
+      SmallSetVector<BasicBlock *, 16> workList;
+
+      workList.insert(B);
+      while (!workList.empty()) {
+        B = workList.pop_back_val();
+        result.insert(B);
+
+        // do not follow successors of indicated blocks
+        if (NotThese.count(B) != 0)
+          continue;
+
+        for (BasicBlock *SI : successors(B))
+          if (result.count(SI) == 0)
+            workList.insert(SI);
+      }
+    }
+#if 0
     void ComputeAllSuccessorsButDontFollowSuspendBlocks(
         BasicBlock *B, SuspendInfo &Info,
         SmallPtrSetImpl<BasicBlock *> &result) {
@@ -361,7 +404,7 @@ struct CoroSplit4 : CoroutineCommon {
             workList.insert(SI);
       }
     }
-
+#endif
 
     void analyzeFunction(Function &F, SuspendInfo &Info) {
       ReturnBlock = findReturnBlock(F);
@@ -371,19 +414,19 @@ struct CoroSplit4 : CoroutineCommon {
 
       ResumeAllocas.clear();
       SharedAllocas.clear();
-      PostStartBlocks.clear();
+
       StartBlocks.clear();
-      ComputeAllSuccessorsButDontFollowSuspendBlocks(&*F.begin(), Info, StartBlocks);
+      ComputeAllSuccessorsButDontFollowTheseBlocks(Info.SuspendBlocks, &*F.begin(), StartBlocks);
 
       Unreachable = BasicBlock::Create(F.getContext(), "unreach", &F);
       new UnreachableInst(F.getContext(), Unreachable);
 
+      PostStartBlocks.clear();
       for (auto SP : Info.SuspendPoints) {
-        ComputeAllSuccessors(SP.getCleanupBlock(), PostStartBlocks);
+        ComputeAllSuccessorsButDontFollowTheseBlocks(Info.EndBlocks, SP.getCleanupBlock(), PostStartBlocks);
         if (!SP.isFinalSuspend())
-          ComputeAllSuccessors(SP.getResumeBlock(), PostStartBlocks);
+          ComputeAllSuccessorsButDontFollowTheseBlocks(Info.EndBlocks, SP.getResumeBlock(), PostStartBlocks);
       }
-      PostStartBlocks.erase(ReturnBlock);
 
       for (auto& I : instructions(F)) {
         if (auto AI = dyn_cast<AllocaInst>(&I)) {
@@ -635,6 +678,7 @@ struct CoroSplit4 : CoroutineCommon {
     //assert(F.getPrefixData() == nullptr && "coroutine should not have function prefix");
     //F.setPrefixData(destroyFn);
 
+    Suspends.splitEnds(F);
     Suspends.canonicalizeSuspends(F);
     CoroInfo.analyzeFunction(F, Suspends);
 
@@ -929,7 +973,17 @@ llvm::coro::CoroutineData::CoroutineData(Function& F) {
 }
 
 void llvm::coro::CoroutineData::split(CoroutineCommon*) {
+  auto &F = *Ramp.Func;
+  auto &M = *F.getParent();
+  {
+    legacy::FunctionPassManager FPM(&M);
+    FPM.add(createCFGSimplificationPass());     // Merge & remove BBs
+    FPM.doInitialization();
+    FPM.run(F);
+    FPM.doFinalization();
+  }
+
   CoroSplit4 pass;
-  pass.PerModuleInit(*Ramp.Func->getParent());
+  pass.PerModuleInit(M);
   pass.runOn(*this);
 }
