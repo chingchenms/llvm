@@ -685,6 +685,8 @@ struct CoroSplit4 : CoroutineCommon {
     createResumeOrDestroy(CD->Destroy.Func, DestroyEntry, CD->Destroy.Frame, CoroInfo, Suspends);
     CoroInfo.CoroFork->replaceAllUsesWith(ConstantInt::getFalse(M->getContext()));
     CoroInfo.CoroFork->eraseFromParent();
+    removeCoroEnds(Suspends);
+
     removeUnreachableBlocks(F);
     simplifyAndConstantFoldTerminators(F);
     removeUnreachableBlocks(F);
@@ -797,6 +799,53 @@ struct CoroSplit4 : CoroutineCommon {
     }
   }
 
+  // remove coro_end intrinsics in the ramp
+  void removeCoroEnds(SuspendInfo& Suspends) {
+    for (auto BB : Suspends.EndBlocks) {
+      auto Term = BB->getTerminator();
+      auto Prev = Term->getPrevNode();
+      auto II = dyn_cast<IntrinsicInst>(Prev);
+      assert(II && (II->getIntrinsicID() == Intrinsic::experimental_coro_end));
+      II->eraseFromParent();
+    }
+  }
+
+  void dealWithEHPad(IntrinsicInst* CoroEnd) {
+    BasicBlock* BB = CoroEnd->getParent();
+    auto First = BB->getFirstNonPHI();
+
+    switch (First->getOpcode()) {
+    case Instruction::CleanupPad:
+      CleanupReturnInst::Create(First, nullptr, CoroEnd);
+      break;
+    case Instruction::LandingPad:
+      ResumeInst::Create(First, CoroEnd);
+      break;
+    default:
+      llvm_unreachable("unexpected EHPad on a coroutine cleanup path");
+    }
+  }
+
+  // remove coro_end intrinsics in the resume/cleanup func
+  void removeCoroEnds(SuspendInfo& Suspends,
+	  ValueToValueMapTy & VMap, 
+	  BasicBlock *ExitBlock) {
+
+	  for (auto BB : Suspends.EndBlocks) {
+		  auto Term = cast<BasicBlock>(VMap[BB])->getTerminator();
+		  auto Prev = Term->getPrevNode();
+		  auto II = dyn_cast<IntrinsicInst>(Prev);
+		  assert(II && (II->getIntrinsicID() == Intrinsic::experimental_coro_end));
+
+      if (BB->isEHPad())
+        dealWithEHPad(II);
+      else
+        BranchInst::Create(ExitBlock, Term);
+      Term->eraseFromParent();
+  		II->eraseFromParent();
+	  }
+  }
+
   void createResumeOrDestroy(
     Function * NewFn,
     BasicBlock* CaseBlock,
@@ -818,11 +867,9 @@ struct CoroSplit4 : CoroutineCommon {
 
     auto Exit = BasicBlock::Create(M->getContext(), "exit", NewFn);
     ReturnInst::Create(M->getContext(), Exit);
-    for (auto RI : Returns) {
-      auto RB = RI->getParent();
-      RB->replaceAllUsesWith(Exit);
-      RB->eraseFromParent();
-    }
+    VMap[CoroInfo.ReturnBlock]->replaceAllUsesWith(Exit);
+
+    removeCoroEnds(Suspends, VMap, Exit);
 
     auto InsertPt = &Entry->front();
 
@@ -834,6 +881,7 @@ struct CoroSplit4 : CoroutineCommon {
 
     VMap[CD->Ramp.Frame]->replaceAllUsesWith(FramePtr);
 
+	// CR 05/18/2016: This is fishy
     BlockSet OldEntryBlocks;
     InstrSetVector Used;
     auto OldEntry = cast<BasicBlock>(VMap[CoroInfo.CoroInit->getParent()]);
