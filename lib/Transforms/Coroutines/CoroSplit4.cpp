@@ -711,13 +711,13 @@ struct CoroSplit4 : CoroutineCommon {
   void PrepareForHeapElision()
   {
     IntrinsicInst* DeleteInResume = FindIntrinsic(*CD->Resume.Func, Intrinsic::coro_delete);
-    IntrinsicInst* DeleteInRamp = FindIntrinsic(*ThisFunction, Intrinsic::coro_delete);
+//    IntrinsicInst* DeleteInRamp = FindIntrinsic(*ThisFunction, Intrinsic::coro_delete);
     IntrinsicInst* DeleteInDestroy = FindIntrinsic(*CD->Destroy.Func, Intrinsic::coro_delete);
 
-    // if we found delete in Resume or Ramp, the coroutine is not eligible
+    // if we found delete in Resume the coroutine is not eligible
     // for heap elision, so we don't have to create a .cleanup function
 
-    if (!DeleteInResume && !DeleteInRamp) {
+    if (!DeleteInResume) {
       // clone the Destroy function and eliminate the delete block
       ValueToValueMapTy VMap;
       VMap[CD->Destroy.Frame] = CD->Cleanup.Frame;
@@ -735,7 +735,7 @@ struct CoroSplit4 : CoroutineCommon {
     }
 
     replaceDelete(CD->Resume, DeleteInResume);
-    replaceDelete(CD->Ramp, DeleteInRamp);
+//    replaceDelete(CD->Ramp, DeleteInRamp);
     replaceDelete(CD->Destroy, DeleteInDestroy);
   }
 

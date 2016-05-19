@@ -28,6 +28,7 @@
 #include "llvm/Pass.h"
 #include "llvm/PassSupport.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Transforms/Utils/Local.h"
 using namespace llvm;
 
 #define DEBUG_TYPE "coro-elide"
@@ -162,6 +163,19 @@ struct CoroHeapElide : FunctionPass, CoroutineCommon {
     }
   };
 
+  IntrinsicInst *dyn_cast_intrin_internal(Intrinsic::ID IntrID, Value *X) {
+    auto II = dyn_cast<IntrinsicInst>(X);
+    if (!II)
+      return nullptr;
+    if (II->getIntrinsicID() != IntrID)
+      return nullptr;
+    return II;
+  }
+
+  template <Intrinsic::ID IntrID> IntrinsicInst *dyn_cast_intrin(Value *X) {
+    return dyn_cast_intrin_internal(IntrID, X);
+  }
+
   /// Pass Manager itself does not invalidate any analysis info.
   //void getAnalysisUsage(AnalysisUsage &Info) const override {
   //  // CGPassManager walks SCC and it needs CallGraph.
@@ -199,6 +213,22 @@ struct CoroHeapElide : FunctionPass, CoroutineCommon {
     return cast<Function>(value);
   }
 
+  void replaceAllCoroDeletes(IntrinsicInst* CoroInit) {
+    // walk through all the users, if one of the users is 
+    // coro.delete => replace it with NullPtr
+
+    SmallVector<IntrinsicInst*, 4> Deletes;
+
+    for (User* U : CoroInit->users())
+      if (auto II = dyn_cast_intrin<Intrinsic::coro_delete>(U))
+        Deletes.push_back(II);
+
+    for (IntrinsicInst *Del : Deletes) {
+      Del->replaceAllUsesWith(ConstantPointerNull::get(bytePtrTy));
+      Del->eraseFromParent();
+    }
+  }
+
   bool tryElide(Function &F) {
     bool changed = false;
     Database db(F);
@@ -229,6 +259,8 @@ struct CoroHeapElide : FunctionPass, CoroutineCommon {
         auto vAllocaFrame = new BitCastInst(allocaFrame, bytePtrTy,
                                             "elided.vFrame", &*InsertPt);
 
+        replaceAllCoroDeletes(item.CoroInit);
+
         auto CoroElide = GetCoroElide(item.CoroInit);
 
         item.CoroInit->replaceAllUsesWith(vAllocaFrame);
@@ -256,6 +288,9 @@ struct CoroHeapElide : FunctionPass, CoroutineCommon {
 
 //      replaceIndirectCalls(F, vFrame, item.ResumeFn);
 //      replaceIndirectCalls(F, vFrame, cleanupFn);
+
+      simplifyAndConstantFoldTerminators(F);
+      removeUnreachableBlocks(F);
 
       changed = true;
     }
