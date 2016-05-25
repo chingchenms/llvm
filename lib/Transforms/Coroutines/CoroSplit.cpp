@@ -13,6 +13,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#if 0
 #include "CoroutineCommon.h"
 #include "llvm/Transforms/Coroutines.h"
 
@@ -546,3 +547,5 @@ char CoroSplit::ID = 0;
 INITIALIZE_PASS(CoroSplit, "coro-split",
   "Split coroutine into ramp/resume/destroy/cleanup functions", false, false)
 Pass *llvm::createCoroSplitPass() { return new CoroSplit(); }
+
+#endif

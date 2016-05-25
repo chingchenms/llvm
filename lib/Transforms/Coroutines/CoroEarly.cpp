@@ -13,6 +13,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "CoroutineCommon.h"
+#if 0
 #include "llvm/Transforms/Coroutines.h"
 #include "llvm/Transforms/Utils/PromoteMemToReg.h"
 #include "llvm/Transforms/IPO/InlinerPass.h"
@@ -861,3 +862,4 @@ static RegisterPass<CoroPreSplit> Y6("CoroPreSplit", "inline little things");
 namespace llvm {
   Pass *createCoroPreSplit() { return new CoroPreSplit(); }
 }
+#endif

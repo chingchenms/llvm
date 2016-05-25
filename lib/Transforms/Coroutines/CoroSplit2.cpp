@@ -11,6 +11,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#if 0
 #include "CoroutineCommon.h"
 #include "llvm/Transforms/Coroutines.h"
 
@@ -698,3 +699,4 @@ INITIALIZE_PASS_END(
 
 Pass *createCoroSplit2() { return new CoroSplit2(); }
 }
+#endif
