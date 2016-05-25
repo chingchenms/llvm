@@ -11,6 +11,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#if 0
 #include "CoroutineCommon.h"
 #include "llvm/Transforms/Coroutines.h"
 
@@ -326,3 +327,4 @@ INITIALIZE_PASS_END(CoroPassManager, "coro-all", "coroutine pass manager",
 
 Pass *createCoroPassManager() { return new CoroPassManager(); }
 }
+#endif

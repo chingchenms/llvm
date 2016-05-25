@@ -129,8 +129,8 @@ struct CoroCleanup : FunctionPass, CoroutineCommon {
 char CoroCleanup::ID = 0;
 INITIALIZE_PASS_BEGIN(CoroCleanup, "coro-cleanup",
                       "Remove all coroutine related intrinsics", false, false)
-INITIALIZE_PASS_DEPENDENCY(CoroSplit)
-INITIALIZE_PASS_DEPENDENCY(CoroHeapElide)
+//INITIALIZE_PASS_DEPENDENCY(CoroSplit)
+//INITIALIZE_PASS_DEPENDENCY(CoroHeapElide)
 INITIALIZE_PASS_END(CoroCleanup, "coro-cleanup",
                     "Remove all coroutine related intrinsics", false, false)
 

@@ -374,14 +374,14 @@ void CoroutineCommon::RemoveNoOptAttribute(Function &F) {
 #endif
 
 void llvm::initializeCoroutines(PassRegistry &registry) {
-  initializeCoroEarlyPass(registry);
-  initializeCoroSplitPass(registry);
-  initializeCoroSplit2Pass(registry);
-  initializeCoroSplit3Pass(registry);
+//  initializeCoroEarlyPass(registry);
+//  initializeCoroSplitPass(registry);
+//  initializeCoroSplit2Pass(registry);
+//  initializeCoroSplit3Pass(registry);
   initializeCoroHeapElidePass(registry);
-  initializeCoroHeapElide2Pass(registry);
+//  initializeCoroHeapElide2Pass(registry);
   initializeCoroCleanupPass(registry);
-  initializeCoroPassManagerPass(registry);
+//  initializeCoroPassManagerPass(registry);
   initializeCoroInlinePass(registry);
 }
 

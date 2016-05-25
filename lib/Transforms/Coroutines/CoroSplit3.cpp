@@ -11,6 +11,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#if 0
 #include "CoroutineCommon.h"
 #include "llvm/ADT/SmallBitVector.h"
 #include "llvm/ADT/SmallString.h"
@@ -814,3 +815,4 @@ INITIALIZE_PASS_END(
 namespace llvm {
   Pass *createCoroSplit3() { return new CoroSplit3(); }
 }
+#endif

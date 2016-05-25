@@ -15,6 +15,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "CoroutineCommon.h"
+#if 0
 #include "llvm/Transforms/Coroutines.h"
 #include "llvm/Transforms/IPO/InlinerPass.h"
 #include "llvm/Analysis/InlineCost.h"
@@ -133,4 +134,5 @@ void CoroHeapElide2::getAnalysisUsage(AnalysisUsage &AU) const {
   AU.addRequired<InlineCostAnalysis>();
   Inliner::getAnalysisUsage(AU);
 }
+#endif
 #endif
