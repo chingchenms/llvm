@@ -247,6 +247,12 @@ struct CoroSplit4 : CoroutineCommon {
       if (PI)
         BB = PI->getIncomingBlock(U);
       else {
+        // BUG here, moving up the dominator will skip
+        // potential suspend:
+        //    int a = x + 5;
+        //    if (y) co_yield 5;
+        //    printf("%d\n", a);
+        // this will miss this case
         BB = DT[UseBlock]->getIDom()->getBlock();
       }
       for (;;) {
