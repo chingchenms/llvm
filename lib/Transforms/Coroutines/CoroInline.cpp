@@ -90,7 +90,7 @@ namespace {
         if (F) {
           auto CI = FindIntrinsic(*F, Intrinsic::coro_init);
           if (!CI) return false;
-          auto CD = FindIntrinsic(*F, Intrinsic::coro_destroy);
+          auto CD = FindIntrinsic(*F, Intrinsic::experimental_coro_destroy);
           if (!CD) return false;
 
           legacy::FunctionPassManager FPM(F->getParent());

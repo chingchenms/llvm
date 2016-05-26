@@ -40,7 +40,7 @@
 #define coro_end ObsoleteIntrinsic
 
 #define coro_resume ObsoleteIntrinsic
-//#define coro_destroy ObsoleteIntrinsic
+#define coro_destroy ObsoleteIntrinsic
 #define coro_done ObsoleteIntrinsic
 
 namespace llvm {
