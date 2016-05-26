@@ -146,7 +146,7 @@ struct CoroHeapElide : FunctionPass, CoroutineCommon {
           default:
             continue;
           case Intrinsic::coro_destroy:
-          case Intrinsic::coro_resume: {
+          case Intrinsic::experimental_coro_resume: {
             IntrinsicInst *coroInit =
                 FindDefiningCoroInit(intrin->getOperand(0));
             if (coroInit == nullptr)
@@ -343,7 +343,7 @@ struct CoroHeapElide : FunctionPass, CoroutineCommon {
         switch (intrin->getIntrinsicID()) {
         default:
           continue;
-        case Intrinsic::coro_resume:
+        case Intrinsic::experimental_coro_resume:
         case Intrinsic::coro_destroy:
           return true;
         }

@@ -73,7 +73,7 @@ struct CoroCleanup : FunctionPass, CoroutineCommon {
           ReplaceCoroInitOrDelete(intrin);
           ++CoroInitCounter;
           break;
-        case Intrinsic::coro_resume:
+        case Intrinsic::experimental_coro_resume:
           ReplaceWithIndirectCall(intrin, zeroConstant);
           ++CoroResumeCounter;
           break;

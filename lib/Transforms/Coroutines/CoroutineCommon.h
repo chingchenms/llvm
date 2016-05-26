@@ -39,7 +39,7 @@
 #define coro_load ObsoleteIntrinsic
 #define coro_end ObsoleteIntrinsic
 
-//#define coro_resume ObsoleteIntrinsic
+#define coro_resume ObsoleteIntrinsic
 //#define coro_destroy ObsoleteIntrinsic
 #define coro_done ObsoleteIntrinsic
 
