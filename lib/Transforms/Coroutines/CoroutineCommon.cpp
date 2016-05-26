@@ -74,11 +74,6 @@ IntrinsicInst *CoroutineCommon::GetCoroElide(IntrinsicInst *CoroInit) {
   llvm_unreachable("expecting one of the inputs to @llvm.coro.init to be from @llvm.coro.elide");
 }
 
-// This is probably obsolete
-bool llvm::CoroutineCommon::isCoroutine(Function &F) {
-  return FindIntrinsic(F, Intrinsic::coro_suspend);
-}
-
 void CoroutineCommon::ComputeDefChainNotIn(Instruction *source,
   BlockSet const &Blocks,
   InstrSetVector &result) {
@@ -211,52 +206,6 @@ void CoroutineCommon::ReplaceIntrinsicWith(Function &func, Intrinsic::ID id, Val
   }
 }
 
-void CoroutineCommon::ComputeRampBlocks(
-    Function &F, SmallPtrSet<BasicBlock *, 16> &RampBlocks) {
-
-  RampBlocks.clear();
-
-  IntrinsicInst *coroDone = FindIntrinsic(F, Intrinsic::coro_done);
-  assert(coroDone && "missing @llvm.coro.done intrinsic");
-  assert(dyn_cast<ConstantPointerNull>(coroDone->getArgOperand(0)) &&
-         "expecting null argument in @llvm.coro.done intrinsic");
-
-  BranchSuccessors done = getSuccessors(coroDone);
-  BasicBlock *ReturnBlock = done.IfTrue;
-  BasicBlock *StartBlock = done.IfFalse;
-  IntrinsicInst *FirstSuspendIntr =
-      FindIntrinsic(*StartBlock, Intrinsic::coro_suspend);
-
-  if (!FirstSuspendIntr) {
-    auto BR = cast<BranchInst>(StartBlock->getTerminator());
-    auto CoroSuspend = BR->getSuccessor(1);
-    FirstSuspendIntr = FindIntrinsic(*CoroSuspend, Intrinsic::coro_suspend);
-    assert(FirstSuspendIntr && "Missing first suspend instruction");
-    RampBlocks.insert(CoroSuspend);
-  }
-  ComputeAllPredecessors(StartBlock, RampBlocks);
-  ComputeAllSuccessors(ReturnBlock, RampBlocks);
-}
-
-void CoroutineCommon::ComputeSharedAllocas(
-    Function &F, SmallSetVector<AllocaInst *, 16> &result) {
-  result.clear();
-
-  SmallPtrSet<BasicBlock *, 16> RampBlocks;
-  ComputeRampBlocks(F, RampBlocks);
-
-  // find allocas with uses outside the ramp function
-  for (Instruction &I : instructions(F))
-    if (AllocaInst *AI = dyn_cast<AllocaInst>(&I))
-      for (User *U : AI->users()) {
-        Instruction *Instr = cast<Instruction>(U);
-        if (RampBlocks.count(Instr->getParent()) == 0) {
-          result.insert(AI);
-          break;
-        }
-      }
-}
-
 void CoroutineCommon::ReplaceCoroDone(IntrinsicInst *intrin) {
   Value *rawFrame = intrin->getArgOperand(0);
 
@@ -299,28 +248,6 @@ void CoroutineCommon::ReplaceWithIndirectCall(IntrinsicInst *intrin,
   }
 }
 
-#if 0
-IntrinsicInst *CoroutineCommon::asFakeSuspend(Instruction *I) {
-  if (IntrinsicInst *intrin = dyn_cast<IntrinsicInst>(I))
-    if (intrin->getIntrinsicID() == Intrinsic::coro_suspend)
-      if (dyn_cast<ConstantPointerNull>(intrin->getArgOperand(1)))
-        return intrin;
-  return nullptr;
-}
-
-void CoroutineCommon::RemoveFakeSuspends(Function &F) {
-  for (auto it = inst_begin(F), end = inst_end(F); it != end;) {
-    Instruction &I = *it++;
-    if (auto intrin = asFakeSuspend(&I)) {
-      auto bitcast = dyn_cast<BitCastInst>(intrin->getOperand(0));
-      intrin->eraseFromParent();
-      if (bitcast && bitcast->user_empty())
-        bitcast->eraseFromParent();
-    }
-  }
-}
-#endif
-
 bool llvm::CoroutineCommon::simplifyAndConstantFoldTerminators(Function & F) {
   int maxRepeat = 3;
   bool repeat;
@@ -333,17 +260,6 @@ bool llvm::CoroutineCommon::simplifyAndConstantFoldTerminators(Function & F) {
   } while (repeat && --maxRepeat > 0);
   return changed;
 }
-
-#if 0
-void CoroutineCommon::InsertFakeSuspend(Value *value,
-                                        Instruction *InsertBefore) {
-  auto bitCast = new BitCastInst(value, bytePtrTy, "", InsertBefore);
-  auto intrinFn = Intrinsic::getDeclaration(M, Intrinsic::coro_suspend);
-  CallInst::Create(intrinFn, {bitCast, ConstantPointerNull::get(bytePtrTy),
-                              ConstantInt::get(int32Ty, INT_FAST32_MAX)},
-                   "", InsertBefore);
-}
-#endif
 
 CoroutineCommon::BranchSuccessors::BranchSuccessors(IntrinsicInst *I) {
   reset(I);
@@ -358,21 +274,6 @@ void llvm::CoroutineCommon::BranchSuccessors::reset(IntrinsicInst * I)
   IfFalse = Br->getSuccessor(1);
 }
 
-#if 0
-void CoroutineCommon::RemoveNoOptAttribute(Function &F) {
-  if (auto intrin = asFakeSuspend(&*inst_begin(F))) {
-    // fake suspend is a marker that function already had
-    // optnone, therefore, we keep it
-    intrin->eraseFromParent();
-  } else {
-    // CoroEarly marks coroutine as optnone/noinline until
-    F.removeFnAttr(Attribute::OptimizeNone);
-    F.removeFnAttr(Attribute::NoInline);
-    F.addFnAttr(Attribute::AlwaysInline);
-  }
-}
-#endif
-
 void llvm::initializeCoroutines(PassRegistry &registry) {
 //  initializeCoroEarlyPass(registry);
 //  initializeCoroSplitPass(registry);
@@ -383,16 +284,4 @@ void llvm::initializeCoroutines(PassRegistry &registry) {
   initializeCoroCleanupPass(registry);
 //  initializeCoroPassManagerPass(registry);
   initializeCoroInlinePass(registry);
-}
-
-llvm::CoroutineCommon::SuspendPoint::SuspendPoint(BasicBlock * B)
-{
-    for (auto& I : *B)
-      if (auto II = dyn_cast<IntrinsicInst>(&I))
-        if (II->getIntrinsicID() == Intrinsic::coro_suspend) {
-          reset(II);
-          SuspendInst = II;
-          return;
-        }
-    SuspendInst = nullptr;
 }

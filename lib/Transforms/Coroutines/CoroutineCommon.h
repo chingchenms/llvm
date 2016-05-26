@@ -23,6 +23,26 @@
 #define coro_save2 ObsoleteIntrinsic
 #define coro_elide ObsoleteIntrinsic
 
+//#define coro_init ObsoleteIntrinsic
+#define coro_suspend ObsoleteIntrinsic
+#define coro_param ObsoleteIntrinsic
+//#define coro_frame ObsoleteIntrinsic
+//#define coro_delete ObsoleteIntrinsic
+//#define coro_size ObsoleteIntrinsic
+//#define coro_frame2 ObsoleteIntrinsic
+//#define coro_size2 ObsoleteIntrinsic
+#define coro_kill ObsoleteIntrinsic
+#define coro_kill2 ObsoleteIntrinsic
+//#define coro_promise ObsoleteIntrinsic
+//#define coro_from_promise ObsoleteIntrinsic
+#define coro_save ObsoleteIntrinsic
+#define coro_load ObsoleteIntrinsic
+//#define coro_end ObsoleteIntrinsic
+
+//#define coro_resume : Intrinsic<[], [llvm_ptr_ty], []>;
+//#define coro_destroy : Intrinsic<[], [llvm_ptr_ty], []>;
+//#define coro_done : Intrinsic<[llvm_i1_ty], [llvm_ptr_ty], [IntrReadMem]>;
+
 namespace llvm {
 class Module;
 class Type;

@@ -238,9 +238,6 @@ struct CoroSplit4 : CoroutineCommon {
       auto UseBlock = I->getParent();
       if (UseBlock == DefBlock)
         continue;
-      if (auto II = dyn_cast<IntrinsicInst>(I))
-        if (II->getIntrinsicID() == Intrinsic::coro_kill2)
-          continue;
 
       BasicBlock* BB = nullptr;
       PHINode* PI = dyn_cast<PHINode>(I);
