@@ -586,38 +586,6 @@ struct CoroSplit4 : CoroutineCommon {
 #endif
   }
 
-  bool replaceCoroPromise(Function& F) {
-    bool changed = false;
-    for (auto it = inst_begin(F), end = inst_end(F); it != end;) {
-      Instruction &I = *it++;
-      if (auto intrin = dyn_cast<IntrinsicInst>(&I)) {
-        switch (intrin->getIntrinsicID()) {
-        default:
-          continue;
-        case Intrinsic::coro_promise:
-          ReplaceCoroPromise(intrin);
-          changed = true;
-          break;
-        case Intrinsic::coro_from_promise:
-          ReplaceCoroPromise(intrin, /*From=*/true);
-          changed = true;
-          break;
-#if 0
-        case Intrinsic::coro_resume:
-          ReplaceWithIndirectCall(intrin, zeroConstant);
-          changed = true;
-          break;
-#endif          
-        case Intrinsic::coro_destroy:
-          ReplaceWithIndirectCall(intrin, oneConstant, /*EraseIntrin=*/false);
-          changed = true;
-          break;
-        }
-      }
-    }
-    return changed;
-  }
-
   void runOn(coro::CoroutineData& CoroData) {
     CD = &CoroData;
     ThisFunction = CD->Ramp.Func;
@@ -898,66 +866,6 @@ struct CoroSplit4 : CoroutineCommon {
     removeUnreachableBlocks(*NewFn);
     NewFn->setCallingConv(CallingConv::Fast);
   }
-
-#if 0
-
-  void inlineCoroutine(Function& F) {
-    SmallVector<CallSite, 8> CSes;
-
-    for (auto U : F.users()) 
-      if (auto I = dyn_cast<Instruction>(U)) 
-        if (I->getParent()->getParent() != &F) 
-          if (auto CS = CallSite(I))
-            CSes.push_back(CS);
-
-    for (auto CS : CSes) {
-      InlineFunctionInfo IFI;
-      InlineFunction(CS, IFI);
-    }
-  }
-  void replaceCoroPromises(Function& F) {
-    for (auto it = inst_begin(F), end = inst_end(F); it != end;)
-      if (auto II = dyn_cast<IntrinsicInst>(&*it++))
-        if (II->getIntrinsicID() == Intrinsic::coro_from_promise)
-          ReplaceCoroPromise(II, true);
-  }
-#endif
-#if 0
-  bool runOnModule(Module &M) override {
-    CoroutineCommon::PerModuleInit(M);
-
-    Function* CoroInit =
-      Intrinsic::getDeclaration(&M, Intrinsic::coro_init);
-
-    CoroInit->addAttribute(AttributeSet::ReturnIndex, Attribute::NonNull);
-
-    bool changed = false;
-    for (Function &F : M.getFunctionList()) {
-      if (F.hasFnAttribute(Attribute::Coroutine)) {
-        changed = true;
-        runOnCoroutine(F);
-      }
-      changed |= replaceCoroPromise(F);
-    }
-    return changed;
-  }
-#else
-#if 0
-  bool doInitialization(Module& M) override {
-    CoroutineCommon::PerModuleInit(M);
-    return false;
-  }
-
-  bool runOnFunction(Function &F) override {
-    bool changed = false;
-    if (F.hasFnAttribute(Attribute::Coroutine)) {
-      changed |= runOnCoroutine(F);
-    }
-    changed |= replaceCoroPromise(F);
-    return changed;
-  }
-#endif
-#endif
 };
 }
 
