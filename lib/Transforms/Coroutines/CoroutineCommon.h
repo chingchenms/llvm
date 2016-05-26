@@ -33,8 +33,8 @@
 #define coro_size2 ObsoleteIntrinsic
 #define coro_kill ObsoleteIntrinsic
 #define coro_kill2 ObsoleteIntrinsic
-//#define coro_promise ObsoleteIntrinsic
-//#define coro_from_promise ObsoleteIntrinsic
+#define coro_promise ObsoleteIntrinsic
+#define coro_from_promise ObsoleteIntrinsic
 #define coro_save ObsoleteIntrinsic
 #define coro_load ObsoleteIntrinsic
 #define coro_end ObsoleteIntrinsic

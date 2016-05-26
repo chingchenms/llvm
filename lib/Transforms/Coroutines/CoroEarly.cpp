@@ -58,10 +58,10 @@ struct CoroEarly : public FunctionPass, CoroutineCommon {
         switch (intrin->getIntrinsicID()) {
         default:
           continue;
-        case Intrinsic::coro_promise:
+        case Intrinsic::experimental_coro_promise:
           ReplaceCoroPromise(intrin);
           break;
-        case Intrinsic::coro_from_promise:
+        case Intrinsic::experimental_coro_from_promise:
           ReplaceCoroPromise(intrin, /*From=*/true);
           break;
         case Intrinsic::experimental_coro_done:
