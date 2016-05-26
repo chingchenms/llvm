@@ -612,12 +612,6 @@ struct CoroSplit4 : CoroutineCommon {
           ReplaceWithIndirectCall(intrin, oneConstant, /*EraseIntrin=*/false);
           changed = true;
           break;
-          /*
-        case Intrinsic::coro_done:
-          ReplaceCoroDone(intrin);
-          changed = true;
-          break;
-          */
         }
       }
     }

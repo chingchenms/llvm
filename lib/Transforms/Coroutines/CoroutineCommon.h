@@ -39,9 +39,9 @@
 #define coro_load ObsoleteIntrinsic
 //#define coro_end ObsoleteIntrinsic
 
-//#define coro_resume : Intrinsic<[], [llvm_ptr_ty], []>;
-//#define coro_destroy : Intrinsic<[], [llvm_ptr_ty], []>;
-//#define coro_done : Intrinsic<[llvm_i1_ty], [llvm_ptr_ty], [IntrReadMem]>;
+//#define coro_resume ObsoleteIntrinsic
+//#define coro_destroy ObsoleteIntrinsic
+#define coro_done ObsoleteIntrinsic
 
 namespace llvm {
 class Module;

@@ -284,7 +284,6 @@ struct CoroHeapElide : FunctionPass, CoroutineCommon {
         intrin->eraseFromParent();
 
 #endif
-      replaceAllCoroDone(F);
 
 //      replaceIndirectCalls(F, vFrame, item.ResumeFn);
 //      replaceIndirectCalls(F, vFrame, cleanupFn);
@@ -319,16 +318,6 @@ struct CoroHeapElide : FunctionPass, CoroutineCommon {
           }
     }
   }
-
-  void replaceAllCoroDone(Function &F) {
-    for (auto it = inst_begin(F), end = inst_end(F); it != end;) {
-      Instruction &I = *it++;
-      if (IntrinsicInst *intrin = dyn_cast<IntrinsicInst>(&I))
-        if (intrin->getIntrinsicID() == Intrinsic::coro_done)
-          ReplaceCoroDone(intrin);
-    }
-  }
-
 #if 0
   bool runOnModule(Module& M) override {
     CoroutineCommon::PerModuleInit(M);
