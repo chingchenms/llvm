@@ -29,7 +29,7 @@ using namespace llvm;
 STATISTIC(CoroInitCounter, "Number of @llvm.coro.init replaced");
 STATISTIC(CoroResumeCounter, "Number of @llvm.coro.resume replaced");
 STATISTIC(CoroDestroyCounter, "Number of @llvm.coro.destroy replaced");
-STATISTIC(CoroDoneCounter, "Number of @llvm.coro.done replaced");
+STATISTIC(CoroDeleteCounter, "Number of @llvm.coro.delete replaced");
 
 namespace {
 struct CoroCleanup : FunctionPass, CoroutineCommon {
@@ -42,35 +42,13 @@ struct CoroCleanup : FunctionPass, CoroutineCommon {
     return false;
   }
 
-  void ReplaceCoroInit(IntrinsicInst *intrin) {
+  // in either case, we replace the intrinsic with its first operand
+  // if coroutine frame is at an offset from the beginning of the block
+  // we need to add approrite adjustment, in which case, init would add an
+  // offset and delete would subtract it
+  void ReplaceCoroInitOrDelete(IntrinsicInst *intrin) {
     Value *operand = intrin->getArgOperand(0);
     intrin->replaceAllUsesWith(operand);
-    intrin->eraseFromParent();
-  }
-
-  void ReplaceCoroDone(IntrinsicInst *intrin) {
-    Value *rawFrame = intrin->getArgOperand(0);
-
-    // this could be a coroutine start marker
-    // it that is the case, keep it
-    if (dyn_cast<ConstantPointerNull>(rawFrame))
-      return;
-
-    auto frame = new BitCastInst(rawFrame, anyFramePtrTy, "", intrin);
-#if 0
-    auto gepIndex = GetElementPtrInst::Create(
-        anyFrameTy, frame, {zeroConstant, zeroConstant}, "", intrin);
-    auto index = new LoadInst(gepIndex, "", intrin); // FIXME: alignment
-    auto cmp = new ICmpInst(intrin, ICmpInst::ICMP_EQ,
-      ConstantPointerNull::get(anyResumeFnPtrTy), index);
-#else
-    auto gepIndex = GetElementPtrInst::Create(
-      anyFrameTy, frame, { zeroConstant, twoConstant }, "", intrin);
-    auto index = new LoadInst(gepIndex, "", intrin); // FIXME: alignment
-    auto cmp = new ICmpInst(intrin, ICmpInst::ICMP_EQ,
-                            ConstantInt::get(int32Ty, 0), index);
-#endif
-    intrin->replaceAllUsesWith(cmp);
     intrin->eraseFromParent();
   }
 
@@ -88,8 +66,11 @@ struct CoroCleanup : FunctionPass, CoroutineCommon {
         default:
           continue;
         case Intrinsic::coro_delete:
+          ReplaceCoroInitOrDelete(intrin);
+          ++CoroDeleteCounter;
+          break;
         case Intrinsic::coro_init:
-          ReplaceCoroInit(intrin);
+          ReplaceCoroInitOrDelete(intrin);
           ++CoroInitCounter;
           break;
         case Intrinsic::coro_resume:
@@ -100,22 +81,8 @@ struct CoroCleanup : FunctionPass, CoroutineCommon {
           ReplaceWithIndirectCall(intrin, oneConstant);
           ++CoroDestroyCounter;
           break;
-        case Intrinsic::coro_done:
-          ReplaceCoroDone(intrin);
-          ++CoroDoneCounter;
-          break;
         case Intrinsic::coro_elide:
           ReplaceCoroElide(intrin);
-          break;
-        case Intrinsic::coro_suspend:
-//          assert(isFakeSuspend(intrin) && "coro-split pass did not run");
-          intrin->eraseFromParent();
-          break;
-        case Intrinsic::coro_promise:
-          ReplaceCoroPromise(intrin);
-          break;
-        case Intrinsic::coro_from_promise:
-          ReplaceCoroPromise(intrin, /*From=*/true);
           break;
         }
         changed = true;

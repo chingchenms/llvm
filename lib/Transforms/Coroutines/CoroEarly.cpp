@@ -13,7 +13,6 @@
 //===----------------------------------------------------------------------===//
 
 #include "CoroutineCommon.h"
-#if 0
 #include "llvm/Transforms/Coroutines.h"
 #include "llvm/Transforms/Utils/PromoteMemToReg.h"
 #include "llvm/Transforms/IPO/InlinerPass.h"
@@ -36,6 +35,7 @@
 using namespace llvm;
 
 #define DEBUG_TYPE "coro-early"
+#if 0
 namespace {
   struct CoroEarly : public FunctionPass, CoroutineCommon {
     static char ID; // Pass identification, replacement for typeid
@@ -385,395 +385,23 @@ Pass *llvm::createCoroLastPass() {
   //return new CoroLast();
 }
 Pass *llvm::createCoroOnOpt0() { return new CoroOpt0(); }
-
+#endif
 namespace {
   // inline little things in a coroutine, like a void or bool
   // function with only a ret instruction returning a constant
-#if 0
-  struct CoroPreSplit : public ModulePass, CoroutineCommon {
-    static char ID; // Pass identification, replacement for typeid
-    CoroPreSplit() : ModulePass(ID) {}
-
-    SmallPtrSet<Function*, 8> RampFunctions;
-
-    void ReplaceIfEmpty(Instruction& I, const Function & F) {
-      if (F.size() == 1)
-        if (F.getEntryBlock().size() == 1)
-          if (isa<ReturnInst>(&*inst_begin(F)))
-            I.eraseFromParent();
-    }
-
-    void ReplaceIfConstant(Instruction& I, const Function& F) {
-      if (F.size() == 1)
-        if (F.getEntryBlock().size() == 1)
-          if (auto RetInst = dyn_cast<ReturnInst>(&*inst_begin(F)))
-            if (auto ConstVal = dyn_cast<ConstantInt>(RetInst->getReturnValue())) {
-              I.replaceAllUsesWith(ConstVal);
-              I.eraseFromParent();
-            }
-    }
-
-    void ReplaceSuspendIfEmpty(IntrinsicInst& I) {
-      Value *op = I.getArgOperand(1);
-      while (const ConstantExpr *CE = dyn_cast<ConstantExpr>(op)) {
-        if (!CE->isCast())
-          break;
-        // Look through the bitcast
-        op = cast<ConstantExpr>(op)->getOperand(0);
-      }
-      Function* fn = cast<Function>(op);
-      RampFunctions.insert(fn);
-      if (fn->size() != 1)
-        return;
-
-      BasicBlock& B = fn->back();
-      if (B.size() < 2)
-        return;
-
-      auto LastInstr = B.getTerminator()->getPrevNode();
-      CallInst* Call = cast<CallInst>(LastInstr);
-      Function* awaitSuspendFn = Call->getCalledFunction();
-      if (!awaitSuspendFn)
-        return;
-      if (awaitSuspendFn->isDeclaration())
-        return;
-
-      if (awaitSuspendFn->size() == 1)
-        if (awaitSuspendFn->getEntryBlock().size() == 1)
-          if (isa<ReturnInst>(&*inst_begin(*awaitSuspendFn))) 
-            I.setOperand(0, ConstantPointerNull::get(bytePtrTy));
-    }
-
-    void RemoveLifetimeIntrinsics(Function& F) {
-      bool changed = false;
-      for (auto it = inst_begin(F), end = inst_end(F); it != end;) {
-        Instruction &I = *it++;
-        if (auto intrin = dyn_cast<IntrinsicInst>(&I)) {
-          switch (intrin->getIntrinsicID()) {
-          default:
-            continue;
-          case Intrinsic::lifetime_start:
-          case Intrinsic::lifetime_end:
-            intrin->eraseFromParent();
-            changed = true;
-            break;
-          }
-        }
-      }
-      if (changed)
-        simplifyAndConstantFoldTerminators(F);
-    }
-
-    bool runOnCoroutine(Function& F) {
-      // TODO: try alias analysis
-      //RemoveNoOptAttribute(F);
-      RemoveLifetimeIntrinsics(F);
-#if 0
-      Function* coroKill = 
-        Intrinsic::getDeclaration(M, Intrinsic::coro_kill2, { int32Ty });
-      coroKill->dump();
-
-      Function* coroSave =
-        Intrinsic::getDeclaration(M, Intrinsic::coro_save, { int32Ty });
-      coroSave->dump();
-
-      Function* coroLoad =
-        Intrinsic::getDeclaration(M, Intrinsic::coro_load, { int32Ty });
-      coroLoad->dump();
-
-      Function* coroFromPromise = M->getFunction("llvm.coro.from.promise.p0struct.minig::promise_type");
-        //Intrinsic::getDeclaration(M, Intrinsic::coro_load, { int32Ty });
-
-#endif
-      for (auto it = inst_begin(F), end = inst_end(F); it != end;) {
-        Instruction& I = *it++;
-
-        CallSite CS(cast<Value>(&I));
-        if (!CS)
-          continue;
-        const Function *Callee = CS.getCalledFunction();
-        if (!Callee)
-          continue; // indirect call, nothing to do
-        if (Callee->isIntrinsic()) {
-          if (Callee->getIntrinsicID() == Intrinsic::coro_suspend)
-            ReplaceSuspendIfEmpty(*cast<IntrinsicInst>(&I));
-          continue;
-        }
-
-        if (Callee->isDeclaration())
-          continue;
-
-        // only inline void and bool returning functions
-        const Type *RetType = Callee->getReturnType();
-        if (RetType == voidTy) ReplaceIfEmpty(I, *Callee);
-        else if (RetType == boolTy) ReplaceIfConstant(I, *Callee);
-      }
-      return true;
-    }
-
-    void handleRampFunction(Function& F) {
-      SmallVector<CallSite, 8> CallSites;
-      for (Instruction& I: instructions(F))
-        if (auto CS = CallSite(&I))
-          CallSites.push_back(CS);
-
-      for (auto CS : CallSites) {
-        InlineFunctionInfo IFI;
-        InlineFunction(CS, IFI);
-      }
-    }
-
-    // inline small functions into its parent until we hit a coroutine
-    void handleFromPromise(Function& F) {
-      for (auto& U : F.uses()) {
-        User *UR = U.getUser();
-
-        if (!isa<CallInst>(UR) && !isa<InvokeInst>(UR))
-          continue;
-
-        CallSite CS(cast<Instruction>(UR));
-        if (!CS.isCallee(&U))
-          continue;
-
-        InlineFunctionInfo IFI;
-        InlineFunction(CS, IFI);
-      }
-    }
-
-    bool replaceCoroPromise(Function& F) {
-      bool changed = false;
-      for (auto it = inst_begin(F), end = inst_end(F); it != end;) {
-        Instruction &I = *it++;
-        if (auto intrin = dyn_cast<IntrinsicInst>(&I)) {
-          switch (intrin->getIntrinsicID()) {
-          default:
-            continue;
-          case Intrinsic::coro_promise:
-            ReplaceCoroPromise(intrin);
-            changed = true;
-            break;
-          case Intrinsic::coro_from_promise:
-            ReplaceCoroPromise(intrin, /*From=*/true);
-            changed = true;
-            break;
-          }
-        }
-      }
-      return changed;
-    }
-
-    bool runOnModule(Module &M) override {
-      CoroutineCommon::PerModuleInit(M);
-      RampFunctions.clear();
-
-      bool changed = false;
-      for (Function &F : M.getFunctionList()) {
-        if (isCoroutine(F))
-          changed |= runOnCoroutine(F);
-        else switch (F.getIntrinsicID()) {
-        default:
-          changed |= replaceCoroPromise(F);
-          break;
-        case Intrinsic::coro_from_promise:
-          handleFromPromise(F);
-          break;
-          // why these are here?
-        case Intrinsic::coro_destroy:
-        case Intrinsic::coro_resume:
-          break;
-        }
-      }
-
-      for (Function* F : RampFunctions) {
-        handleRampFunction(*F);
-        changed = true;
-      }
-      return changed;
-    }
-  };
-#else
-struct CoroPreSplit : public FunctionPass, CoroutineCommon {
+struct CoroEarly : public FunctionPass, CoroutineCommon {
   static char ID; // Pass identification, replacement for typeid
-  CoroPreSplit() : FunctionPass(ID) {}
-
-  SmallPtrSet<Function*, 8> RampFunctions;
-
-  void ReplaceIfEmpty(Instruction& I, const Function & F) {
-    if (F.size() == 1)
-      if (F.getEntryBlock().size() == 1)
-        if (isa<ReturnInst>(&*inst_begin(F)))
-          I.eraseFromParent();
-  }
-
-  void ReplaceIfConstant(Instruction& I, const Function& F) {
-    if (F.size() == 1)
-      if (F.getEntryBlock().size() == 1)
-        if (auto RetInst = dyn_cast<ReturnInst>(&*inst_begin(F)))
-          if (auto ConstVal = dyn_cast<ConstantInt>(RetInst->getReturnValue())) {
-            I.replaceAllUsesWith(ConstVal);
-            I.eraseFromParent();
-          }
-  }
-
-  void ReplaceSuspendIfEmpty(IntrinsicInst& I) {
-    Value *op = I.getArgOperand(1);
-    while (const ConstantExpr *CE = dyn_cast<ConstantExpr>(op)) {
-      if (!CE->isCast())
-        break;
-      // Look through the bitcast
-      op = cast<ConstantExpr>(op)->getOperand(0);
-    }
-    Function* fn = cast<Function>(op);
-    RampFunctions.insert(fn);
-    if (fn->size() != 1)
-      return;
-
-    BasicBlock& B = fn->back();
-    if (B.size() < 2)
-      return;
-
-    auto LastInstr = B.getTerminator()->getPrevNode();
-    CallInst* Call = cast<CallInst>(LastInstr);
-    Function* awaitSuspendFn = Call->getCalledFunction();
-    if (!awaitSuspendFn)
-      return;
-    if (awaitSuspendFn->isDeclaration())
-      return;
-
-    if (awaitSuspendFn->size() == 1)
-      if (awaitSuspendFn->getEntryBlock().size() == 1)
-        if (isa<ReturnInst>(&*inst_begin(*awaitSuspendFn)))
-          I.setOperand(0, ConstantPointerNull::get(bytePtrTy));
-  }
-
-  // This needs to be done presplit, not here
-  void RemoveLifetimeIntrinsics(Function& F) {
-    bool changed = false;
-    for (auto it = inst_begin(F), end = inst_end(F); it != end;) {
-      Instruction &I = *it++;
-      if (auto intrin = dyn_cast<IntrinsicInst>(&I)) {
-        switch (intrin->getIntrinsicID()) {
-        default:
-          continue;
-        case Intrinsic::lifetime_start:
-        case Intrinsic::lifetime_end:
-          intrin->eraseFromParent();
-          changed = true;
-          break;
-        }
-      }
-    }
-    if (changed)
-      simplifyAndConstantFoldTerminators(F);
-  }
-#if 0
-  bool splitSuspends(Function& F) {
-    for (auto it = inst_begin(F), e = inst_end(F); it != e;) {
-      Instruction &I = *it++;
-
-    }
-  }
-#endif
-  bool runOnCoroutine(Function& F) {
-    // TODO: try alias analysis
-    //RemoveNoOptAttribute(F);
-    RemoveLifetimeIntrinsics(F);
-#if 0
-    Function* coroKill =
-      Intrinsic::getDeclaration(M, Intrinsic::coro_kill2, { int32Ty });
-    coroKill->dump();
-
-    Function* coroSave =
-      Intrinsic::getDeclaration(M, Intrinsic::coro_save, { int32Ty });
-    coroSave->dump();
-
-    Function* coroLoad =
-      Intrinsic::getDeclaration(M, Intrinsic::coro_load, { int32Ty });
-    coroLoad->dump();
-
-    Function* coroFromPromise = M->getFunction("llvm.coro.from.promise.p0struct.minig::promise_type");
-    //Intrinsic::getDeclaration(M, Intrinsic::coro_load, { int32Ty });
-
-#endif
-    for (auto it = inst_begin(F), end = inst_end(F); it != end;) {
-      Instruction& I = *it++;
-
-      CallSite CS(cast<Value>(&I));
-      if (!CS)
-        continue;
-      const Function *Callee = CS.getCalledFunction();
-      if (!Callee)
-        continue; // indirect call, nothing to do
-      if (Callee->isIntrinsic()) {
-        if (Callee->getIntrinsicID() == Intrinsic::coro_suspend)
-          ReplaceSuspendIfEmpty(*cast<IntrinsicInst>(&I));
-        continue;
-      }
-
-      if (Callee->isDeclaration())
-        continue;
-
-      // only inline void and bool returning functions
-      const Type *RetType = Callee->getReturnType();
-      if (RetType == voidTy) ReplaceIfEmpty(I, *Callee);
-      else if (RetType == boolTy) ReplaceIfConstant(I, *Callee);
-    }
-    return true;
-  }
-
-  void handleRampFunction(Function& F) {
-    SmallVector<CallSite, 8> CallSites;
-    for (Instruction& I : instructions(F))
-      if (auto CS = CallSite(&I))
-        CallSites.push_back(CS);
-
-    for (auto CS : CallSites) {
-      InlineFunctionInfo IFI;
-      InlineFunction(CS, IFI);
-    }
-  }
+  CoroEarly() : FunctionPass(ID) {}
 
   bool doInitialization(Module& M) override {
     CoroutineCommon::PerModuleInit(M);
     return false;
   }
 
-  // Given:
-  //   %8 = call i1 @llvm.coro.suspend(i8* %7,
-  //      i8* bitcast (void (i8*, i8*)*
-  //      @"\01??$_Ramp@Ususpend_always@std@@Upromise_type@coro@@@@YAXPEAX0@Z"
-  //      to i8*), i32 1)
-  // replace it with
-  // %coro.save.1 = call void* @llvm.coro.save(i32 1);
-  // call @"\01??$_Ramp@Ususpend_always@std@@Upromise_type@coro@@@@YAXPEAX0@Z"(%7, coro_frame)
-  // %8 = call i1 @llvm.coro.suspen2(%coro.save.1)
-  void replaceCoroSuspend(IntrinsicInst& II) {
-    auto CoroSave = Intrinsic::getDeclaration(M, Intrinsic::coro_save2);
-    auto Save = CallInst::Create(CoroSave, { II.getArgOperand(2) }, "save", &II);
-
-    auto CoroFrame = Intrinsic::getDeclaration(M, Intrinsic::coro_frame);
-    auto Frame = CallInst::Create(CoroFrame, {}, "", &II);
-
-    Value *op = II.getArgOperand(1);
-    while (const ConstantExpr *CE = dyn_cast<ConstantExpr>(op)) {
-      if (!CE->isCast())
-        break;
-      // Look through the bitcast
-      op = cast<ConstantExpr>(op)->getOperand(0);
-    }
-    Function* fn = cast<Function>(op);
-    assert(fn->getType() == awaitSuspendFnPtrTy && "unexpected await_suspend fn type");
-
-    CallInst::Create(fn, { II.getArgOperand(0), Frame }, "", &II);
-
-    auto CoroSuspend = Intrinsic::getDeclaration(M, Intrinsic::coro_suspend2);
-    auto Suspend = CallInst::Create(CoroSuspend, { Save }, "", &II);
-    II.replaceAllUsesWith(Suspend);
-    II.eraseFromParent();
-  }
-
-  bool replaceCoroPromise(Function& F) {
+  // replaces coro_(from_)promise and coro_done intrinsics
+  bool runOnFunction(Function &F) override {
     bool changed = false;
+
     for (auto it = inst_begin(F), end = inst_end(F); it != end;) {
       Instruction &I = *it++;
       if (auto intrin = dyn_cast<IntrinsicInst>(&I)) {
@@ -782,84 +410,23 @@ struct CoroPreSplit : public FunctionPass, CoroutineCommon {
           continue;
         case Intrinsic::coro_promise:
           ReplaceCoroPromise(intrin);
-          changed = true;
           break;
         case Intrinsic::coro_from_promise:
           ReplaceCoroPromise(intrin, /*From=*/true);
-          changed = true;
           break;
-#if 0          
-        case Intrinsic::coro_suspend:
-          replaceCoroSuspend(*intrin);
-          changed = true;
-#endif        
+        case Intrinsic::coro_done:
+          ReplaceCoroDone(intrin);
+          break;
         }
+        changed = true;
       }
     }
     return changed;
   }
-
-  bool runOnFunction(Function& F) override {
-    bool changed = false;
-
-    //if (isCoroutine(F))
-    //  changed |= runOnCoroutine(F);
-    changed |= replaceCoroPromise(F);
-
-    return changed;
-  }
-#if 0
-
-  // inline small functions into its parent until we hit a coroutine
-  void handleFromPromise(Function& F) {
-    for (auto& U : F.uses()) {
-      User *UR = U.getUser();
-
-      if (!isa<CallInst>(UR) && !isa<InvokeInst>(UR))
-        continue;
-
-      CallSite CS(cast<Instruction>(UR));
-      if (!CS.isCallee(&U))
-        continue;
-
-      InlineFunctionInfo IFI;
-      InlineFunction(CS, IFI);
-    }
-  }
-  bool runOnModule(Module &M) override {
-    CoroutineCommon::PerModuleInit(M);
-    RampFunctions.clear();
-
-    bool changed = false;
-    for (Function &F : M.getFunctionList()) {
-      if (isCoroutine(F))
-        changed |= runOnCoroutine(F);
-      else switch (F.getIntrinsicID()) {
-      default:
-        continue;
-      case Intrinsic::coro_from_promise:
-        handleFromPromise(F);
-        break;
-        // why these are here?
-      case Intrinsic::coro_destroy:
-      case Intrinsic::coro_resume:
-        break;
-      }
-    }
-
-    for (Function* F : RampFunctions) {
-      handleRampFunction(*F);
-      changed = true;
-    }
-    return changed;
-  }
-#endif
 };
-#endif
 }
-char CoroPreSplit::ID = 0;
-static RegisterPass<CoroPreSplit> Y6("CoroPreSplit", "inline little things");
+char CoroEarly::ID = 0;
+static RegisterPass<CoroEarly> Y("CoroEarly", "replace early coro intrinsics");
 namespace llvm {
-  Pass *createCoroPreSplit() { return new CoroPreSplit(); }
+  Pass *createCoroEarlyPass() { return new CoroEarly(); }
 }
-#endif

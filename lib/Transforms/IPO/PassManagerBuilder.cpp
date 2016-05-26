@@ -196,7 +196,7 @@ void PassManagerBuilder::addInstructionCombiningPass(
 void PassManagerBuilder::populateFunctionPassManager(
     legacy::FunctionPassManager &FPM) {
   addExtensionsToPM(EP_EarlyAsPossible, FPM);
-//  FPM.add(createCoroPreSplit());
+  FPM.add(createCoroEarlyPass());
 
   // Add LibraryInfo if we have some.
   if (LibraryInfo)
