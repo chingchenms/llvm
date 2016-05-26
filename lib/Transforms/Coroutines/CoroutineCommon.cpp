@@ -68,7 +68,7 @@ IntrinsicInst *CoroutineCommon::GetCoroElide(IntrinsicInst *CoroInit) {
   auto PN = cast<PHINode>(CoroInit->getArgOperand(0));
   for (auto& Inc : PN->incoming_values())
     if (auto II = dyn_cast<IntrinsicInst>(Inc))
-      if (II->getIntrinsicID() == Intrinsic::coro_elide)
+      if (II->getIntrinsicID() == Intrinsic::experimental_coro_elide)
         return II;
 
   llvm_unreachable("expecting one of the inputs to @llvm.coro.init to be from @llvm.coro.elide");

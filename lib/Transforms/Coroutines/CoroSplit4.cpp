@@ -52,12 +52,12 @@ struct CoroSplit4 : CoroutineCommon {
     SuspendPoint(Instruction &I) : SuspendInst(dyn_cast<IntrinsicInst>(&I)) {
       if (!SuspendInst)
         return;
-      if (SuspendInst->getIntrinsicID() != Intrinsic::coro_suspend2) {
+      if (SuspendInst->getIntrinsicID() != Intrinsic::experimental_coro_suspend) {
         SuspendInst = nullptr;
         return;
       }
       SaveInst = cast<IntrinsicInst>(SuspendInst->getArgOperand(0));
-      assert(SaveInst->getIntrinsicID() == Intrinsic::coro_save2);
+      assert(SaveInst->getIntrinsicID() == Intrinsic::experimental_coro_save);
 
 
       SuspendBr = dyn_cast<BranchInst>(SuspendInst->getNextNode());

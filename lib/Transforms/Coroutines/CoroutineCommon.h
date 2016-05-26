@@ -19,6 +19,10 @@
 #include "llvm/ADT/SetVector.h"
 #include "llvm/IR/IntrinsicInst.h"
 
+#define coro_suspend2 ObsoleteIntrinsic
+#define coro_save2 ObsoleteIntrinsic
+#define coro_elide ObsoleteIntrinsic
+
 namespace llvm {
 class Module;
 class Type;
