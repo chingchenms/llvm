@@ -49,7 +49,7 @@ struct CoroHeapElide : FunctionPass, CoroutineCommon {
   static IntrinsicInst *FindDefiningCoroInit(Value *op) {
     for (;;) {
       if (IntrinsicInst *intrin = dyn_cast<IntrinsicInst>(op)) {
-        if (intrin->getIntrinsicID() == Intrinsic::coro_init)
+        if (intrin->getIntrinsicID() == Intrinsic::experimental_coro_init)
           return intrin;
 
         return nullptr;
@@ -154,7 +154,7 @@ struct CoroHeapElide : FunctionPass, CoroutineCommon {
             AddResumeOrDestroy(coroInit, intrin);
             break;
           }
-          case Intrinsic::coro_init:
+          case Intrinsic::experimental_coro_init:
             AddCoroInit(intrin);
             break;
           }

@@ -390,7 +390,7 @@ struct CoroSplit4 : CoroutineCommon {
 
     void analyzeFunction(Function &F, SuspendInfo &Info) {
       ReturnBlock = findReturnBlock(F);
-      CoroInit = FindIntrinsic(F, Intrinsic::coro_init);
+      CoroInit = FindIntrinsic(F, Intrinsic::experimental_coro_init);
       CoroInit->addAttribute(AttributeSet::ReturnIndex, Attribute::NonNull);
       assert(CoroInit && "missing @llvm.coro.init");
 

@@ -23,7 +23,7 @@
 #define coro_save2 ObsoleteIntrinsic
 #define coro_elide ObsoleteIntrinsic
 
-//#define coro_init ObsoleteIntrinsic
+#define coro_init ObsoleteIntrinsic
 #define coro_suspend ObsoleteIntrinsic
 #define coro_param ObsoleteIntrinsic
 #define coro_frame ObsoleteIntrinsic

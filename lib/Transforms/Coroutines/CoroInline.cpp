@@ -88,7 +88,7 @@ namespace {
       for (CallGraphNode *Node : SCC) {
         Function *F = Node->getFunction();
         if (F) {
-          auto CI = FindIntrinsic(*F, Intrinsic::coro_init);
+          auto CI = FindIntrinsic(*F, Intrinsic::experimental_coro_init);
           if (!CI) return false;
           auto CD = FindIntrinsic(*F, Intrinsic::experimental_coro_destroy);
           if (!CD) return false;
@@ -403,7 +403,7 @@ namespace {
       Module& M = CG.getModule();
       CoroutineCommon::PerModuleInit(M);
       auto CoroSuspend = Intrinsic::getDeclaration(&M, Intrinsic::experimental_coro_suspend);
-      auto CoroInit = Intrinsic::getDeclaration(&M, Intrinsic::coro_init);
+      auto CoroInit = Intrinsic::getDeclaration(&M, Intrinsic::experimental_coro_init);
       HasCoroInit = !CoroInit->user_empty();
       for (User* U : CoroSuspend->users())
         if (auto* I = dyn_cast<Instruction>(U))
