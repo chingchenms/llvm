@@ -388,11 +388,22 @@ struct CoroSplit4 : CoroutineCommon {
       }
     }
 
-    void analyzeFunction(Function &F, SuspendInfo &Info) {
+    AllocaInst* getPromiseAlloca(CoroutineCommon* CC) {
+      auto PromiseAlloca = CoroInit->getArgOperand(1);
+      CoroInit->setArgOperand(1, ConstantPointerNull::get(CC->bytePtrTy));
+      if (auto BI = dyn_cast<BitCastInst>(PromiseAlloca)) {
+        PromiseAlloca = BI->getOperand(0);
+      }
+      return cast<AllocaInst>(PromiseAlloca);
+    }
+
+    void analyzeFunction(Function &F, SuspendInfo &Info, CoroutineCommon* CC) {
       ReturnBlock = findReturnBlock(F);
       CoroInit = FindIntrinsic(F, Intrinsic::experimental_coro_init);
-      CoroInit->addAttribute(AttributeSet::ReturnIndex, Attribute::NonNull);
       assert(CoroInit && "missing @llvm.coro.init");
+      CoroInit->addAttribute(AttributeSet::ReturnIndex, Attribute::NonNull);
+
+      const auto PromiseAlloca = getPromiseAlloca(CC);
 
       ResumeAllocas.clear();
       SharedAllocas.clear();
@@ -413,9 +424,11 @@ struct CoroSplit4 : CoroutineCommon {
       for (auto& I : instructions(F)) {
         if (auto AI = dyn_cast<AllocaInst>(&I)) {
           assert(isa<ConstantInt>(AI->getArraySize()) && "cannot handle non-const allocas yet");
-          if (AI->getName() == "__promise") {
-            // promise must be always in the shared state
-            // and it must be the first field
+          if (AI == PromiseAlloca) {
+            // promise must be always in the shared state at a known 
+            // offset relative to the beginning of the frame.
+            // At the moment, we just make it a first alloca
+            // TODO: handle alignment, better packing
             SharedAllocas.push_back(AI);
             if (SharedAllocas.size() > 1)
               std::swap(SharedAllocas.front(), SharedAllocas.back());
@@ -624,7 +637,7 @@ struct CoroSplit4 : CoroutineCommon {
 
     Suspends.splitEnds(F);
     Suspends.canonicalizeSuspends(F);
-    CoroInfo.analyzeFunction(F, Suspends);
+    CoroInfo.analyzeFunction(F, Suspends, this);
 
     DominatorTree DT;
     DT.recalculate(F);
