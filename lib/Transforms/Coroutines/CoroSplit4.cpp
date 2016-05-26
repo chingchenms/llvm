@@ -505,7 +505,7 @@ struct CoroSplit4 : CoroutineCommon {
     CD->FrameTy->setBody(typeArray);
 
     APInt size(32, DL.getTypeAllocSize(CD->FrameTy));
-    ReplaceIntrinsicWith(*ThisFunction, Intrinsic::coro_size, ConstantInt::get(int32Ty, size));
+    ReplaceIntrinsicWith(*ThisFunction, Intrinsic::experimental_coro_size, ConstantInt::get(int32Ty, size));
   }
 
   SmallString<16> Scratch;
@@ -707,9 +707,8 @@ struct CoroSplit4 : CoroutineCommon {
 
   void PrepareForHeapElision()
   {
-    IntrinsicInst* DeleteInResume = FindIntrinsic(*CD->Resume.Func, Intrinsic::coro_delete);
-//    IntrinsicInst* DeleteInRamp = FindIntrinsic(*ThisFunction, Intrinsic::coro_delete);
-    IntrinsicInst* DeleteInDestroy = FindIntrinsic(*CD->Destroy.Func, Intrinsic::coro_delete);
+    IntrinsicInst* DeleteInResume = FindIntrinsic(*CD->Resume.Func, Intrinsic::experimental_coro_delete);
+    IntrinsicInst* DeleteInDestroy = FindIntrinsic(*CD->Destroy.Func, Intrinsic::experimental_coro_delete);
 
     // if we found delete in Resume the coroutine is not eligible
     // for heap elision, so we don't have to create a .cleanup function

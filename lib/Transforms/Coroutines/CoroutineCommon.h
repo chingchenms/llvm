@@ -27,8 +27,8 @@
 #define coro_suspend ObsoleteIntrinsic
 #define coro_param ObsoleteIntrinsic
 #define coro_frame ObsoleteIntrinsic
-//#define coro_delete ObsoleteIntrinsic
-//#define coro_size ObsoleteIntrinsic
+#define coro_delete ObsoleteIntrinsic
+#define coro_size ObsoleteIntrinsic
 #define coro_frame2 ObsoleteIntrinsic
 #define coro_size2 ObsoleteIntrinsic
 #define coro_kill ObsoleteIntrinsic

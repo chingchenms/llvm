@@ -220,7 +220,7 @@ struct CoroHeapElide : FunctionPass, CoroutineCommon {
     SmallVector<IntrinsicInst*, 4> Deletes;
 
     for (User* U : CoroInit->users())
-      if (auto II = dyn_cast_intrin<Intrinsic::coro_delete>(U))
+      if (auto II = dyn_cast_intrin<Intrinsic::experimental_coro_delete>(U))
         Deletes.push_back(II);
 
     for (IntrinsicInst *Del : Deletes) {
