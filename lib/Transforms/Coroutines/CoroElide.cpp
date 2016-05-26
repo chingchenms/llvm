@@ -377,13 +377,6 @@ struct CoroHeapElide : FunctionPass, CoroutineCommon {
     return changed;
   }
 #endif
-  void RemoveAllAllocationRelatedThings(//CallGraphNode& CGN, 
-    Value *alloc) {
-    CallInst *NeedlessAllocateCall = cast<CallInst>(alloc);
-    // TODO: clean up allocation code better
-    //CGN.removeCallEdgeFor(NeedlessAllocateCall);
-    NeedlessAllocateCall->eraseFromParent();
-  }
 };
 }
 
