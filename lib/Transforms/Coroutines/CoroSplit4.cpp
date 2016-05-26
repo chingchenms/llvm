@@ -688,7 +688,7 @@ struct CoroSplit4 : CoroutineCommon {
     simplifyAndConstantFoldTerminators(F);
     removeUnreachableBlocks(F);
 
-    ReplaceIntrinsicWith(*ThisFunction, Intrinsic::coro_frame, CoroInfo.CoroInit);
+    ReplaceIntrinsicWith(*ThisFunction, Intrinsic::experimental_coro_frame, CoroInfo.CoroInit);
     PrepareForHeapElision();
     return true;
   }
@@ -892,7 +892,7 @@ struct CoroSplit4 : CoroutineCommon {
     MoveInReverseOrder(Used, InsertPt);
 
     auto vFrame = new BitCastInst(FramePtr, bytePtrTy, "", InsertPt);
-    ReplaceIntrinsicWith(*NewFn, Intrinsic::coro_frame, vFrame);
+    ReplaceIntrinsicWith(*NewFn, Intrinsic::experimental_coro_frame, vFrame);
 
     removeUnreachableBlocks(*NewFn);
     simplifyAndConstantFoldTerminators(*NewFn);
