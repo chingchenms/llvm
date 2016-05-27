@@ -167,34 +167,6 @@ void llvm::CoroutineCommon::MoveInReverseOrder(InstrSetVector const &Instrs,
   }
 }
 
-void CoroutineCommon::ComputeAllSuccessors(
-    BasicBlock *B, SmallPtrSetImpl<BasicBlock *> &result) {
-  SmallSetVector<BasicBlock *, 16> workList;
-
-  workList.insert(B);
-  while (!workList.empty()) {
-    B = workList.pop_back_val();
-    result.insert(B);
-    for (BasicBlock *SI : successors(B))
-      if (result.count(SI) == 0)
-        workList.insert(SI);
-  }
-}
-
-void CoroutineCommon::ComputeAllPredecessors(
-    BasicBlock *B, SmallPtrSet<BasicBlock *, 16> &result) {
-  SmallSetVector<BasicBlock *, 16> workList;
-
-  workList.insert(B);
-  while (!workList.empty()) {
-    B = workList.pop_back_val();
-    result.insert(B);
-    for (BasicBlock *SI : predecessors(B))
-      if (result.count(SI) == 0)
-        workList.insert(SI);
-  }
-}
-
 void CoroutineCommon::ReplaceIntrinsicWith(Function &func, Intrinsic::ID id, Value *framePtr) {
   for (auto it = inst_begin(func), end = inst_end(func); it != end;) {
     Instruction& I = *it++;
@@ -261,27 +233,9 @@ bool llvm::CoroutineCommon::simplifyAndConstantFoldTerminators(Function & F) {
   return changed;
 }
 
-CoroutineCommon::BranchSuccessors::BranchSuccessors(IntrinsicInst *I) {
-  reset(I);
-}
-
-void llvm::CoroutineCommon::BranchSuccessors::reset(IntrinsicInst * I)
-{
-  assert(I->getNumUses() == 1 && "unexpected number of uses");
-  BranchInst *Br = cast<BranchInst>(I->user_back());
-  assert(Br->isConditional());
-  IfTrue = Br->getSuccessor(0);
-  IfFalse = Br->getSuccessor(1);
-}
 
 void llvm::initializeCoroutines(PassRegistry &registry) {
-//  initializeCoroEarlyPass(registry);
-//  initializeCoroSplitPass(registry);
-//  initializeCoroSplit2Pass(registry);
-//  initializeCoroSplit3Pass(registry);
   initializeCoroHeapElidePass(registry);
-//  initializeCoroHeapElide2Pass(registry);
   initializeCoroCleanupPass(registry);
-//  initializeCoroPassManagerPass(registry);
   initializeCoroInlinePass(registry);
 }

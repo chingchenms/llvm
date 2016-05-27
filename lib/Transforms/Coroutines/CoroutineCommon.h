@@ -57,6 +57,10 @@ class BasicBlock;
 class AllocaInst;
 class PassRegistry;
 
+#define CORO_CLEANUP_SUFFIX ".cleanup"
+#define CORO_RESUME_SUFFIX ".resume"
+#define CORO_DESTROY_SUFFIX ".destroy"
+
 struct LLVM_LIBRARY_VISIBILITY CoroutineCommon {
   Module *M = nullptr;
   Type *voidTy = nullptr;
@@ -83,12 +87,6 @@ struct LLVM_LIBRARY_VISIBILITY CoroutineCommon {
 
   static IntrinsicInst *GetCoroElide(IntrinsicInst *CoroInit);
 
-  static bool isCoroutine(Function& F);
-
-  static void ComputeAllSuccessors(BasicBlock *B, SmallPtrSetImpl<BasicBlock*> &result);
-
-  static void ComputeAllPredecessors(BasicBlock *B, BlockSet &result);
-
   static void ComputeDefChainNotIn(Instruction *instr, BlockSet const &source,
                                    InstrSetVector &result);
 
@@ -104,43 +102,7 @@ struct LLVM_LIBRARY_VISIBILITY CoroutineCommon {
 
   void ReplaceCoroPromise(IntrinsicInst *intrin, bool from = false);
 
-  struct BranchSuccessors {
-    BasicBlock *IfFalse;
-    BasicBlock *IfTrue;
-
-    BranchSuccessors() : IfFalse(), IfTrue() {}
-    BranchSuccessors(IntrinsicInst *I);
-    void reset(IntrinsicInst *I);
-  };
-
-  static BranchSuccessors getSuccessors(IntrinsicInst *I) { return {I}; }
-
-  struct SuspendPoint : BranchSuccessors {
-    IntrinsicInst *SuspendInst;
-    SuspendPoint() : BranchSuccessors(), SuspendInst() {}
-    SuspendPoint(IntrinsicInst *I) : BranchSuccessors(I), SuspendInst(I) {}
-    SuspendPoint(BasicBlock *B);
-
-    explicit operator bool() const { return SuspendInst; }
-    void clear() {
-      SuspendInst = nullptr;
-      IfFalse = IfTrue = nullptr;
-    }
-  };
-
-  static void ComputeRampBlocks(Function &F, BlockSet &RampBlocks);
-
-  static void ComputeSharedAllocas(Function &F,
-                                   SmallSetVector<AllocaInst *, 16> &result);
-
   void ReplaceWithIndirectCall(IntrinsicInst *intrin, ConstantInt *index, bool Erase = true);
-
-  //IntrinsicInst *asFakeSuspend(Instruction *inst);
-  //bool isFakeSuspend(Instruction *inst) { return asFakeSuspend(inst); }
-
-  //void InsertFakeSuspend(Value *value, Instruction *InsertBefore);
-  //void RemoveNoOptAttribute(Function & F);
-  //void RemoveFakeSuspends(Function &F);
 
   static bool simplifyAndConstantFoldTerminators(Function& F);
 };
@@ -149,15 +111,8 @@ struct LLVM_LIBRARY_VISIBILITY CoroutineCommon {
 /// initializeCoroutines - Initialize all passes linked into the Coroutines
 /// library.
 void initializeCoroEarlyPass(PassRegistry &Registry);
-void initializeCoroEarly2Pass(PassRegistry &Registry);
 void initializeCoroHeapElidePass(PassRegistry &Registry);
-void initializeCoroHeapElide2Pass(PassRegistry &Registry);
 void initializeCoroCleanupPass(PassRegistry &registry);
-void initializeCoroSplitPass(PassRegistry &registry);
-void initializeCoroSplit2Pass(PassRegistry &registry);
-void initializeCoroSplit3Pass(PassRegistry &registry);
-void initializeCoroPassManagerPass(PassRegistry &registry);
-void initializeCoroModuleEarlyPass(PassRegistry &registry);
 void initializeCoroInlinePass(PassRegistry &registry);
 }
 
