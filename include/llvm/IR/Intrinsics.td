@@ -592,7 +592,7 @@ def int_experimental_coro_fork : Intrinsic<[llvm_i1_ty], [], []>;
 def int_experimental_coro_frame : Intrinsic<[llvm_ptr_ty], [], []>;
 def int_experimental_coro_size : Intrinsic<[llvm_i32_ty], [], [IntrNoMem]>;
 
-def int_experimental_coro_end : Intrinsic<[], [], []>;
+def int_experimental_coro_resume_end : Intrinsic<[], [], []>;
 def int_experimental_coro_elide : Intrinsic<[llvm_ptr_ty], [], []>;
 def int_experimental_coro_delete : Intrinsic<[llvm_ptr_ty], [llvm_ptr_ty], []>;
 
@@ -620,28 +620,6 @@ def int_experimental_deoptimize : Intrinsic<[llvm_any_ty], [llvm_vararg_ty],
 
 // NOP: calls/invokes to this intrinsic are removed by codegen
 def int_donothing : Intrinsic<[], [], [IntrNoMem]>;
-
-// Coroutine support intrinsics
-def int_coro_init : Intrinsic<[llvm_ptr_ty], [llvm_ptr_ty], []>;
-def int_coro_suspend : Intrinsic<[llvm_i1_ty], 
-  [llvm_ptr_ty, llvm_ptr_ty, llvm_i32_ty], [IntrReadWriteArgMem, NoCapture<0>, NoCapture<1>]>;
-def int_coro_param : Intrinsic<[llvm_i1_ty], 
-	[llvm_ptr_ty, llvm_ptr_ty], [IntrReadWriteArgMem, NoCapture<0>, NoCapture<1>]>;
-def int_coro_frame : Intrinsic<[llvm_ptr_ty], [], []>;
-def int_coro_elide : Intrinsic<[llvm_ptr_ty], [], []>;
-def int_coro_delete : Intrinsic<[llvm_ptr_ty], [llvm_ptr_ty], []>;
-def int_coro_size : Intrinsic<[llvm_i32_ty], [], [IntrNoMem]>;
-def int_coro_frame2 : Intrinsic<[llvm_anyptr_ty], [], []>;
-def int_coro_size2 : Intrinsic<[llvm_i32_ty], [llvm_anyptr_ty], [IntrNoMem]>;
-def int_coro_kill : Intrinsic<[llvm_any_ty], [llvm_any_ty], []>;
-def int_coro_kill2 : Intrinsic<[llvm_any_ty], [LLVMMatchType<0>], []>;
-def int_coro_promise : Intrinsic<[llvm_anyptr_ty], [llvm_ptr_ty], []>;
-def int_coro_from_promise : Intrinsic<[llvm_ptr_ty], [llvm_anyptr_ty], []>;
-def int_coro_save : Intrinsic<[], [llvm_any_ty, llvm_i32_ty, llvm_i32_ty, llvm_i32_ty], []>;
-def int_coro_load : Intrinsic<[llvm_any_ty], [llvm_i32_ty, llvm_i32_ty], []>;
-def int_coro_save2 : Intrinsic<[llvm_ptr_ty], [llvm_i32_ty], []>;
-def int_coro_suspend2 : Intrinsic<[llvm_i1_ty], [llvm_ptr_ty], []>;
-def int_coro_end :  Intrinsic<[], [], [IntrNoReturn]>;
 
 // Coroutine handle intrinsics
 def int_coro_resume : Intrinsic<[], [llvm_ptr_ty], []>;

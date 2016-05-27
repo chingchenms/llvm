@@ -156,7 +156,7 @@ struct CoroSplit4 : CoroutineCommon {
     void splitBlockOnCoroEnd(BasicBlock& BB) {
       for (auto &I : BB)
         if (auto II = dyn_cast<IntrinsicInst>(&I))
-          if (II->getIntrinsicID() == Intrinsic::experimental_coro_end) {
+          if (II->getIntrinsicID() == Intrinsic::experimental_coro_resume_end) {
             EndBlocks.insert(&BB);
             Instruction* NextInstr = II->getNextNode();
             if (!NextInstr->isTerminator())
@@ -782,7 +782,7 @@ struct CoroSplit4 : CoroutineCommon {
       auto Term = BB->getTerminator();
       auto Prev = Term->getPrevNode();
       auto II = dyn_cast<IntrinsicInst>(Prev);
-      assert(II && (II->getIntrinsicID() == Intrinsic::experimental_coro_end));
+      assert(II && (II->getIntrinsicID() == Intrinsic::experimental_coro_resume_end));
       II->eraseFromParent();
     }
   }
@@ -812,7 +812,7 @@ struct CoroSplit4 : CoroutineCommon {
 		  auto Term = cast<BasicBlock>(VMap[BB])->getTerminator();
 		  auto Prev = Term->getPrevNode();
 		  auto II = dyn_cast<IntrinsicInst>(Prev);
-		  assert(II && (II->getIntrinsicID() == Intrinsic::experimental_coro_end));
+		  assert(II && (II->getIntrinsicID() == Intrinsic::experimental_coro_resume_end));
 
       if (BB->isEHPad())
         dealWithEHPad(II);
