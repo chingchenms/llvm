@@ -12,7 +12,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "CoroutineCommon.h"
-#include "CoroSplit4.h"
+#include "CoroSplit.h"
 #include "llvm/ADT/SmallBitVector.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/SmallVector.h"
