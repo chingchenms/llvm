@@ -4,6 +4,6 @@ add_llvm_library(LLVMCoroutines
   CoroCleanup.cpp
   CoroutineCommon.cpp
   CoroEarly.cpp
-  CoroSplit4.cpp
+  CoroSplit.cpp
   )
 
