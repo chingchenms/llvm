@@ -394,6 +394,10 @@ struct CoroSplit4 : CoroutineCommon {
       if (auto BI = dyn_cast<BitCastInst>(PromiseAlloca)) {
         PromiseAlloca = BI->getOperand(0);
       }
+      else if (auto GEP = dyn_cast<GetElementPtrInst>(PromiseAlloca)) {
+        assert(GEP->hasAllZeroIndices() && "expecting GEP equivalent of BitCast");
+        PromiseAlloca = GEP->getOperand(0);
+      }
       return cast<AllocaInst>(PromiseAlloca);
     }
 
