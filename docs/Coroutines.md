@@ -1,5 +1,6 @@
 # LLVM Coroutines
 ## Introduction
+LLVM coroutines are functions that have one or more suspend points. When a suspend point is reached, execution of a coroutine is suspended. A suspended coroutine can be resumed to continue execution from the last suspend point or be destroyed. 
 bla bla
 ## Terms
 * Coroutine Frame: storage that persist across coroutine suspends and resumes. 
@@ -10,7 +11,7 @@ bla bla
 
 ## Coroutine structure intrinsics
 
-Coroutine structure intrinsics 
+Coroutine structure intrinsics are emitted by the front end to indicate where the suspend points are, which allocation and deallocation functions need to be used if storage for the coroutine frame needs to be allocated d
 
 def int_experimental_coro_init : Intrinsic<[llvm_ptr_ty], [llvm_ptr_ty, llvm_ptr_ty, llvm_ptr_ty], []>;
 def int_experimental_coro_fork : Intrinsic<[llvm_i1_ty], [], []>;
@@ -18,7 +19,7 @@ def int_experimental_coro_fork : Intrinsic<[llvm_i1_ty], [], []>;
 <!-- def int_experimental_coro_frame : Intrinsic<[llvm_ptr_ty], [], []>;-->
 def int_experimental_coro_size : Intrinsic<[llvm_i32_ty], [], [IntrNoMem]>;
 
-def int_experimental_coro_end : Intrinsic<[], [], []>;
+def int_experimental_coro_resume_end : Intrinsic<[], [], []>;
 
 def int_experimental_coro_save : Intrinsic<[llvm_token_ty], [llvm_i32_ty], []>;
 def int_experimental_coro_suspend : Intrinsic<[llvm_i1_ty], [llvm_token_ty], []>;
