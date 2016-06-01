@@ -109,3 +109,8 @@ def int_experimental_coro_delete : Intrinsic<[llvm_i1_ty], [llvm_ptr_ty], []>;
 	  call void @llvm.experimental.coro.destroy(i8* %hdl)
 	  ret i32 0
 	}
+
+## Passes
+
+* which blocks belong to resume part (either resume/destroy)
+* for every used value in the resume blocks see if there is a path to a definition that crosses a suspend point. If definition is an alloca, move that alloca into a coroutine frame

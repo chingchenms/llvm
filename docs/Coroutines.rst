@@ -7,7 +7,7 @@ Coroutines in LLVM
    :depth: 2
 
 Status
-=======
+======
 
 This document describes a set of experimental extensions to LLVM. Use
 with caution.  Because the intrinsics have experimental status,
@@ -15,6 +15,136 @@ compatibility across LLVM releases is not guaranteed.
 
 Overview
 ========
+
+LLVM coroutines are functions that have one or more `suspend points`_. 
+When a suspend point is reached, execution of a coroutine is suspended. 
+A suspended coroutine can be resumed to continue execution from the last 
+suspend point or be destroyed. In the following example funciton `f` returns
+a handle to a suspended coroutine that can be passed to `coro.resume`_ and
+`coro.destroy`_ intrinsics to resume and destroy the coroutine respecitvely.
+
+.. code-block:: llvm
+
+  define i32 @main() {
+  entry:
+    %hdl = call i8* @f(i32 4)
+    call void @llvm.experimental.coro.resume(i8* %hdl)
+    call void @llvm.experimental.coro.resume(i8* %hdl)
+    call void @llvm.experimental.coro.destroy(i8* %hdl)
+    ret i32 0
+  }
+
+In addition to the stack frame which exists when a coroutine is executing, 
+there is an additional region of storage that contains objects that keeps the 
+coroutine state when a coroutine is suspended. This region of storage
+is called `coroutine frame`_. It is created when a coroutine is invoked.
+It is destroyed when a coroutine runs to completion or destroyed. 
+
+An LLVM coroutine is represented as an LLVM function with calls to set of 
+coroutine specific intrinsics marking up suspend points and coroutine frame 
+allocation and deallocation code. Marking up allocation and deallocation code 
+allows an optimization to remove allocation/deallocation when coroutine frame
+can be stored as an alloca in the calling function. 
+
+After mandatory coroutine processing passes a coroutine is split into several
+functions that represent three different way of how control can enter the 
+coroutine: initial invocation that creates the coroutine frame and executes
+the coroutine code until it encounters first suspend point or reaches the end
+of the coroutine, coroutine resume function that contains the code to be 
+executed once coroutine is resumed at a particular suspend point, and a 
+coroutine destroy function that is invoked when coroutine is destroyed.
+
+.. code-block:: llvm
+
+  define i8* @f(i32 %n) {
+  entry:
+    %frame.size = call i32 @llvm.experimental.coro.size()
+    %alloc = call noalias i8* @malloc(i32 %frame.size)
+    %frame = call i8* @llvm.experimental.coro.init(i8* %alloc, i8* null, i8* null)
+    %first.return = call i1 @llvm.experimental.coro.fork()
+    br i1 %first.return, label %coro.return, label %coro.start
+  
+  coro.start:
+    %n.val = phi i32 [ %n, %entry ], [ %inc, %resume ]
+  
+  resume:
+    ; ...
+  
+  coro.return:
+    ret i8* %frame
+  }
+
+.. code-block:: llvm
+
+  define i8* @f(i32 %n) {
+  entry:
+    %frame.size = call i32 @llvm.experimental.coro.size()
+    %alloc = call noalias i8* @malloc(i32 %frame.size)
+    %frame = call i8* @llvm.experimental.coro.init(i8* %alloc, i8* null, i8* null)
+    %first.return = call i1 @llvm.experimental.coro.fork()
+    br i1 %first.return, label %coro.return, label %coro.start
+  
+  coro.start:
+    %n.val = phi i32 [ %n, %entry ], [ %inc, %resume ]
+    call void @yield(i32 %n.val)
+    %save = call token @llvm.experimental.coro.save(i32 1)
+    %suspend = call i1 @llvm.experimental.coro.suspend(token %save)
+    br i1 %suspend, label %resume, label %cleanup
+  
+  resume:
+    %inc = add i32 %n.val, 1
+    br label %coro.start
+  
+  cleanup:
+    %mem = call i8* @llvm.experimental.coro.delete(i8* %frame)
+    call void @free(i8* %mem)
+    call void @llvm.experimental.coro.resume.end()  
+    br label %coro.return
+  
+  coro.return:
+    ret i8* %frame
+  }
+
+
+Terms
+=====
+**Coroutine Handle**
+  a pointer that encodes information about an
+
+Coroutines by example
+=====================
+
+
+High Level Structure
+====================
+
+.. _suspend point:
+.. _suspend points:
+
+Suspend point
+-------------
+bla bla
+
+.. _coroutine frame:
+
+Coroutine frame
+---------------
+bla bla
+
+.. _coro.destroy:
+
+@llvm.experimental.coro.destroy
+-------------------------------
+bla bla
+
+.. _coro.resume:
+
+@llvm.experimental.coro.resume
+-------------------------------
+bla bla
+
+An llvm coroutine is a function that supports suspending execution
+at a particular suspend points and returning control back to the caller
 
 To collect dead objects, garbage collectors must be able to identify
 any references to objects contained within executing code, and,
