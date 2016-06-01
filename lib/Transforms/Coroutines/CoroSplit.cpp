@@ -40,6 +40,33 @@ using namespace llvm;
 
 #define DEBUG_TYPE "coro-split4"
 
+#if 0
+namespace {
+/// The CoroutineFrame class bla bla
+  class CoroutineFrame {
+    AllocaInst* Promise = nullptr;
+    SmallVector<AllocaInst*, 8> Allocas;
+  public:
+    void setPromise(AllocaInst* P) {
+      assert(Promise == nullptr && "should be only called once");
+      Promise = p;
+    }
+    void addAlloca(AllocaInst* AI) {
+      Allocas.push_back(AI);
+    }
+    ConstantInt* getFrameSize();
+
+
+
+    // all frame related ops
+    static Instruction* replaceCoroDestroy(IntrinsicInst*);
+    static Instruction* replaceCoroResume(IntrinsicInst*);
+    static Instruction* replaceCoroDone(IntrinsicInst*);
+    static Instruction* replaceCoroPromise(IntrinsicInst*, bool);
+  };
+} // end anonymous namespace
+#endif
+
 namespace {
 
 struct CoroSplit4 : CoroutineCommon {
@@ -318,6 +345,8 @@ struct CoroSplit4 : CoroutineCommon {
             BasicBlock* UseBlock = UI->getParent();
             if (UseBlock == &BB)
               continue; 
+            if (&I == CoroInit)
+              continue;
             if (!DT.isReachableFromEntry(UseBlock))
               continue;
             Values.push_back(&I);
@@ -388,9 +417,17 @@ struct CoroSplit4 : CoroutineCommon {
       }
     }
 
-    AllocaInst* getPromiseAlloca(CoroutineCommon* CC) {
+    static AllocaInst* getPromiseAlloca(IntrinsicInst* CoroInit, CoroutineCommon* CC) {
       auto PromiseAlloca = CoroInit->getArgOperand(1);
+      if (isa<ConstantPointerNull>(PromiseAlloca))
+        return nullptr;
+
+      // replace the promise arg to coro.init with null
+      // otherwise, we will end up with use before def once we replace
+      // allocas with gep instructions relative to coroutine frame which is
+      // the result of coro.init call
       CoroInit->setArgOperand(1, ConstantPointerNull::get(CC->bytePtrTy));
+
       if (auto BI = dyn_cast<BitCastInst>(PromiseAlloca)) {
         PromiseAlloca = BI->getOperand(0);
       }
@@ -407,7 +444,7 @@ struct CoroSplit4 : CoroutineCommon {
       assert(CoroInit && "missing @llvm.coro.init");
       CoroInit->addAttribute(AttributeSet::ReturnIndex, Attribute::NonNull);
 
-      const auto PromiseAlloca = getPromiseAlloca(CC);
+      const auto PromiseAlloca = getPromiseAlloca(CoroInit, CC);
 
       ResumeAllocas.clear();
       SharedAllocas.clear();
@@ -535,9 +572,6 @@ struct CoroSplit4 : CoroutineCommon {
     for (AllocaInst *AI : Info.SharedAllocas) {
       auto& Name = Scratch;
       Name = AI->getName();
-      if (Name == "__promise") {
-        assert(fieldNo == kStartingField && "promise shall be the first field");
-      }
       AI->setName(""); // FIXME: use TakeName
       auto index = ConstantInt::get(M->getContext(), ++fieldNo);
 
@@ -579,6 +613,7 @@ struct CoroSplit4 : CoroutineCommon {
     createFrameStruct(CoroInfo.SharedAllocas);
     auto InsertPt = CoroInfo.CoroInit->getNextNode();
 
+    CD->Ramp.vFrame = CoroInfo.CoroInit;
     CD->Ramp.Frame = new BitCastInst(CoroInfo.CoroInit, CD->FramePtrTy, "frame",
       InsertPt);
     auto gep0 = GetElementPtrInst::Create(
@@ -589,10 +624,15 @@ struct CoroSplit4 : CoroutineCommon {
       CD->FrameTy, CD->Ramp.Frame, { zeroConstant, oneConstant }, "", InsertPt);
 
     auto CoroElide = GetCoroElide(CoroInfo.CoroInit);
-    auto ICmp = new ICmpInst(InsertPt, ICmpInst::ICMP_EQ, CoroElide,
-                             ConstantPointerNull::get(bytePtrTy));
-    auto Sel = SelectInst::Create(ICmp, CD->Destroy.Func, CD->Cleanup.Func, "", InsertPt);
-    new StoreInst(Sel, gep1, InsertPt);
+    if (CoroElide) {
+      auto ICmp = new ICmpInst(InsertPt, ICmpInst::ICMP_EQ, CoroElide,
+        ConstantPointerNull::get(bytePtrTy));
+      auto Sel = SelectInst::Create(ICmp, CD->Destroy.Func, CD->Cleanup.Func, "", InsertPt);
+      new StoreInst(Sel, gep1, InsertPt);
+    }
+    else {
+      new StoreInst(CD->Destroy.Func, gep1, InsertPt);
+    }
 
 #if 0
     auto gepIndex = GetElementPtrInst::Create(frameTy, frameInRamp,
@@ -681,17 +721,13 @@ struct CoroSplit4 : CoroutineCommon {
   void replaceDelete(coro::CoroutineData::SubInfo& S, IntrinsicInst* CoroDelete) {
     if (!CoroDelete)
       return;
-
-    assert(CoroDelete->hasOneUse());
-    auto User = cast<ICmpInst>(CoroDelete->user_back());
-    User->replaceAllUsesWith(ConstantInt::getFalse(M->getContext()));
-    User->eraseFromParent();
-    CoroDelete->eraseFromParent();
+    CoroDelete->replaceAllUsesWith(CoroDelete->getArgOperand(0));
     simplifyAndConstantFoldTerminators(*S.Func);
   }
 
   void PrepareForHeapElision()
   {
+    // FIXME: Handle the case when there is more than one coro.delete intrinsic 
     IntrinsicInst* DeleteInResume = FindIntrinsic(*CD->Resume.Func, Intrinsic::experimental_coro_delete);
     IntrinsicInst* DeleteInDestroy = FindIntrinsic(*CD->Destroy.Func, Intrinsic::experimental_coro_delete);
 
@@ -862,6 +898,7 @@ struct CoroSplit4 : CoroutineCommon {
 
     VMap[CD->Ramp.Frame]->replaceAllUsesWith(FramePtr);
 
+#if 0 // 06/01/2016 Disabling until we have a test demonstrating the need
 	// CR 05/18/2016: This is fishy
     BlockSet OldEntryBlocks;
     InstrSetVector Used;
@@ -874,8 +911,9 @@ struct CoroSplit4 : CoroutineCommon {
           break;
         }
     MoveInReverseOrder(Used, InsertPt);
-
+#endif
     auto vFrame = new BitCastInst(FramePtr, bytePtrTy, "", InsertPt);
+    VMap[CD->Ramp.vFrame]->replaceAllUsesWith(vFrame);
     ReplaceIntrinsicWith(*NewFn, Intrinsic::experimental_coro_frame, vFrame);
 
     removeUnreachableBlocks(*NewFn);

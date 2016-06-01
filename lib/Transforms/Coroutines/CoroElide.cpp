@@ -250,8 +250,10 @@ struct CoroHeapElide : FunctionPass, CoroutineCommon {
 
       Value* vFrame = item.CoroInit;
 
+      auto CoroElide = GetCoroElide(item.CoroInit);
+
       // FIXME: check for escapes, moves,
-      if (!noDestroys && rampName != F.getName()) {
+      if (CoroElide && !noDestroys && rampName != F.getName()) {
         auto InsertPt = inst_begin(F);
         auto allocaFrame =
             new AllocaInst(item.getFrameType(), "elided.frame", &*InsertPt);
@@ -260,8 +262,6 @@ struct CoroHeapElide : FunctionPass, CoroutineCommon {
                                             "elided.vFrame", &*InsertPt);
 
         replaceAllCoroDeletes(item.CoroInit);
-
-        auto CoroElide = GetCoroElide(item.CoroInit);
 
         item.CoroInit->replaceAllUsesWith(vAllocaFrame);
         item.CoroInit->eraseFromParent();

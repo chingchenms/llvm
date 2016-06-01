@@ -65,7 +65,10 @@ IntrinsicInst *CoroutineCommon::FindIntrinsic(Function &F,
 }
 
 IntrinsicInst *CoroutineCommon::GetCoroElide(IntrinsicInst *CoroInit) {
-  auto PN = cast<PHINode>(CoroInit->getArgOperand(0));
+  auto PN = dyn_cast<PHINode>(CoroInit->getArgOperand(0));
+  if (!PN)
+    return nullptr;
+
   for (auto& Inc : PN->incoming_values())
     if (auto II = dyn_cast<IntrinsicInst>(Inc))
       if (II->getIntrinsicID() == Intrinsic::experimental_coro_elide)
