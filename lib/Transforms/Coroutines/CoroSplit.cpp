@@ -181,6 +181,14 @@ struct CoroSplit4 : CoroutineCommon {
       return cast<ConstantInt>(SaveInst->getOperand(0));
     }
 
+    void setIndex(size_t Index) const {
+      auto Ty = getIndex()->getType();
+      assert(Index <= std::numeric_limits<uint32_t>::max() &&
+             "Suspend point index exceed 32 bits");
+      auto NewValue = ConstantInt::get(Ty, APInt(32, Index));
+      SaveInst->setOperand(0, NewValue);
+    }
+
     bool isFinalSuspend() const { return getIndex()->isZero(); }
     explicit operator bool() const { return SuspendInst; }
   };
@@ -191,6 +199,8 @@ struct CoroSplit4 : CoroutineCommon {
     SmallVector<SuspendPoint, 8> SuspendPoints;
     bool HasFinalSuspend;
 
+	// FIXME: split blocks on coro ends do not
+	// belong in suspend-info
     void splitBlockOnCoroEnd(BasicBlock& BB) {
       for (auto &I : BB)
         if (auto II = dyn_cast<IntrinsicInst>(&I))
@@ -209,6 +219,42 @@ struct CoroSplit4 : CoroutineCommon {
       EndBlocks.clear();
       for (auto BI = F.begin(), BE = F.end(); BI != BE;)
         splitBlockOnCoroEnd(*BI++);
+    }
+
+    using BranchPair = std::pair<BasicBlock*, BasicBlock*>;
+    using UniqueBranchPairsTy = SmallVector<BranchPair, 8>;
+
+    size_t insertBranchPair(UniqueBranchPairsTy& Pairs, SuspendPoint& SP) {
+      auto const P = BranchPair(SP.getResumeBlock(), SP.getCleanupBlock());
+
+      for (size_t i = 0; i < Pairs.size(); ++i) {
+        if (Pairs[i] == P)
+          return i;
+      }
+
+      Pairs.push_back(P);
+      return Pairs.size() - 1;
+    }
+
+    // assign all of the suspend that have identical
+    // suspend and resume branches the same suspend number
+    void renumberSuspends() {
+      SmallVector<std::pair<BasicBlock*, BasicBlock*>, 8> UniqueBranchPairs;
+      UniqueBranchPairs.push_back({ nullptr, nullptr });
+
+      for (auto SP : SuspendPoints) {
+        if (SP.isFinalSuspend()) {
+          if (UniqueBranchPairs[0].second == nullptr) {
+            UniqueBranchPairs[0].second = SP.getCleanupBlock();
+          }
+          else {
+            assert(UniqueBranchPairs[0].second == SP.getCleanupBlock() &&
+              "all final suspends should have identical cleanup branch");
+          }
+          continue;
+        }
+        SP.setIndex(insertBranchPair(UniqueBranchPairs, SP));
+      }
     }
 
     // Canonical suspend is where
@@ -234,6 +280,8 @@ struct CoroSplit4 : CoroutineCommon {
       SuspendBlocks.clear();
       for (auto SP : SuspendPoints)
         SuspendBlocks.insert(SP.SuspendInst->getParent());
+
+	    renumberSuspends();
 
       return changed;
     }
