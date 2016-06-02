@@ -83,9 +83,20 @@ struct CoroSplit4 : CoroutineCommon {
         SuspendInst = nullptr;
         return;
       }
-      SaveInst = cast<IntrinsicInst>(SuspendInst->getArgOperand(0));
-      assert(SaveInst->getIntrinsicID() == Intrinsic::experimental_coro_save);
+      auto SuspendOperand = SuspendInst->getArgOperand(0);
+      if (isa<ConstantTokenNone>(SuspendOperand)) {
+        auto *M = I.getParent()->getParent()->getParent();
+        auto One = ConstantInt::get(M->getContext(), APInt(32, 1));
 
+        SaveInst = (IntrinsicInst*)CallInst::Create(
+            Intrinsic::getDeclaration(M, llvm::Intrinsic::experimental_coro_save), One,
+            "", &I);
+          SuspendInst->setArgOperand(0, SaveInst);
+      }
+      else {
+        SaveInst = cast<IntrinsicInst>(SuspendOperand);
+        assert(SaveInst->getIntrinsicID() == Intrinsic::experimental_coro_save);
+      }
 
       SuspendBr = dyn_cast<BranchInst>(SuspendInst->getNextNode());
       if (!SuspendBr)
