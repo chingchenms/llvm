@@ -290,18 +290,130 @@ allocation elision optimization the resulting main will end up looking as:
 Multiple Suspend Points
 -----------------------
 
-The coroutine we looked at so far was rather simplistic it only had one suspend
-point and therefore execution would always
+Let's consider the coroutine that has more than one suspend point:
+
+.. code-block:: C++
+
+  void *f(int n) {
+     for(;;) {
+       yield(n++);
+       <suspend>
+       yield(-n);
+       <suspend>
+     }
+  }
+
+Matching LLVM code would look like (with the rest of the code remaining the same
+as the code in the previous section):
+
+.. code-block:: llvm
+
+  coro.start:
+      %n.val = phi i32 [ %n, %coro.init ], [ %inc, %resume ]
+      call void @yield(i32 %n.val)
+      %suspend1 = call i1 @llvm.experimental.coro.suspend(token none)
+      br i1 %suspend1, label %resume, label %cleanup
+
+    resume:
+      %inc = add i32 %n.val, 1
+      %sub = sub nsw i32 0, %inc
+      call void @yield(i32 %sub)
+      %suspend2 = call i1 @llvm.experimental.coro.suspend(token none)
+      br i1 %suspend2, label %coro.start, label %cleanup
+
+In this case, coroutine frame would include a suspend index that will indicate
+at which suspend point a coroutine needs to resume and `f.resume` function
+will start with a switch as follows:
+
+.. code-block:: llvm
+
+  define internal fastcc void @f.resume(%f.frame* nocapture nonnull %frame.ptr.resume) {
+  entry:
+    %index.addr = getelementptr %f.frame, %f.frame* %frame.ptr.resume, i64 0, i32 2
+    %index = load i32, i32* %0, align 4
+    %switch = icmp eq i32 %index, 1
+    br i1 %switch, label %resume, label %coro.start
+
+  coro.start:
+    ...
+    br label %exit
+
+  resume:
+    ...
+    br label %exit
+
+  exit:
+   %storemerge = phi i32 [ 2, %resume ], [ 1, %coro.start ]
+    store i32 %storemerge, i32* %index.addr, align 4
+    ret void
+  }
+
+If different cleanup code needs to get executed for different suspend points, 
+a similar switch will be in the `f.destroy` function.
+
+.. note ::
+
+  Using suspend index in a coroutine state and having a switch in `f.resume` and
+  `f.destroy` is one of the possible implementation strategies. We explored 
+  another option where a distinct `f.resume1`, `f.resume2`, etc are created for
+  every suspend point and instead of storing an index, the resume and destroy 
+  function pointers are updated at every suspend. Early testing showed that the
+  former is easier on the optimizer when coroutine is inlined.
 
 Distinct Save and Suspend
 -------------------------
 
-Reaching Inside
----------------
+In the previous example, setting a resume index (or some other state change that 
+needs to happen to prepare coroutine for resumption) happens at the same time as
+suspension of a coroutine. However, in certain cases it is necessary to control 
+when coroutine is prepared for resumption and when it is suspended.
+
+In the following example, coroutine represents some activity that is driven
+by completions of asynchronous operations `async_op1` and `async_op2` which get
+a coroutine handle as a parameter and will resume the coroutine once async
+operation is finished.
+
+.. code-block:: llvm
+
+  void g() {
+     for (;;)
+       if (cond()) {
+          async_op1(<coroutine-handle>); // will resume once async_op1 completes
+          <suspend>
+          do_one();
+       }
+       else {
+          async_op2(<coroutine-handle>); // will resume once async_op2 completes
+          <suspend>
+          do_two();
+       }
+     }
+  }
+
+In this case, coroutine should be ready for resumption prior to a call to 
+`async_op1` and `async_op2`. The `coro.save`_ intrinsic is used to indicate a
+point when coroutine should be ready for resumption:
+
+.. code-block:: llvm
+
+  if.true:
+    %save1 = call token @llvm.experimental.coro.save(i32 1)
+    call void async_op1(i8* %frame)
+    %suspend1 = call i1 @llvm.experimental.coro.suspend(token %save1)
+    br i1 %suspend1, label %resume1, label %cleanup
+
+  if.false:
+    %save2 = call token @llvm.experimental.coro.save(i32 2)
+    call void async_op2(i8* %frame)
+    %suspend2 = call i1 @llvm.experimental.coro.suspend(token %save2)
+    br i1 %suspend2, label %resume2, label %cleanup
 
 Final Suspend
 -------------
 
+
+Reaching Inside
+---------------
 
 
 
