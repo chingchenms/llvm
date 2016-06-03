@@ -43,19 +43,21 @@ coroutine state when a coroutine is suspended. This region of storage
 is called `coroutine frame`_. It is created when a coroutine is invoked.
 It is destroyed when a coroutine runs to completion or destroyed. 
 
-An LLVM coroutine is represented as an LLVM function with calls to set of 
-coroutine specific intrinsics marking up suspend points and coroutine frame 
-allocation and deallocation code. Marking up allocation and deallocation code 
-allows an optimization to remove allocation/deallocation when coroutine frame
-can be stored on a frame of the caller. 
+An LLVM coroutine is represented as an LLVM function that has calls to
+`coroutine intrinsics`_ defining the structure of the coroutine.
+
+.. marking up suspend points and coroutine frame 
+   allocation and deallocation code. Marking up allocation and deallocation code 
+   allows an optimization to remove allocation/deallocation when coroutine frame
+   can be stored on a frame of the caller. 
 
 After mandatory coroutine processing passes a coroutine is split into several
-functions that represent three different way of how control can enter the 
-coroutine: initial invocation that creates the coroutine frame and executes
-the coroutine code until it encounters first suspend point or reaches the end
+functions that represent three different ways of how control can enter the 
+coroutine: an initial invocation that creates the coroutine frame and executes
+the coroutine code until it encounters a suspend point or reaches the end
 of the coroutine, coroutine resume function that contains the code to be 
 executed once coroutine is resumed at a particular suspend point, and a 
-coroutine destroy function that is invoked when coroutine is destroyed.
+coroutine destroy function that is invoked when the coroutine is destroyed.
 
 Coroutines by Example
 =====================
@@ -447,7 +449,7 @@ destroyed:
     ret i32 0
   }
 
-.. _coroutine promise
+.. _coroutine promise:
 
 Reaching Inside
 ---------------
@@ -546,8 +548,7 @@ Coroutine Manipulation Intrinsics
 ---------------------------------
 
 Intrinsics described in this section are used to manipulate an existing
-coroutine. As such they can be used inside of any function that has access
-to the coroutine handle.
+coroutine.
 
 .. _coro.destroy:
 
@@ -564,7 +565,7 @@ Syntax:
 Overview:
 """""""""
 
-The '``llvm.experimental.coro.destroy``' intrinsic destroys the suspended
+The '``llvm.experimental.coro.destroy``' intrinsic destroys a suspended
 coroutine.
 
 Arguments:
@@ -593,13 +594,13 @@ undefined behavior.
 Overview:
 """""""""
 
-The '``llvm.experimental.coro.resume``' intrinsic resumes the suspended
+The '``llvm.experimental.coro.resume``' intrinsic resumes a suspended
 coroutine.
 
 Arguments:
 """"""""""
 
-The argument is a coroutine handle to a suspended coroutine.
+The argument is a handle to a suspended coroutine.
 
 Semantics:
 """"""""""
@@ -607,27 +608,91 @@ Semantics:
 If coroutine identity is known, the `coro.resume` intrinsic is replaced with a
 direct call to coroutine resume function. Otherwise it is replaced with an
 indirect call based on the function pointer for the resume function stored 
-in the coroutine frame. Destroying a coroutine that is not suspended results in
+in the coroutine frame. Resuming a coroutine that is not suspended results in
 undefined behavior.
 
 .. _coro.done:
 
 'llvm.experimental.coro.done' Intrinsic
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-bla bla
+
+::
+
+      declare i1 @llvm.experimental.coro.done(i8* <handle>)
+
+Overview:
+"""""""""
+
+The '``llvm.experimental.coro.done``' intrinsic checks whether a suspended
+coroutine is at the final suspend point or not.
+
+Arguments:
+""""""""""
+
+The argument is a handle to a suspended coroutine.
+
+Semantics:
+""""""""""
+
+Using this intrinsic on a coroutine that does not have a `final suspend`_ point 
+or on a coroutine that is not suspend results in an undefined behavior.
 
 .. _coro.promise:
 
 'llvm.experimental.coro.promise' Intrinsic
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-bla bla
+
+::
+
+      declare <type>* @llvm.experimental.coro.promise.p0<type>(i8* <handle>)
+
+Overview:
+"""""""""
+
+The '``llvm.experimental.coro.promise``' intrinsic returns an address of
+a `coroutine promise`_.
+
+Arguments:
+""""""""""
+
+The argument is a handle to a coroutine.
+
+Semantics:
+""""""""""
+
+Using this intrinsic on a coroutine that does not have a coroutine promise
+results in undefined behavior. It is possible to read and modify coroutine
+promise of the coroutine which is currently executing. The coroutine author and
+a coroutine user are responsible to makes sure there is no data races.
 
 .. _coro.from.promise:
 
 'llvm.experimental.coro.from.promise' Intrinsic
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-bla bla
 
+::
+
+    declare u8* @llvm.experimental.coro.from.promise.p0<type>(<type>* <handle>)
+
+Overview:
+"""""""""
+
+The '``llvm.experimental.coro.from.promise``' intrinsic checks whether a suspended
+coroutine is at the final suspend point or not.
+
+Arguments:
+""""""""""
+
+The argument is a handle to a suspended coroutine.
+
+Semantics:
+""""""""""
+
+Using this intrinsic on a coroutine that does not have a final suspend point or
+on a coroutine that is not suspended results in an undefined behavior.
+
+
+.. _coroutine intrinsics:
 
 Coroutine Structure Intrinsics
 ------------------------------
