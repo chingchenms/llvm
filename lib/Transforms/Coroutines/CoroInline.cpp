@@ -402,7 +402,7 @@ namespace {
       CurrentCG = &CG;
       Module& M = CG.getModule();
       CoroutineCommon::PerModuleInit(M);
-      auto CoroSuspend = Intrinsic::getDeclaration(&M, Intrinsic::experimental_coro_suspend2);
+      auto CoroSuspend = Intrinsic::getDeclaration(&M, Intrinsic::experimental_coro_suspend);
       auto CoroInit = Intrinsic::getDeclaration(&M, Intrinsic::experimental_coro_init);
       HasCoroInit = !CoroInit->user_empty();
       for (User* U : CoroSuspend->users())

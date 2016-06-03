@@ -596,17 +596,14 @@ def int_experimental_coro_resume_end : Intrinsic<[], [], []>;
 def int_experimental_coro_elide : Intrinsic<[llvm_ptr_ty], [], []>;
 def int_experimental_coro_delete : Intrinsic<[llvm_ptr_ty], [llvm_ptr_ty], []>;
 
-def int_experimental_coro_save : Intrinsic<[llvm_token_ty], [llvm_i32_ty], []>;
-def int_experimental_coro_suspend : Intrinsic<[llvm_i1_ty], [llvm_token_ty], []>;
+def int_experimental_coro_save : Intrinsic<[llvm_token_ty], [], []>;
+def int_experimental_coro_suspend : Intrinsic<[llvm_i1_ty], [llvm_token_ty, llvm_i1_ty], []>;
 
 def int_experimental_coro_resume : Intrinsic<[], [llvm_ptr_ty], [Throws]>;
 def int_experimental_coro_destroy : Intrinsic<[], [llvm_ptr_ty], [Throws]>;
 def int_experimental_coro_done : Intrinsic<[llvm_i1_ty], [llvm_ptr_ty], [IntrReadMem]>;
 def int_experimental_coro_promise : Intrinsic<[llvm_anyptr_ty], [llvm_ptr_ty], [IntrReadMem]>;
 def int_experimental_coro_from_promise : Intrinsic<[llvm_ptr_ty], [llvm_anyptr_ty], [IntrReadMem]>;
-
-def int_experimental_coro_save2 : Intrinsic<[llvm_token_ty], [], []>;
-def int_experimental_coro_suspend2 : Intrinsic<[llvm_i1_ty], [llvm_token_ty, llvm_i1_ty], []>;
 
 def int_experimental_coro_promise2 : Intrinsic<[llvm_ptr_ty], [llvm_ptr_ty], [IntrReadMem]>;
 def int_experimental_coro_from_promise2 : Intrinsic<[llvm_ptr_ty], [llvm_ptr_ty], [IntrReadMem]>;

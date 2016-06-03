@@ -80,7 +80,7 @@ struct CoroSplit4 : CoroutineCommon {
     SuspendPoint(Instruction &I) : SuspendInst(dyn_cast<IntrinsicInst>(&I)) {
       if (!SuspendInst)
         return;
-      if (SuspendInst->getIntrinsicID() != Intrinsic::experimental_coro_suspend2) {
+      if (SuspendInst->getIntrinsicID() != Intrinsic::experimental_coro_suspend) {
         SuspendInst = nullptr;
         return;
       }
@@ -90,13 +90,13 @@ struct CoroSplit4 : CoroutineCommon {
         auto *M = SuspendInst->getParent()->getParent()->getParent();
         // if coro.suspend has no matching coro.save, create one
         SaveInst = (IntrinsicInst*)CallInst::Create(
-          Intrinsic::getDeclaration(M, llvm::Intrinsic::experimental_coro_save2), {},
+          Intrinsic::getDeclaration(M, llvm::Intrinsic::experimental_coro_save), {},
             "", &I);
         SuspendInst->setArgOperand(0, SaveInst);
       }
       else {
         SaveInst = cast<IntrinsicInst>(SuspendOperand);
-        assert(SaveInst->getIntrinsicID() == Intrinsic::experimental_coro_save2);
+        assert(SaveInst->getIntrinsicID() == Intrinsic::experimental_coro_save);
       }
 
       // FIXME: This looks fragile
@@ -184,7 +184,7 @@ struct CoroSplit4 : CoroutineCommon {
     }
 
     void setIndex(size_t I) {
-      assert(Index <= std::numeric_limits<uint32_t>::max() &&
+      assert(I <= std::numeric_limits<uint32_t>::max() &&
              "Suspend point index exceed 32 bits");
       Index = I;
     }
