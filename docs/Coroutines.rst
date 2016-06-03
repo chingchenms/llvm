@@ -592,23 +592,43 @@ CoroInline
 ----------
 Since coroutine transformation need to be done in the IPO order and inlining
 pre-split coroutine is undesirable, the CoroInline pass wraps the inliner pass
-to execute CoroElide pass on a pre-split coroutine, followe
+to execute coroutine and inliner passes in the following order.
+
+#. Call sites in the function `F` are inlined as appropriate
+#. CoroElide pass is run on the function `F` to see if any coroutines were 
+   inlined and are eligible for coroutine frame elision optimization.
+#. If function `F` is a coroutine, resume and destroy parts are extracted into
+   `F.resume` and `F.destroy` functions by the CoroSplit pass. 
 
 CoroSplit
 ---------
-The pass CoroSplit splits the coroutine into the start, resume and destroy parts.
+The pass CoroSplit extracts resume and destroy parts into separate functions.
 
 CoroElide
 ---------
+The pass CoroElide examines if the inlined coroutine is eligible for heap 
+allocation elision optimization. If so, it replaces `coro.elide` intrinsic with
+an address of a coroutine frame placed on its caller and replaces
+`coro.delete` intrinsics with null to remove the deallocation code. This pass
+also replaces `coro.resume` and `coro.destroy` intrinsics with direct calls to
+resume and destroy functions for a particular coroutine where possible.
 
+CoroCleanup
+-----------
+This pass runs late to lower all coroutine related intrinsics not replaced by
+earlier passes.
 
-CoroLater
----------
+Areas Requiring Attention
+=========================
+#. Debug information is not supported at the moment.
 
+#. A coroutine frame is bigger than it could be. Adding stack packing and stack 
+   coloring like optimization on the coroutine frame will result in tighter
+   coroutine frames.
 
-Problem Areas
-=============
-#. Debug information is not supported at the moment
-#. Coroutine frame is much bigger than it should. Stack packing and stack 
-coloring like optimization performed on the coroutine frame will result in leaner
-coroutine frame.
+#. The CoroElide optimization pass relies on coroutine ramp function to be
+   inlined. It is possible to split the ramp function further to increase the
+   likelihood that it will get inlined into its caller.
+
+#. Design a convention that would make it possible to apply coroutine heap
+   elision optimization across ABI boundaries.
