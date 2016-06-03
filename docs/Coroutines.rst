@@ -450,7 +450,7 @@ destroyed:
 Reaching Inside
 ---------------
 
-Coroutine author / front-end may designate a distinguished `alloca` that can be
+Coroutine author or front-end may designate a distinguished `alloca` that can be
 used to communicate with the coroutine.
 
 .. code-block:: llvm
@@ -677,3 +677,5 @@ Areas Requiring Attention
 
 #. Design a convention that would make it possible to apply coroutine heap
    elision optimization across ABI boundaries.
+
+#. Cannot handle coroutines with inalloca parameters (used in x86 on Windows)
