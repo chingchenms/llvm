@@ -75,32 +75,32 @@ struct CoroSplit4 : CoroutineCommon {
     IntrinsicInst* SuspendInst;
     BranchInst* SuspendBr;
     IntrinsicInst* SaveInst;
+    int Index;
 
     SuspendPoint(Instruction &I) : SuspendInst(dyn_cast<IntrinsicInst>(&I)) {
       if (!SuspendInst)
         return;
-      if (SuspendInst->getIntrinsicID() != Intrinsic::experimental_coro_suspend) {
+      if (SuspendInst->getIntrinsicID() != Intrinsic::experimental_coro_suspend2) {
         SuspendInst = nullptr;
         return;
       }
+      Index = -1;
       auto SuspendOperand = SuspendInst->getArgOperand(0);
       if (isa<ConstantTokenNone>(SuspendOperand)) {
-        auto *M = I.getParent()->getParent()->getParent();
-        auto One = ConstantInt::get(M->getContext(), APInt(32, 1));
-
+        auto *M = SuspendInst->getParent()->getParent()->getParent();
+        // if coro.suspend has no matching coro.save, create one
         SaveInst = (IntrinsicInst*)CallInst::Create(
-            Intrinsic::getDeclaration(M, llvm::Intrinsic::experimental_coro_save), One,
+          Intrinsic::getDeclaration(M, llvm::Intrinsic::experimental_coro_save2), {},
             "", &I);
-          SuspendInst->setArgOperand(0, SaveInst);
+        SuspendInst->setArgOperand(0, SaveInst);
       }
       else {
         SaveInst = cast<IntrinsicInst>(SuspendOperand);
-        assert(SaveInst->getIntrinsicID() == Intrinsic::experimental_coro_save);
+        assert(SaveInst->getIntrinsicID() == Intrinsic::experimental_coro_save2);
       }
 
-      SuspendBr = dyn_cast<BranchInst>(SuspendInst->getNextNode());
-      if (!SuspendBr)
-        return;
+      // FIXME: This looks fragile
+      SuspendBr = cast<BranchInst>(SuspendInst->getNextNode());
 
       if (isFinalSuspend()) {
         assert(SuspendBr->getNumSuccessors() == 1);
@@ -177,9 +177,19 @@ struct CoroSplit4 : CoroutineCommon {
         : SuspendBr->getSuccessor(1);
     }
 
-    ConstantInt *getIndex() const {
-      return cast<ConstantInt>(SaveInst->getOperand(0));
+    ConstantInt *getIndex(Module *M) const {
+      assert(Index != -1 && "No index was assigned to suspend point");
+      auto Ty = IntegerType::get(M->getContext(), 32);
+      return ConstantInt::get(Ty, Index);
     }
+
+    void setIndex(size_t I) {
+      assert(Index <= std::numeric_limits<uint32_t>::max() &&
+             "Suspend point index exceed 32 bits");
+      Index = I;
+    }
+
+#if 0
 
     void setIndex(size_t Index) const {
       auto Ty = getIndex()->getType();
@@ -188,8 +198,10 @@ struct CoroSplit4 : CoroutineCommon {
       auto NewValue = ConstantInt::get(Ty, APInt(32, Index));
       SaveInst->setOperand(0, NewValue);
     }
-
-    bool isFinalSuspend() const { return getIndex()->isZero(); }
+#endif
+    bool isFinalSuspend() const {
+      return cast<ConstantInt>(SuspendInst->getArgOperand(1))->isOne();
+    }
     explicit operator bool() const { return SuspendInst; }
   };
 
@@ -240,9 +252,13 @@ struct CoroSplit4 : CoroutineCommon {
     // suspend and resume branches the same suspend number
     void renumberSuspends() {
       SmallVector<std::pair<BasicBlock*, BasicBlock*>, 8> UniqueBranchPairs;
-      UniqueBranchPairs.push_back({ nullptr, nullptr });
 
-      for (auto SP : SuspendPoints) {
+      if (HasFinalSuspend) {
+        // reserve room for final suspend at index 0
+        UniqueBranchPairs.push_back({ nullptr, nullptr });
+      }
+
+      for (auto& SP : SuspendPoints) {
         if (SP.isFinalSuspend()) {
           if (UniqueBranchPairs[0].second == nullptr) {
             UniqueBranchPairs[0].second = SP.getCleanupBlock();
@@ -834,33 +850,19 @@ struct CoroSplit4 : CoroutineCommon {
         continue;
       else 
         Target = SP.getResumeBlock();
-      switchInst->addCase(SP.getIndex(), Target);
+      switchInst->addCase(SP.getIndex(M), Target);
       fixupPhiNodes(Target, SP.SuspendInst->getParent(), Entry);
     }
     return Entry;
   }
 
-  void CallAwaitSuspend(IntrinsicInst *I, Value *FramePtr) {
-    auto vFrame = new BitCastInst(FramePtr, bytePtrTy, "", I);
-    Value *op = I->getArgOperand(1);
-    while (const ConstantExpr *CE = dyn_cast<ConstantExpr>(op)) {
-      if (!CE->isCast())
-        break;
-      // Look through the bitcast
-      op = cast<ConstantExpr>(op)->getOperand(0);
-    }
-    Function* fn = cast<Function>(op);
-    assert(fn->getType() == awaitSuspendFnPtrTy && "unexpected await_suspend fn type");
-
-    CallInst::Create(fn, { I->getArgOperand(0), vFrame }, "", I);
-  }
-
   void replaceSuspends(CoroutineInfo &Info, SuspendInfo const &Suspends) {
+    // TODO: we we only have one suspend point, we don't even have to have an index
     if (Suspends.SuspendPoints.size() == 1) {
       // if we have only one suspend point, move
       // the save instruction to the init part
       auto SI = Suspends.SuspendPoints.front().SaveInst;
-      SI->moveBefore(Info.CoroInit->getNextNode());
+      SI->moveBefore(cast<Instruction>(CD->Ramp.Frame)->getNextNode());
     }
     for (auto SP : Suspends.SuspendPoints) {
       BranchInst::Create(Info.ReturnBlock, SP.SuspendBr);
@@ -868,10 +870,9 @@ struct CoroSplit4 : CoroutineCommon {
       auto gep = GetElementPtrInst::Create(CD->FrameTy, CD->Ramp.Frame,
                                            {zeroConstant, twoConstant}, "",
                                            SP.SaveInst);
-      new StoreInst(SP.getIndex(), gep, SP.SaveInst);
+      new StoreInst(SP.getIndex(M), gep, SP.SaveInst);
       SP.SuspendInst->eraseFromParent();
       SP.SaveInst->eraseFromParent();
-      //CallAwaitSuspend(SP.SuspendInst, CD->Ramp.Frame);
     }
   }
 

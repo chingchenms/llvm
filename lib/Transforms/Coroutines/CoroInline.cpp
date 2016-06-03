@@ -12,7 +12,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "CoroutineCommon.h"
-#include "CoroSplit4.h"
+#include "CoroSplit.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/SmallBitVector.h"
 #include "llvm/Transforms/Coroutines.h"
@@ -402,7 +402,7 @@ namespace {
       CurrentCG = &CG;
       Module& M = CG.getModule();
       CoroutineCommon::PerModuleInit(M);
-      auto CoroSuspend = Intrinsic::getDeclaration(&M, Intrinsic::experimental_coro_suspend);
+      auto CoroSuspend = Intrinsic::getDeclaration(&M, Intrinsic::experimental_coro_suspend2);
       auto CoroInit = Intrinsic::getDeclaration(&M, Intrinsic::experimental_coro_init);
       HasCoroInit = !CoroInit->user_empty();
       for (User* U : CoroSuspend->users())

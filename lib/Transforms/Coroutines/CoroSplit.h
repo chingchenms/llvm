@@ -25,7 +25,7 @@ namespace coro {
     struct SubInfo {
       Function* Func;
       Value* Frame;
-      Value* vFrame;
+      Instruction* vFrame;
 
       void Init(Function& F, Twine Suffix, CoroutineData& Data);
     };
