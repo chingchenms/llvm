@@ -79,7 +79,8 @@ struct CoroHeapElide : FunctionPass, CoroutineCommon {
     struct InlinedCoroutine {
       IntrinsicInst *CoroInit = nullptr;
       Function *ResumeFn = nullptr;
-      StoreInst *CleanupFn = nullptr;
+      Function *DestroyFn = nullptr;
+      StoreInst *CleanupFnStore = nullptr;
       unsigned StoreCount = 0;
       SmallVector<IntrinsicInst *, 4> Resumes;
       SmallVector<IntrinsicInst *, 4> Destroys;
@@ -124,6 +125,9 @@ struct CoroHeapElide : FunctionPass, CoroutineCommon {
       InlinedCoroutine &I = get(coroInit);
       if (Func->getName().endswith(".resume")) {
         I.ResumeFn = Func;
+      }
+      else if (Func->getName().endswith(".destroy")) {
+        I.DestroyFn = Func;
       }
       ++I.StoreCount;
     }
@@ -252,6 +256,8 @@ struct CoroHeapElide : FunctionPass, CoroutineCommon {
 
       auto CoroElide = GetCoroElide(item.CoroInit);
 
+      bool AllocationElided = false;
+
       // FIXME: check for escapes, moves,
       if (CoroElide && !noDestroys && rampName != F.getName()) {
         auto InsertPt = inst_begin(F);
@@ -269,6 +275,7 @@ struct CoroHeapElide : FunctionPass, CoroutineCommon {
         CoroElide->replaceAllUsesWith(vAllocaFrame);
         CoroElide->eraseFromParent();
         vFrame = vAllocaFrame;
+        AllocationElided = true;
       }
 
       // FIXME: remove obsolete comment 1/21/2016
@@ -276,14 +283,9 @@ struct CoroHeapElide : FunctionPass, CoroutineCommon {
       // that destroys itself (like in case with optional/expected)
       ReplaceWithDirectCalls(//CG, CGN, 
         item.Resumes, item.ResumeFn);
-#if 1
-      ReplaceWithDirectCalls(//CG, CGN, 
-        item.Destroys, cleanupFn);
-#else
-      for (IntrinsicInst *intrin : item.Destroys)
-        intrin->eraseFromParent();
 
-#endif
+      ReplaceWithDirectCalls(//CG, CGN, 
+        item.Destroys, AllocationElided ? cleanupFn : item.DestroyFn);
 
 //      replaceIndirectCalls(F, vFrame, item.ResumeFn);
 //      replaceIndirectCalls(F, vFrame, cleanupFn);
