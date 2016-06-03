@@ -635,7 +635,7 @@ Semantics:
 """"""""""
 
 Using this intrinsic on a coroutine that does not have a `final suspend`_ point 
-or on a coroutine that is not suspend results in an undefined behavior.
+or on a coroutine that is not suspended results in an undefined behavior.
 
 .. _coro.promise:
 
@@ -672,51 +672,149 @@ a coroutine user are responsible to makes sure there is no data races.
 
 ::
 
-    declare u8* @llvm.experimental.coro.from.promise.p0<type>(<type>* <handle>)
+    declare i8* @llvm.experimental.coro.from.promise.p0<type>(<type>* <handle>)
 
 Overview:
 """""""""
 
-The '``llvm.experimental.coro.from.promise``' intrinsic checks whether a suspended
-coroutine is at the final suspend point or not.
+The '``llvm.experimental.coro.from.promise``' intrinsic returns a coroutine
+handle given the coroutine promise.
 
 Arguments:
 """"""""""
 
-The argument is a handle to a suspended coroutine.
+An address of a coroutine promise.
 
 Semantics:
 """"""""""
 
-Using this intrinsic on a coroutine that does not have a final suspend point or
-on a coroutine that is not suspended results in an undefined behavior.
-
+Using this intrinsic on a coroutine that does not have a coroutine promise
+results in undefined behavior.
 
 .. _coroutine intrinsics:
 
 Coroutine Structure Intrinsics
 ------------------------------
 Intrinsics described in this section are used within a coroutine to describe
-the coroutine structure. 
-
-.. _coro.delete:
-
-'llvm.experimental.coro.delete' Intrinsic
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-bla bla
-
+the coroutine structure. They should not be used outside of a coroutine.
 
 .. _coro.size:
 
 'llvm.experimental.coro.size' Intrinsic
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-bla bla
+::
+
+    declare i32 @llvm.experimental.coro.size()
+    declare i64 @llvm.experimental.coro.size()
+
+Overview:
+"""""""""
+
+The '``llvm.experimental.coro.size``' intrinsic returns the number of bytes
+required to store a `coroutine frame`_.
+
+Arguments:
+""""""""""
+
+None.
+
+Semantics:
+""""""""""
+
+The `coro.size` intrinsic is lowered to a constant representing the size of
+the coroutine frame.
 
 .. _coro.init:
 
 'llvm.experimental.coro.init' Intrinsic
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-bla bla
+::
+
+  declare i8* @llvm.experimental.coro.init(i8* %mem, i8* %promise, i8* %fnaddr)
+
+Overview:
+"""""""""
+
+The '``llvm.experimental.coro.init``' intrinsic returns an address of the 
+coroutine frame.
+
+Arguments:
+""""""""""
+
+The first argument is a pointer to a block of memory in which coroutine frame
+will reside. This could be the result of an allocation function or the result of
+a call to a `coro.elide`_ intrinsics representing a storage that can be used on a
+frame of the calling function.
+
+The second argument, if not null, designates a particular alloca instruction to
+be a `coroutine promise`_.
+
+The third argument is a function pointer to a function this `coro.init` intrinsic
+belongs to. If this argument is `null`, early coroutine passes will replace it
+with an address of the enclosing function. 
+
+.. note::
+  Since `coro.init` intrinsic is not lowered until late optimizer passes, 
+  `fnaddr` argument can be used to distinguish between `coro.init` that 
+  describes a structure of a pre-split coroutine or it belongs to a post-split
+  coroutine that was inlined into a different function.
+
+Semantics:
+""""""""""
+
+If the first argument is the result of an allocation function it is expected that 
+the pointer will be aligned in the same way as to have the same alignment properties as the `malloc`.
+
+Depending on the alignment requirements of the objects in the coroutine promise
+and/or on the codegen compactness reasons the pointer returned from `coro.init` may
+be at offset to the %mem% argument. (The latter is beneficial if instructions
+that express relative access to data can be more compactly encoded with small
+positive and negative offsets).
+
+Front-end should emit exactly one `coro.init` intrinsic per coroutine.
+
+.. _coro.delete:
+
+'llvm.experimental.coro.delete' Intrinsic
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+::
+
+  declare i8* @llvm.experimental.coro.delete(i8* %frame)
+
+Overview:
+"""""""""
+
+The '``llvm.experimental.coro.delete``' intrinsic returns an pointer to a block
+of the memory where coroutine frame is stored or `null` if the allocation
+of the coroutine frame was elided.
+
+Arguments:
+""""""""""
+
+A pointer to the coroutine frame. 
+
+Semantics:
+""""""""""
+
+These intrinsic serves two purposes. One if to encapsulate the potential offset
+at which coroutine frame is stored 
+
+Example:
+""""""""
+
+.. code-block:: llvm
+
+  cleanup:
+    %mem = call i8* @llvm.experimental.coro.delete(i8* %frame)
+    %tobool = icmp ne i8* %mem, null
+    br i1 %tobool, label %if.then, label %if.end
+
+  if.then:
+    call void @free(i8* %mem)
+    br label %if.end
+
+  if.end:
+    ...
 
 .. _coro.fork:
 
@@ -735,6 +833,7 @@ bla bla
 'llvm.experimental.coro.suspend' Intrinsic
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 bla bla
+The second argument only accepts constants.
 
 .. _coro.save:
 
@@ -803,3 +902,7 @@ Areas Requiring Attention
    elision optimization across ABI boundaries.
 
 #. Cannot handle coroutines with inalloca parameters (used in x86 on Windows)
+
+#. No alignment checks are done by coro.init and coro.delete intrinsics.
+   We may need to add an extra parameter to `coro.init` to describe the 
+   alignment that `coro.init` can expect for its first parameter.
