@@ -267,6 +267,7 @@ struct CoroSplit4 : CoroutineCommon {
             assert(UniqueBranchPairs[0].second == SP.getCleanupBlock() &&
               "all final suspends should have identical cleanup branch");
           }
+          SP.setIndex(0);
           continue;
         }
         SP.setIndex(insertBranchPair(UniqueBranchPairs, SP));
