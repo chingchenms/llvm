@@ -143,7 +143,7 @@ is straightforward:
   coro.start:
     %n.val = phi i32 [ %n, %entry ], [ %inc, %resume ]
     call void @yield(i32 %n.val)
-    %suspend = call i1 @llvm.experimental.coro.suspend(token none)
+    %suspend = call i1 @llvm.experimental.coro.suspend(token none, i1 false)
     br i1 %suspend, label %resume, label %cleanup
 
   resume:
@@ -153,7 +153,8 @@ is straightforward:
 When control reaches `coro.suspend`_ intrinsic, the coroutine is suspended.
 The conditional branch following the `coro.suspend` intrinsic indicates two
 alternative continuation for the coroutine, one for normal resume, another
-for destroy.
+for destroy. The boolean parameter to `coro.suspend` indicates whether a
+suspend point represents a `final suspend`_ or not.
 
 Coroutine Transformation
 ------------------------
@@ -310,14 +311,14 @@ as the code in the previous section):
   coro.start:
       %n.val = phi i32 [ %n, %coro.init ], [ %inc, %resume ]
       call void @yield(i32 %n.val)
-      %suspend1 = call i1 @llvm.experimental.coro.suspend(token none)
+      %suspend1 = call i1 @llvm.experimental.coro.suspend(token none, i1 false)
       br i1 %suspend1, label %resume, label %cleanup
 
     resume:
       %inc = add i32 %n.val, 1
       %sub = sub nsw i32 0, %inc
       call void @yield(i32 %sub)
-      %suspend2 = call i1 @llvm.experimental.coro.suspend(token none)
+      %suspend2 = call i1 @llvm.experimental.coro.suspend(token none, i1 false)
       br i1 %suspend2, label %coro.start, label %cleanup
 
 In this case, coroutine frame would include a suspend index that will indicate
@@ -397,23 +398,25 @@ point when coroutine should be ready for resumption:
 .. code-block:: llvm
 
   if.true:
-    %save1 = call token @llvm.experimental.coro.save(i32 1)
+    %save1 = call token @llvm.experimental.coro.save()
     call void async_op1(i8* %frame)
-    %suspend1 = call i1 @llvm.experimental.coro.suspend(token %save1)
+    %suspend1 = call i1 @llvm.experimental.coro.suspend(token %save1, i1 false)
     br i1 %suspend1, label %resume1, label %cleanup
 
   if.false:
-    %save2 = call token @llvm.experimental.coro.save(i32 2)
+    %save2 = call token @llvm.experimental.coro.save()
     call void async_op2(i8* %frame)
-    %suspend2 = call i1 @llvm.experimental.coro.suspend(token %save2)
+    %suspend2 = call i1 @llvm.experimental.coro.suspend(token %save2, i1 false)
     br i1 %suspend2, label %resume2, label %cleanup
+
+.. _final suspend:
 
 Final Suspend
 -------------
 
-..Coroutines we considered so far do not complete on their own. They run
-..until explicitly destroyed by the call to `coro.destroy`_. If we consider a case
-..of a coroutine representing a generator that produces a finite sequence of
+.. Coroutines we considered so far do not complete on their own. They run
+   until explicitly destroyed by the call to `coro.destroy`_. If we consider a case
+   of a coroutine representing a generator that produces a finite sequence of
 
 One of the common coroutine usage patterns is a generator, where a coroutine
 produces a (sometime finite) sequence of values. To facilitate this pattern
@@ -422,6 +425,27 @@ the final suspend point, can only be resumed with `coro.destroy`_ intrinsic.
 Resuming such coroutine with `coro.resume`_ results in undefined behavior.
 The `coro.done`_ intrinsic can be used to check whether a suspended coroutine
 is at the final suspend point or not.
+
+The following is an example of a function that keeps resuming the coroutine
+until the final suspend point is reached after which point the coroutine is 
+destroyed:
+
+.. code-block:: llvm
+
+  define i32 @main() {
+  entry:
+    %coro = call i8* @g()
+    br %while.cond
+  while.cond:
+    %done = call i1 @llvm.experimental.coro.done(i8* %coro)
+    br i1 %done, label %while.end, label %while.body
+  while.body:
+    call void @llvm.experimental.coro.resume(i8* %coro)
+    br label %while.cond
+  while.end:
+    call void @llvm.experimental.coro.destroy(i8* %coro)
+    ret i32 0
+  }
 
 Reaching Inside
 ---------------
@@ -492,19 +516,40 @@ The argument is a coroutine handle to a suspended coroutine.
 Semantics:
 """"""""""
 
-The '``llvm.va_start``' intrinsic works just like the ``va_start`` macro
-available in C. In a target-dependent way, it initializes the
-``va_list`` element to which the argument points, so that the next call
-to ``va_arg`` will produce the first variable argument passed to the
-function. Unlike the C ``va_start`` macro, this intrinsic does not need
-to know the last argument of the function as the compiler can figure
-that out.
+If coroutine identity is known, the `coro.destroy` intrinsic is replaced with a
+direct call to coroutine destroy function. Otherwise it is replaced with an
+indirect call based on the function pointer for the destroy function stored 
+in the coroutine frame. Destroying a coroutine that is not suspended results in
+undefined behavior.
 
 .. _coro.resume:
 
 'llvm.experimental.coro.resume' Intrinsic
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-bla bla
+
+::
+
+      declare void @llvm.experimental.coro.resume(i8* <handle>)
+
+Overview:
+"""""""""
+
+The '``llvm.experimental.coro.resume``' intrinsic resumes the suspended
+coroutine.
+
+Arguments:
+""""""""""
+
+The argument is a coroutine handle to a suspended coroutine.
+
+Semantics:
+""""""""""
+
+If coroutine identity is known, the `coro.resume` intrinsic is replaced with a
+direct call to coroutine resume function. Otherwise it is replaced with an
+indirect call based on the function pointer for the resume function stored 
+in the coroutine frame. Destroying a coroutine that is not suspended results in
+undefined behavior.
 
 .. _coro.done:
 
