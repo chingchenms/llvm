@@ -4,18 +4,16 @@ Coroutines in LLVM
 
 .. contents::
    :local:
-   :depth: 2
+   :depth: 3
 
 Status
 ======
 
 This document describes a set of experimental extensions to LLVM. Use
 with caution.  Because the intrinsics have experimental status,
-compatibility across LLVM releases is not guaranteed.
-
-.. note::
-
-  TODO: mention C++ Coroutines and P0057
+compatibility across LLVM releases is not guaranteed. These intrinsics
+are added to support C++ Coroutine TS (P0057), though they are general enough 
+to be used to implement coroutines in other languages as well.
 
 Overview
 ========
@@ -62,7 +60,7 @@ coroutine destroy function that is invoked when coroutine is destroyed.
 Coroutines by Example
 =====================
 
-Coroutine representation
+Coroutine Representation
 ------------------------
 
 Let's look at an example of an LLVM coroutine with the behavior sketched
@@ -161,11 +159,12 @@ Coroutine Transformation
 ------------------------
 
 In the coroutine shown in the previous section, use of virtual register `%n.val`
-is separated from the definition by a suspend point, thus, it cannot reside
-on the stack frame of the coroutine and need to go into the coroutine frame.
+is separated from the definition by a suspend point, it cannot reside
+on the stack frame of the coroutine since it will go away once coroutine is
+suspended and therefore need to go into the coroutine frame.
 
 Other members of the coroutine frame will be an address of a resume and destroy
-functions representing the instructions that needs to be executed when coroutine
+functions representing the coroutine behavior that needs to happen when coroutine
 is resumed and destroyed respectively.
 
 .. code-block:: llvm
@@ -358,7 +357,8 @@ a similar switch will be in the `f.destroy` function.
   another option where a distinct `f.resume1`, `f.resume2`, etc are created for
   every suspend point and instead of storing an index, the resume and destroy 
   function pointers are updated at every suspend. Early testing showed that the
-  former is easier on the optimizer when coroutine is inlined.
+  former is easier on the optimizer than the latter so it is a strategy 
+  implemented at the moment.
 
 Distinct Save and Suspend
 -------------------------
@@ -411,21 +411,31 @@ point when coroutine should be ready for resumption:
 Final Suspend
 -------------
 
+..Coroutines we considered so far do not complete on their own. They run
+..until explicitly destroyed by the call to `coro.destroy`_. If we consider a case
+..of a coroutine representing a generator that produces a finite sequence of
+
+One of the common coroutine usage patterns is a generator, where a coroutine
+produces a (sometime finite) sequence of values. To facilitate this pattern
+frontend can designate a suspend point to be final. A coroutine suspended at
+the final suspend point, can only be resumed with `coro.destroy`_ intrinsic.
+Resuming such coroutine with `coro.resume`_ results in undefined behavior.
+The `coro.done`_ intrinsic can be used to check whether a suspended coroutine
+is at the final suspend point or not.
 
 Reaching Inside
 ---------------
 
+Coroutine author / front-end may designate a distinguished `alloca` that can be
+used to communicate with the coroutine.
 
+.. code-block:: llvm
+
+  sdfsdf sdf sdf 
+  sdfs dsdf sd fds 
 
 Terms
 =====
-**Coroutine Handle**
-  a pointer that encodes information about an
-
-
-
-High Level Structure
-====================
 
 .. _suspend point:
 .. _suspend points:
@@ -449,69 +459,156 @@ bla bla
 Intrinsics
 ==========
 
+Coroutine Manipulation Intrinsics
+---------------------------------
+
+Intrinsics described in this section are used to manipulate an existing
+coroutine. As such they can be used inside of any function that has access
+to the coroutine handle.
+
 .. _coro.destroy:
 
 'llvm.experimental.coro.destroy' Intrinsic
-------------------------------------------
-bla bla
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-.. _coro.delete:
+Syntax:
+"""""""
 
-'llvm.experimental.coro.delete' Intrinsic
------------------------------------------
-bla bla
+::
+
+      declare void @llvm.experimental.coro.destroy(i8* <handle>)
+
+Overview:
+"""""""""
+
+The '``llvm.experimental.coro.destroy``' intrinsic destroys the suspended
+coroutine.
+
+Arguments:
+""""""""""
+
+The argument is a coroutine handle to a suspended coroutine.
+
+Semantics:
+""""""""""
+
+The '``llvm.va_start``' intrinsic works just like the ``va_start`` macro
+available in C. In a target-dependent way, it initializes the
+``va_list`` element to which the argument points, so that the next call
+to ``va_arg`` will produce the first variable argument passed to the
+function. Unlike the C ``va_start`` macro, this intrinsic does not need
+to know the last argument of the function as the compiler can figure
+that out.
 
 .. _coro.resume:
 
 'llvm.experimental.coro.resume' Intrinsic
------------------------------------------
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 bla bla
 
 .. _coro.done:
 
 'llvm.experimental.coro.done' Intrinsic
------------------------------------------
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 bla bla
+
+.. _coro.promise:
+
+'llvm.experimental.coro.promise' Intrinsic
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+bla bla
+
+.. _coro.from.promise:
+
+'llvm.experimental.coro.from.promise' Intrinsic
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+bla bla
+
+
+Coroutine Structure Intrinsics
+------------------------------
+Intrinsics described in this section are used within a coroutine to describe
+the coroutine structure. 
+
+.. _coro.delete:
+
+'llvm.experimental.coro.delete' Intrinsic
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+bla bla
+
 
 .. _coro.size:
 
 'llvm.experimental.coro.size' Intrinsic
----------------------------------------
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 bla bla
 
 .. _coro.init:
 
 'llvm.experimental.coro.init' Intrinsic
----------------------------------------
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 bla bla
 
 .. _coro.fork:
 
 'llvm.experimental.coro.fork' Intrinsic
----------------------------------------
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 bla bla
 
 .. _coro.resume.end:
 
 'llvm.experimental.coro.resume.end' Intrinsic
----------------------------------------------
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 bla bla
 
 .. _coro.suspend:
 
 'llvm.experimental.coro.suspend' Intrinsic
-------------------------------------------
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 bla bla
 
 .. _coro.save:
 
 'llvm.experimental.coro.save' Intrinsic
----------------------------------------
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 bla bla
 
 .. _coro.elide:
 
 'llvm.experimental.coro.elide' Intrinsic
-----------------------------------------
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 bla bla
 
+Coroutine Transformation Passes
+===============================
+CoroEarly
+---------
+The pass CoroEarly lowers coroutine intrinsics that hide the details of the
+structure of the coroutine frame, but, otherwise not needed to be preserved to
+help later coroutine passes. This pass lowers `coro.done`_, `coro.promise`_ and
+`coro.from.promise`_ intrinsics.
+
+CoroInline
+----------
+Since coroutine transformation need to be done in the IPO order and inlining
+pre-split coroutine is undesirable, the CoroInline pass wraps the inliner pass
+to execute CoroElide pass on a pre-split coroutine, followe
+
+CoroSplit
+---------
+The pass CoroSplit splits the coroutine into the start, resume and destroy parts.
+
+CoroElide
+---------
+
+
+CoroLater
+---------
+
+
+Problem Areas
+=============
+#. Debug information is not supported at the moment
+#. Coroutine frame is much bigger than it should. Stack packing and stack 
+coloring like optimization performed on the coroutine frame will result in leaner
+coroutine frame.
