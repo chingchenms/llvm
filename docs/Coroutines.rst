@@ -331,7 +331,7 @@ will start with a switch as follows:
   entry:
     %index.addr = getelementptr %f.frame, %f.frame* %frame.ptr.resume, i64 0, i32 2
     %index = load i32, i32* %0, align 4
-    %switch = icmp eq i32 %index, 1
+    %switch = icmp eq i32 %index, 0
     br i1 %switch, label %resume, label %coro.start
 
   coro.start:
@@ -343,7 +343,7 @@ will start with a switch as follows:
     br label %exit
 
   exit:
-   %storemerge = phi i32 [ 2, %resume ], [ 1, %coro.start ]
+    %storemerge = phi i32 [ 1, %resume ], [ 0, %coro.start ]
     store i32 %storemerge, i32* %index.addr, align 4
     ret void
   }
@@ -447,16 +447,75 @@ destroyed:
     ret i32 0
   }
 
+.. _coroutine promise
+
 Reaching Inside
 ---------------
 
 Coroutine author or front-end may designate a distinguished `alloca` that can be
-used to communicate with the coroutine.
+used to communicate with the coroutine. This distinguished alloca is called
+coroutine promise and is provided as a second parameter to the `coro.init`_ 
+intrinsic.
+
+The following coroutine designates a 32 bit integer `promise` and uses it to
+store the current value produces by a coroutine.
 
 .. code-block:: llvm
 
-  sdfsdf sdf sdf 
-  sdfs dsdf sd fds 
+  define i8* @f(i32 %n) {
+  entry:
+    %promise = alloca i32
+    %pv = bitcast i32* %promise to i8*
+    %frame.size = call i32 @llvm.experimental.coro.size()
+    %alloc = call noalias i8* @malloc(i32 %frame.size)
+    %frame = call i8* @llvm.experimental.coro.init(i8* %alloc, i8* %pv, i8* null)
+    %first.return = call i1 @llvm.experimental.coro.fork()
+    br i1 %first.return, label %coro.return, label %coro.start
+
+  coro.start:
+    %n.val = phi i32 [ %n, %entry ], [ %inc, %resume ]
+    store i32 %n.val, i32* %promise
+    %suspend = call i1 @llvm.experimental.coro.suspend2(token none, i1 false)
+    br i1 %suspend, label %resume, label %cleanup
+
+  resume:
+    %inc = add i32 %n.val, 1
+    br label %coro.start
+
+  cleanup:
+    %mem = call i8* @llvm.experimental.coro.delete(i8* %frame)
+    call void @free(i8* %mem)
+    br label %coro.return
+
+  coro.return:
+    ret i8* %frame
+  }
+
+Coroutine consumer can rely on the `coro.promise`_ intrinsic to access the
+coroutine promise.
+
+.. code-block:: llvm
+
+  define i32 @main() {
+  entry:
+    %hdl = call i8* @f(i32 4)
+    %promise.addr = call i32* @llvm.experimental.coro.promise.p0i32(i8* %hdl)
+    %val0 = load i32, i32* %promise.addr
+    call void @yield(i32 %val0)
+    call void @llvm.experimental.coro.resume(i8* %hdl)
+    %val1 = load i32, i32* %promise.addr
+    call void @yield(i32 %val1)
+    call void @llvm.experimental.coro.resume(i8* %hdl)
+    %val2 = load i32, i32* %promise.addr
+    call void @yield(i32 %val2)
+    call void @llvm.experimental.coro.destroy(i8* %hdl)
+    ret i32 0
+  }
+
+There is also an intrinsic `coro.from.promise`_ that performs a reverse
+operation. Given an address of a coroutine promise, it obtains a coroutine handle. 
+This intrinsic is the only mechanism for a user code outside of the coroutine 
+to get access to the coroutine handle.
 
 Terms
 =====
