@@ -411,6 +411,7 @@ point when coroutine should be ready for resumption:
     %suspend2 = call i1 @llvm.experimental.coro.suspend(token %save2, i1 false)
     br i1 %suspend2, label %resume2, label %cleanup
 
+.. _final:
 .. _final suspend:
 
 Final Suspend
@@ -454,9 +455,9 @@ destroyed:
 Reaching Inside
 ---------------
 
-Coroutine author or front-end may designate a distinguished `alloca` that can be
-used to communicate with the coroutine. This distinguished alloca is called
-coroutine promise and is provided as a second parameter to the `coro.init`_ 
+A coroutine author or a frontend may designate a distinguished `alloca` that can
+be used to communicate with the coroutine. This distinguished alloca is called
+**coroutine promise** and is provided as a third parameter to the `coro.init`_ 
 intrinsic.
 
 The following coroutine designates a 32 bit integer `promise` and uses it to
@@ -846,7 +847,7 @@ Arguments:
 None
 
 Semantics:
-==========
+""""""""""
 
 If the coroutine is eligible for heap elision and the ramp function is inlined
 in its caller, this intrinsic is lowered to an alloca storing the coroutine frame.
@@ -902,27 +903,148 @@ removed in the future.
 
 'llvm.experimental.coro.fork' Intrinsic
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-bla bla
+::
+
+  declare i1 @llvm.experimental.coro.fork()
+
+Overview:
+"""""""""
+
+The '``llvm.experimental.coro.fork``' intrinsic together with the conditional 
+branch consuming the boolean value returned from this intrinsic is used to 
+indicates where the control flows should transfer on the first suspension of the
+coroutine. 
+
+Arguments:
+""""""""""
+
+None
+
+Semantics:
+""""""""""
+The true branch of the the conditional branch consuming the boolean value 
+returned from this intrinsic indicate where the control flows should transfer on
+the first suspension of the coroutine. 
+
+This intrinsic is removed by the CoroSplit pass when all suspend points are
+lowered.
 
 .. _coro.resume.end:
 
 'llvm.experimental.coro.resume.end' Intrinsic
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-bla bla
+::
+
+  declare void @llvm.experimental.coro.resume.end()
+
+Overview:
+"""""""""
+
+The '``llvm.experimental.coro.resume.end``' marks the point where execution
+of the resume part of the coroutine should end and control returns back to 
+the caller.
+
+
+Arguments:
+""""""""""
+
+None
+
+Semantics:
+""""""""""
+The `coro.resume.end`_ intrinsic is a no-op during an initial invocation of the 
+coroutine. When the coroutine resumes, the intrinsic marks the point when 
+coroutine need to return control back to the caller.
+
+This intrinsic is removed by the CoroSplit pass when coroutine is split into
+the start, resume and destroy parts. In start part, the intrinsic is removed,
+in resume and destroy parts, it is replaced with `ret void` instructions and
+the rest of the block containing `coro.resume.end` instruction is discarded.
 
 .. _coro.suspend:
 
 'llvm.experimental.coro.suspend' Intrinsic
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-bla bla
+::
+
+  declare i1 @llvm.experimental.coro.suspend(token %save, i1 %final)
+
+Overview:
+"""""""""
+
+The '``llvm.experimental.coro.suspend``' marks the point where execution
+of the coroutine need to get suspended and control returned back to the caller.
+Conditional branch consuming the result of this intrinsic marks normal
+and cleanup basic blocks that correspond to this suspend point.
+
+Arguments:
+""""""""""
+
+The first argument refers to a token of `coro.save` intrinsic that marks the 
+point when coroutine state is prepared for suspension. If `none` token is passed,
+the intrinsic behaves as if there were a `coro.save` immediately preceding
+the `coro.suspend` intrinsic.
+
+The second argument indicates whether this suspension point is `final`_.
 The second argument only accepts constants.
+
+Semantics:
+""""""""""
+
+If a coroutine that was suspended at the suspend point marked by this intrinsic
+is resumed via `coro.resume`_ the control will transfer to the basic block
+marked by the true branch of the conditional branch consuming the result of the
+`coro.suspend`. If it is resumed via `coro.destroy`_, it will proceed to the
+false branch.
+
+If suspend intrinsic is marked as final, it can consider the `true` branch
+unreachable and can perform optimizations that can take advantage of that fact.
 
 .. _coro.save:
 
 'llvm.experimental.coro.save' Intrinsic
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-bla bla
+::
 
+  declare token @llvm.experimental.coro.save()
+
+Overview:
+"""""""""
+
+The '``llvm.experimental.coro.save``' marks the point where a coroutine 
+is considered suspened (and thus eligible for resumption) but control
+is not yet transferred back to the caller. Its return value should be consumed
+by exactly one `coro.suspend` intrinsic that marks the point when control need
+to be transferred to the coroutine's caller.
+
+Arguments:
+""""""""""
+
+None
+
+Semantics:
+""""""""""
+
+Whatever coroutine state changes are required to  enable resumption of
+the coroutine from the corresponding suspend point should be done at the point of
+`coro.save` intrinsic.
+
+Example:
+========
+Separate save and suspend points are a necessity when coroutine is used to 
+represent an asynchronous control flow driven by callbacks representing
+completions of asynchronous operations.
+
+In these cases, a coroutine should be ready for resumption prior to a call to 
+`async_op` function that may trigger resumption of a coroutine from the same or
+a different thread:
+
+.. code-block:: llvm
+
+    %save = call token @llvm.experimental.coro.save()
+    call void async_op(i8* %frame)
+    %suspend = call i1 @llvm.experimental.coro.suspend(token %save, i1 false)
+    br i1 %suspend, label %resume, label %cleanup
 
 Coroutine Transformation Passes
 ===============================
