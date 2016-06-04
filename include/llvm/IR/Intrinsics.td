@@ -587,10 +587,12 @@ def int_experimental_gc_relocate : Intrinsic<[llvm_any_ty],
 //===------------------------ Coroutine Intrinsics ---------------===//
 // These are documented in docs/Coroutines.rst
 
-def int_experimental_coro_init : Intrinsic<[llvm_ptr_ty], [llvm_ptr_ty, llvm_ptr_ty, llvm_ptr_ty], []>;
+def int_experimental_coro_init : Intrinsic<[llvm_ptr_ty], 
+                                           [llvm_ptr_ty, llvm_i32_ty, 
+                                            llvm_ptr_ty, llvm_ptr_ty], []>;
 def int_experimental_coro_fork : Intrinsic<[llvm_i1_ty], [], []>;
 def int_experimental_coro_frame : Intrinsic<[llvm_ptr_ty], [], []>;
-def int_experimental_coro_size : Intrinsic<[llvm_i32_ty], [], [IntrNoMem]>;
+def int_experimental_coro_size : Intrinsic<[llvm_anyint_ty], [], [IntrNoMem]>;
 
 def int_experimental_coro_resume_end : Intrinsic<[], [], []>;
 def int_experimental_coro_elide : Intrinsic<[llvm_ptr_ty], [], []>;

@@ -96,7 +96,8 @@ struct LLVM_LIBRARY_VISIBILITY CoroutineCommon {
   static void MoveInReverseOrder(InstrSetVector const &Instrs,
                                  Instruction *InsertBefore);
 
-  static void ReplaceIntrinsicWith(Function &func, Intrinsic::ID id, Value *framePtr);
+  static void ReplaceIntrinsicWith(Function &F, Intrinsic::ID id, Value *framePtr);
+  static void ReplaceIntrinsicWithIntConstant(Function &F, Intrinsic::ID id, unsigned int Val);
 
   void ReplaceCoroDone(IntrinsicInst *intrin);
 

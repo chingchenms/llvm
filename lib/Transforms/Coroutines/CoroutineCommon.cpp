@@ -170,12 +170,24 @@ void llvm::CoroutineCommon::MoveInReverseOrder(InstrSetVector const &Instrs,
   }
 }
 
-void CoroutineCommon::ReplaceIntrinsicWith(Function &func, Intrinsic::ID id, Value *framePtr) {
+void CoroutineCommon::ReplaceIntrinsicWithIntConstant(Function &func, Intrinsic::ID id, unsigned int Val) {
   for (auto it = inst_begin(func), end = inst_end(func); it != end;) {
     Instruction& I = *it++;
     if (IntrinsicInst* intrin = dyn_cast<IntrinsicInst>(&I))
       if (intrin->getIntrinsicID() == id) {
-        intrin->replaceAllUsesWith(framePtr);
+        auto V = ConstantInt::get(intrin->getType(), Val);
+        intrin->replaceAllUsesWith(V);
+        intrin->eraseFromParent();
+      }
+  }
+}
+
+void CoroutineCommon::ReplaceIntrinsicWith(Function &func, Intrinsic::ID id, Value *V) {
+  for (auto it = inst_begin(func), end = inst_end(func); it != end;) {
+    Instruction& I = *it++;
+    if (IntrinsicInst* intrin = dyn_cast<IntrinsicInst>(&I))
+      if (intrin->getIntrinsicID() == id) {
+        intrin->replaceAllUsesWith(V);
         intrin->eraseFromParent();
       }
   }

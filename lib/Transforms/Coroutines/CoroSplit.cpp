@@ -494,7 +494,7 @@ struct CoroSplit4 : CoroutineCommon {
     }
 
     static AllocaInst* getPromiseAlloca(IntrinsicInst* CoroInit, CoroutineCommon* CC) {
-      auto PromiseAlloca = CoroInit->getArgOperand(1);
+      auto PromiseAlloca = CoroInit->getArgOperand(2);
       if (isa<ConstantPointerNull>(PromiseAlloca))
         return nullptr;
 
@@ -502,15 +502,8 @@ struct CoroSplit4 : CoroutineCommon {
       // otherwise, we will end up with use before def once we replace
       // allocas with gep instructions relative to coroutine frame which is
       // the result of coro.init call
-      CoroInit->setArgOperand(1, ConstantPointerNull::get(CC->bytePtrTy));
-
-      if (auto BI = dyn_cast<BitCastInst>(PromiseAlloca)) {
-        PromiseAlloca = BI->getOperand(0);
-      }
-      else if (auto GEP = dyn_cast<GetElementPtrInst>(PromiseAlloca)) {
-        assert(GEP->hasAllZeroIndices() && "expecting GEP equivalent of BitCast");
-        PromiseAlloca = GEP->getOperand(0);
-      }
+      CoroInit->setArgOperand(2, ConstantPointerNull::get(CC->bytePtrTy));
+      PromiseAlloca = PromiseAlloca->stripPointerCasts();
       return cast<AllocaInst>(PromiseAlloca);
     }
 
@@ -634,8 +627,9 @@ struct CoroSplit4 : CoroutineCommon {
     }
     CD->FrameTy->setBody(typeArray);
 
-    APInt size(32, DL.getTypeAllocSize(CD->FrameTy));
-    ReplaceIntrinsicWith(*ThisFunction, Intrinsic::experimental_coro_size, ConstantInt::get(int32Ty, size));
+    ReplaceIntrinsicWithIntConstant(
+        *ThisFunction, Intrinsic::experimental_coro_size,
+        DL.getTypeAllocSize(CD->FrameTy));
   }
 
   SmallString<16> Scratch;
