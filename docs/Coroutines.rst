@@ -93,7 +93,7 @@ above starting with coroutine frame creating and destruction:
   entry:
     %frame.size = call i32 @llvm.experimental.coro.size()
     %alloc = call i8* @malloc(i32 %frame.size)
-    %frame = call i8* @llvm.experimental.coro.init(i8* %alloc, i8* null, i8* null)
+    %frame = call i8* @llvm.experimental.coro.init(i8* %alloc, i32 0, i8* null, i8* null)
     %first.return = call i1 @llvm.experimental.coro.fork()
     br i1 %first.return, label %coro.return, label %coro.start
   
@@ -184,7 +184,7 @@ look like:
   define i8* @f(i32 %n) {
   entry:
     %alloc = call noalias i8* @malloc(i32 24)
-    %0 = call nonnull i8* @llvm.experimental.coro.init(i8* %alloc, i8* null, i8* null)
+    %0 = call nonnull i8* @llvm.experimental.coro.init(i8* %alloc, i32 0, i8* null, i8* null)
     %frame = bitcast i8* %frame to %f.frame*
     %1 = getelementptr %f.frame, %f.frame* %frame, i32 0, i32 0
     store void (%f.frame*)* @f.resume, void (%f.frame*)** %1
@@ -255,7 +255,7 @@ an address of a coroutine frame on the callers if possible and `null` otherwise:
 
   coro.init:
     %phi = phi i8* [ %elide, %entry ], [ %alloc, %coro.alloc ]
-    %frame = call i8* @llvm.experimental.coro.init(i8* %phi, i8* null, i8* null)
+    %frame = call i8* @llvm.experimental.coro.init(i8* %phi, i32 0, i8* null, i8* null)
 
 In the cleanup block, we will make freeing the coroutine frame conditional on
 `coro.delete`_ intrinsic. If allocation is elided, `coro.delete`_ returns `null`
@@ -470,7 +470,7 @@ store the current value produces by a coroutine.
     %pv = bitcast i32* %promise to i8*
     %frame.size = call i32 @llvm.experimental.coro.size()
     %alloc = call noalias i8* @malloc(i32 %frame.size)
-    %frame = call i8* @llvm.experimental.coro.init(i8* %alloc, i8* %pv, i8* null)
+    %frame = call i8* @llvm.experimental.coro.init(i8* %alloc, i32 0, i8* %pv, i8* null)
     %first.return = call i1 @llvm.experimental.coro.fork()
     br i1 %first.return, label %coro.return, label %coro.start
 
@@ -730,7 +730,7 @@ the coroutine frame.
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 ::
 
-  declare i8* @llvm.experimental.coro.init(i8* %mem, i8* %promise, i8* %fnaddr)
+  declare i8* @llvm.experimental.coro.init(i8* %mem, i32 %align, i8* %promise, i8* %fnaddr)
 
 Overview:
 """""""""
@@ -746,32 +746,35 @@ will reside. This could be the result of an allocation function or the result of
 a call to a `coro.elide`_ intrinsics representing a storage that can be used on a
 frame of the calling function.
 
-The second argument, if not null, designates a particular alloca instruction to
+The second argument provides information on alignment of the memory returned by
+the allocation function and given to `coro.init` by the first parameter. If this
+argument is 0, the memory is assumed to be aligned to 2 * sizeof(i8*).
+This argument only accepts constants.
+
+The third argument, if not `null`, designates a particular alloca instruction to
 be a `coroutine promise`_.
 
-The third argument is a function pointer to a function this `coro.init` intrinsic
-belongs to. If this argument is `null`, early coroutine passes will replace it
+The fourth argument is a function pointer to a coroutine itself.
+If this argument is `null`, CoroEarly pass will replace it
 with an address of the enclosing function. 
 
 .. note::
   Since `coro.init` intrinsic is not lowered until late optimizer passes, 
   `fnaddr` argument can be used to distinguish between `coro.init` that 
-  describes a structure of a pre-split coroutine or it belongs to a post-split
-  coroutine that was inlined into a different function.
+  describes a structure of a pre-split coroutine or a `coro.init` belonging to 
+  a post-split coroutine that was inlined into a different function.
 
 Semantics:
 """"""""""
 
-If the first argument is the result of an allocation function it is expected that 
-the pointer will be aligned in the same way as to have the same alignment properties as the `malloc`.
-
-Depending on the alignment requirements of the objects in the coroutine promise
-and/or on the codegen compactness reasons the pointer returned from `coro.init` may
-be at offset to the %mem% argument. (The latter is beneficial if instructions
+Depending on the alignment requirements of the objects in the coroutine frame
+and/or on the codegen compactness reasons the pointer returned from `coro.init` 
+may be at offset to the %mem% argument. (This could be beneficial if instructions
 that express relative access to data can be more compactly encoded with small
 positive and negative offsets).
 
 Front-end should emit exactly one `coro.init` intrinsic per coroutine.
+It should appear prior to `coro.fork`_ intrinsic.
 
 .. _coro.delete:
 
@@ -784,23 +787,18 @@ Front-end should emit exactly one `coro.init` intrinsic per coroutine.
 Overview:
 """""""""
 
-The '``llvm.experimental.coro.delete``' intrinsic returns an pointer to a block
-of the memory where coroutine frame is stored or `null` if the allocation
+The '``llvm.experimental.coro.delete``' intrinsic returns a pointer to a block
+of memory where coroutine frame is stored or `null` if the allocation
 of the coroutine frame was elided.
 
 Arguments:
 """"""""""
 
-A pointer to the coroutine frame. 
+A pointer to the coroutine frame. This should be the same pointer that was 
+returned by prior `coro.init` call.
 
-Semantics:
-""""""""""
-
-These intrinsic serves two purposes. One if to encapsulate the potential offset
-at which coroutine frame is stored 
-
-Example:
-""""""""
+Example (allow heap allocation elision):
+""""""""""""""""""""""""""""""""""""""""
 
 .. code-block:: llvm
 
@@ -814,7 +812,91 @@ Example:
     br label %if.end
 
   if.end:
-    ...
+    ret void
+
+Example (no heap allocation elision):
+""""""""""""""""""""""""""""""""""""""""
+
+.. code-block:: llvm
+
+  cleanup:
+    %mem = call i8* @llvm.experimental.coro.delete(i8* %frame)
+    call void @free(i8* %mem)
+    ret void
+
+
+.. _coro.elide:
+
+'llvm.experimental.coro.elide' Intrinsic
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+::
+
+  declare i8* @llvm.experimental.coro.elide()
+
+Overview:
+"""""""""
+
+The '``llvm.experimental.coro.frame``' intrinsic returns an address of the 
+memory on the callers frame where coroutine frame of this coroutine can be 
+placed and `null` otherwise.
+
+Arguments:
+""""""""""
+
+None
+
+Semantics:
+==========
+
+If the coroutine is eligible for heap elision and the ramp function is inlined
+in its caller, this intrinsic is lowered to an alloca storing the coroutine frame.
+Otherwise, it is lowered to constant `null`.
+
+Example:
+""""""""""
+
+.. code-block:: llvm
+
+  entry:
+    %elide = call i8* @llvm.experimental.coro.elide()
+    %0 = icmp ne i8* %elide, null
+    br i1 %0, label %coro.init, label %coro.alloc
+
+  coro.alloc:
+    %frame.size = call i32 @llvm.experimental.coro.size()
+    %alloc = call i8* @malloc(i32 %frame.size)
+    br label %coro.init
+
+  coro.init:
+    %phi = phi i8* [ %elide, %entry ], [ %alloc, %coro.alloc ]
+    %frame = call i8* @llvm.experimental.coro.init(i8* %phi, i32 0, i8* null, i8* null)
+
+.. _coro.frame:
+
+'llvm.experimental.coro.frame' Intrinsic
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+::
+
+  declare i8* @llvm.experimental.coro.frame()
+
+Overview:
+"""""""""
+
+The '``llvm.experimental.coro.init``' intrinsic returns an address of the 
+coroutine frame.
+
+Arguments:
+""""""""""
+
+None
+
+Semantics:
+""""""""""
+
+This intrinsic is lowered to refer to the `coro.init`_ instruction. This is
+a frontend convenience intrinsic that makes it easier to refer to the
+coroutine frame during semantic analysis of the coroutine. This intrinsic maybe
+removed in the future. 
 
 .. _coro.fork:
 
@@ -841,11 +923,6 @@ The second argument only accepts constants.
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 bla bla
 
-.. _coro.elide:
-
-'llvm.experimental.coro.elide' Intrinsic
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-bla bla
 
 Coroutine Transformation Passes
 ===============================
@@ -853,8 +930,8 @@ CoroEarly
 ---------
 The pass CoroEarly lowers coroutine intrinsics that hide the details of the
 structure of the coroutine frame, but, otherwise not needed to be preserved to
-help later coroutine passes. This pass lowers `coro.done`_, `coro.promise`_ and
-`coro.from.promise`_ intrinsics.
+help later coroutine passes. This pass lowers `coro.frame`_, `coro.done`_, 
+`coro.promise`_ and `coro.from.promise`_ intrinsics.
 
 CoroInline
 ----------
@@ -903,6 +980,4 @@ Areas Requiring Attention
 
 #. Cannot handle coroutines with inalloca parameters (used in x86 on Windows)
 
-#. No alignment checks are done by coro.init and coro.delete intrinsics.
-   We may need to add an extra parameter to `coro.init` to describe the 
-   alignment that `coro.init` can expect for its first parameter.
+#. Alignment is ignored by coro.init and coro.delete intrinsics.
