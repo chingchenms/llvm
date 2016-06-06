@@ -427,56 +427,6 @@ point when coroutine should be ready for resumption:
     %suspend2 = call i1 @llvm.experimental.coro.suspend(token %save2, i1 false)
     br i1 %suspend2, label %resume2, label %cleanup
 
-.. _final:
-.. _final suspend:
-
-Final Suspend
--------------
-
-.. Coroutines we considered so far do not complete on their own. They run
-   until explicitly destroyed by the call to `coro.destroy`_. If we consider a case
-   of a coroutine representing a generator that produces a finite sequence of
-
-.. note::
-  * reason 1: We know suspend the final suspend point. There is no need for the
-    user to have extra code to track whether we are at final suspend point or
-    not.
-  * reason 2: Guard against misuse of a coroutine by trying to resume the 
-    coroutine that reached the end. For example replacing ResumeFnPtr in the
-    coroutine frame when final suspend is reached, will result in a trap for
-    free if someone call `coro.resume` on such a coroutine.
-  * reason 3: One less case for a switch in the beginning of the the resume 
-    function.
-
-One of the common coroutine usage patterns is a generator, where a coroutine
-produces a (sometime finite) sequence of values. To facilitate this pattern
-frontend can designate a suspend point to be final. A coroutine suspended at
-the final suspend point, can only be resumed with `coro.destroy`_ intrinsic.
-Resuming such a coroutine with `coro.resume`_ leads to undefined behavior.
-The `coro.done`_ intrinsic can be used to check whether a suspended coroutine
-is at the final suspend point or not.
-
-The following is an example of a function that keeps resuming the coroutine
-until the final suspend point is reached after which point the coroutine is 
-destroyed:
-
-.. code-block:: llvm
-
-  define i32 @main() {
-  entry:
-    %coro = call i8* @g()
-    br %while.cond
-  while.cond:
-    %done = call i1 @llvm.experimental.coro.done(i8* %coro)
-    br i1 %done, label %while.end, label %while.body
-  while.body:
-    call void @llvm.experimental.coro.resume(i8* %coro)
-    br label %while.cond
-  while.end:
-    call void @llvm.experimental.coro.destroy(i8* %coro)
-    ret i32 0
-  }
-
 .. _coroutine promise:
 
 Coroutine Promise
@@ -546,6 +496,56 @@ There is also an intrinsic `coro.from.promise`_ that performs a reverse
 operation. Given an address of a coroutine promise, it obtains a coroutine handle. 
 This intrinsic is the only mechanism for a user code outside of the coroutine 
 to get access to the coroutine handle.
+
+.. _final:
+.. _final suspend:
+
+Final Suspend
+-------------
+
+.. Coroutines we considered so far do not complete on their own. They run
+   until explicitly destroyed by the call to `coro.destroy`_. If we consider a case
+   of a coroutine representing a generator that produces a finite sequence of
+
+.. note::
+  * reason 1: We know suspend the final suspend point. There is no need for the
+    user to have extra code to track whether we are at final suspend point or
+    not.
+  * reason 2: Guard against misuse of a coroutine by trying to resume the 
+    coroutine that reached the end. For example replacing ResumeFnPtr in the
+    coroutine frame when final suspend is reached, will result in a trap for
+    free if someone call `coro.resume` on such a coroutine.
+  * reason 3: One less case for a switch in the beginning of the the resume 
+    function.
+
+One of the common coroutine usage patterns is a generator, where a coroutine
+produces a (sometime finite) sequence of values. To facilitate this pattern
+frontend can designate a suspend point to be final. A coroutine suspended at
+the final suspend point, can only be resumed with `coro.destroy`_ intrinsic.
+Resuming such a coroutine with `coro.resume`_ leads to undefined behavior.
+The `coro.done`_ intrinsic can be used to check whether a suspended coroutine
+is at the final suspend point or not.
+
+The following is an example of a function that keeps resuming the coroutine
+until the final suspend point is reached after which point the coroutine is 
+destroyed:
+
+.. code-block:: llvm
+
+  define i32 @main() {
+  entry:
+    %coro = call i8* @g()
+    br %while.cond
+  while.cond:
+    %done = call i1 @llvm.experimental.coro.done(i8* %coro)
+    br i1 %done, label %while.end, label %while.body
+  while.body:
+    call void @llvm.experimental.coro.resume(i8* %coro)
+    br label %while.cond
+  while.end:
+    call void @llvm.experimental.coro.destroy(i8* %coro)
+    ret i32 0
+  }
 
 Intrinsics
 ==========
