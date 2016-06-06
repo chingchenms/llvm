@@ -12,14 +12,17 @@ Status
 This document describes a set of experimental extensions to LLVM. Use
 with caution.  Because the intrinsics have experimental status,
 compatibility across LLVM releases is not guaranteed. These intrinsics
-are added to support C++ Coroutine TS (P0057), though they are general enough 
-to be used to implement coroutines in other languages as well.
+are added to support C++ Coroutines (P0057), though they are general enough 
+to be used to implement coroutines in other languages as well as to
+experiment with C++ coroutine alternatives other than P0057.
 
 Overview
 ========
 
+.. _coroutine handle:
+
 LLVM coroutines are functions that have one or more `suspend points`_. 
-When a suspend point is reached, execution of a coroutine is suspended. 
+When a suspend point is reached, the execution of a coroutine is suspended. 
 A suspended coroutine can be resumed to continue execution from the last 
 suspend point or be destroyed. In the following example function `f` returns
 a handle to a suspended coroutine (**coroutine handle**) that can be passed to 
@@ -39,27 +42,32 @@ coroutine respectively.
 
 .. _coroutine frame:
 
-In addition to the stack frame which exists when a coroutine is executing, 
-there is an additional region of storage that contains objects that keeps the 
+In addition to the function stack frame which exists when a coroutine is executing, 
+there is an additional region of storage that contains objects that keep the 
 coroutine state when a coroutine is suspended. This region of storage
-is called **coroutine frame**. It is created when a coroutine is invoked.
-It is destroyed when a coroutine runs to completion or destroyed. 
+is called **coroutine frame**. It is created when a coroutine is called and 
+destroyed when a coroutine runs to completion or destroyed by a call to 
+the `coro.destroy`_ intrinsic. 
 
 An LLVM coroutine is represented as an LLVM function that has calls to
 `coroutine intrinsics`_ defining the structure of the coroutine.
-
-.. marking up suspend points and coroutine frame 
-   allocation and deallocation code. Marking up allocation and deallocation code 
-   allows an optimization to remove allocation/deallocation when coroutine frame
-   can be stored on a frame of the caller. 
-
-After mandatory coroutine processing passes a coroutine is split into several
+After mandatory CoroSplit_ pass, a coroutine is split into several
 functions that represent three different ways of how control can enter the 
-coroutine: an initial invocation that creates the coroutine frame and executes
-the coroutine code until it encounters a suspend point or reaches the end
-of the coroutine, coroutine resume function that contains the code to be 
-executed once coroutine is resumed at a particular suspend point, and a 
-coroutine destroy function that is invoked when the coroutine is destroyed.
+coroutine: 
+
+1. a ramp function, which represents an initial invocation of the coroutine that
+   creates the coroutine frame and executes the coroutine code until it 
+   encounters any suspend point or reaches the end of the function;
+
+2. a coroutine resume function that contains the code to be 
+   executed once the coroutine is resumed at a particular suspend point;
+
+3. a coroutine destroy function that is invoked when the coroutine is destroyed.
+
+..
+  This is not the only way of lowering the coroutine intrinsics. Another 
+  alternative is to split the coroutine ever further into an individual functions
+  for every suspend point.
 
 Coroutines by Example
 =====================
@@ -87,7 +95,7 @@ a `main` shown in the previous section. It will call `yield` with values 4, 5
 and 6 after which the coroutine will be destroyed.
 
 We will look at individual parts of the LLVM coroutine matching the pseudo-code
-above starting with coroutine frame creating and destruction:
+above starting with coroutine frame creation and destruction:
 
 .. code-block:: llvm
 
@@ -115,25 +123,26 @@ above starting with coroutine frame creating and destruction:
   }
 
 First three lines of `entry` block establish the coroutine frame. The
-`coro.size`_ intrinsic expands to represent the size required for the coroutine
-frame. The `coro.init`_ intrinsic returns the address to be used as a coroutine
-frame pointer (which could be at offset relative to the allocated block of
-memory). We will examine the other parameters to `coro.init`_ later.
+`coro.size`_ intrinsic is lowered to a constant representing the size required 
+for the coroutine frame. 
+The `coro.init`_ intrinsic returns the address to be used as a coroutine
+frame pointer (which could be at an offset relative to the allocated block of
+memory).
 
-In the cleanup block `coro.delete` intrinsic, given the coroutine frame pointer,
-returns a memory address to be freed.
+The `coro.delete` intrinsic, given the coroutine frame pointer,
+returns a pointer of the memory block to be freed.
 
 Two other intrinsics seen in this fragment are used to mark up the control flow
-during the initial and subsequent invocation of the coroutine. The true branch
-of the conditional branch following the `coro.fork`_ intrinsic indicates the 
-block where control flow should transfer on the first suspension of the
-coroutine. The `coro.resume.end`_ intrinsic is a no-op during an 
-initial invocation of the coroutine. When the coroutine resumes, the intrinsic
-marks the point when coroutine need to return control back to the caller.
+during an initial and subsequent invocation of the coroutine. The true branch
+of the conditional branch instruction consuming the result of the `coro.fork`_ 
+intrinsic indicates the block where control should transfer on the first
+suspension of the coroutine. The `coro.resume.end`_ intrinsic marks the point
+where coroutine needs to return control back to the caller if it is not an initial
+invocation of the coroutine. (During the inital coroutine invocation this
+intrinsic is a no-op).
 
-The `coro.return` block returns a pointer to a coroutine frame which happens to
-be the same as `coroutine frame`_ expected by `coro.resume`_ and `coro.destroy`_
-intrinsics.
+This function returns a pointer to a coroutine frame which acts as 
+a `coroutine handle`_  expected by `coro.resume`_ and `coro.destroy`_ intrinsics.
 
 .. The `malloc` function is used to allocate memory dynamically for 
 .. coroutine frame.   
@@ -162,20 +171,24 @@ suspend point represents a `final suspend`_ or not.
 Coroutine Transformation
 ------------------------
 
+One of the step in coroutine transformation is to figure out what objects can
+leave on the normal function stack frame and which needs to go into a coroutine
+frame.
+
 In the coroutine shown in the previous section, use of virtual register `%n.val`
 is separated from the definition by a suspend point, it cannot reside
 on the stack frame of the coroutine since it will go away once coroutine is
-suspended and therefore need to go into the coroutine frame.
+suspended and therefore need to be part of the coroutine frame.
 
-Other members of the coroutine frame will be an address of a resume and destroy
-functions representing the coroutine behavior that needs to happen when coroutine
+Other members of the coroutine frame are addresses of a resume and destroy
+functions representing the coroutine behavior for happen when a coroutine
 is resumed and destroyed respectively.
 
 .. code-block:: llvm
 
   %f.frame = type { void (%f.frame*)*, void (%f.frame*)*, i32 }
 
-After coroutine transformation function `f` is responsible for creation and
+After coroutine transformation, function `f` is responsible for creation and
 initialization of the coroutine frame and execution of the coroutine code until
 any suspend point is reached or control reaches the end of the function. It will
 look like:
@@ -199,7 +212,7 @@ look like:
     ret i8* %frame
   }
 
-Part of the orginal coroutine `f` that is responsible for executing code after 
+Part of the original coroutine `f` that is responsible for executing code after 
 resume will be extracted into `f.resume` function:
 
 .. code-block:: llvm
@@ -225,22 +238,23 @@ Whereas function `f.destroy` will end up simply calling `free` function:
     ret void
   }
 
-This transformation is performed by `coro-split` LLVM pass.
+.. This transformation is performed by `coro-split` LLVM pass.
 
 Avoiding Heap Allocations
 -------------------------
  
-A particular coroutine usage pattern which is illustrated by the `main` function
+A particular coroutine usage pattern, which is illustrated by the `main` function
 in the overview section where a coroutine is created, manipulated and destroyed by
-the same calling function is common for generator coroutines and is suitable for
-allocation elision optimization which stores coroutine frame in the caller's 
-frame.
+the same calling function, is common for generator coroutines and is suitable for
+allocation elision optimization which avoid dynamic allocation by storing 
+coroutine frame on the caller's frame.
 
-To enable heap elision, we need to make frame allocation and deallocation 
-as follows:
+To enable this optimization, we need to mark frame allocation and deallocation 
+calls to allow bypassing them if not needed.
 
-In the entry block, we will invoke `coro.elide`_ intrinsic that will return 
-an address of a coroutine frame on the callers if possible and `null` otherwise:
+In the entry block, we will call `coro.elide`_ intrinsic that will return 
+an address of a coroutine frame on the caller's frame when possible and 
+`null` otherwise:
 
 .. code-block:: llvm
 
@@ -260,7 +274,7 @@ an address of a coroutine frame on the callers if possible and `null` otherwise:
 
 In the cleanup block, we will make freeing the coroutine frame conditional on
 `coro.delete`_ intrinsic. If allocation is elided, `coro.delete`_ returns `null`
-thus avoiding deallocation code:
+thus skipping the deallocation code:
 
 .. code-block:: llvm
 
@@ -277,8 +291,8 @@ thus avoiding deallocation code:
     call void @llvm.experimental.coro.resume.end()
     br label %coro.return
 
-With allocations and deallocations described as above after inlining and heap
-allocation elision optimization the resulting main will end up looking as:
+With allocations and deallocations described as above, after inlining and heap
+allocation elision optimization, the resulting main will end up looking like:
 
 .. code-block:: llvm
 
@@ -289,6 +303,7 @@ allocation elision optimization the resulting main will end up looking as:
     call void @yield(i32 6)
     ret i32 0
   }
+
 
 Multiple Suspend Points
 -----------------------
@@ -368,13 +383,13 @@ Distinct Save and Suspend
 -------------------------
 
 In the previous example, setting a resume index (or some other state change that 
-needs to happen to prepare coroutine for resumption) happens at the same time as
-suspension of a coroutine. However, in certain cases it is necessary to control 
+needs to happen to prepare a coroutine for resumption) happens at the same time as
+a suspension of a coroutine. However, in certain cases, it is necessary to control 
 when coroutine is prepared for resumption and when it is suspended.
 
-In the following example, coroutine represents some activity that is driven
+In the following example, a coroutine represents some activity that is driven
 by completions of asynchronous operations `async_op1` and `async_op2` which get
-a coroutine handle as a parameter and will resume the coroutine once async
+a coroutine handle as a parameter and resume the coroutine once async
 operation is finished.
 
 .. code-block:: llvm
@@ -422,11 +437,22 @@ Final Suspend
    until explicitly destroyed by the call to `coro.destroy`_. If we consider a case
    of a coroutine representing a generator that produces a finite sequence of
 
+.. note::
+  * reason 1: We know suspend the final suspend point. There is no need for the
+    user to have extra code to track whether we are at final suspend point or
+    not.
+  * reason 2: Guard against misuse of a coroutine by trying to resume the 
+    coroutine that reached the end. For example replacing ResumeFnPtr in the
+    coroutine frame when final suspend is reached, will result in a trap for
+    free if someone call `coro.resume` on such a coroutine.
+  * reason 3: One less case for a switch in the beginning of the the resume 
+    function.
+
 One of the common coroutine usage patterns is a generator, where a coroutine
 produces a (sometime finite) sequence of values. To facilitate this pattern
 frontend can designate a suspend point to be final. A coroutine suspended at
 the final suspend point, can only be resumed with `coro.destroy`_ intrinsic.
-Resuming such coroutine with `coro.resume`_ results in undefined behavior.
+Resuming such a coroutine with `coro.resume`_ leads to undefined behavior.
 The `coro.done`_ intrinsic can be used to check whether a suspended coroutine
 is at the final suspend point or not.
 
@@ -462,7 +488,7 @@ be used to communicate with the coroutine. This distinguished alloca is called
 intrinsic.
 
 The following coroutine designates a 32 bit integer `promise` and uses it to
-store the current value produces by a coroutine.
+store the current value produced by a coroutine.
 
 .. code-block:: llvm
 
@@ -495,7 +521,7 @@ store the current value produces by a coroutine.
     ret i8* %frame
   }
 
-Coroutine consumer can rely on the `coro.promise`_ intrinsic to access the
+A coroutine consumer can rely on the `coro.promise`_ intrinsic to access the
 coroutine promise.
 
 .. code-block:: llvm
@@ -556,10 +582,10 @@ The argument is a coroutine handle to a suspended coroutine.
 Semantics:
 """"""""""
 
-If coroutine identity is known, the `coro.destroy` intrinsic is replaced with a
+When possible, the `coro.destroy` intrinsic is replaced with a
 direct call to coroutine destroy function. Otherwise it is replaced with an
 indirect call based on the function pointer for the destroy function stored 
-in the coroutine frame. Destroying a coroutine that is not suspended results in
+in the coroutine frame. Destroying a coroutine that is not suspended leads to
 undefined behavior.
 
 .. _coro.resume:
@@ -585,10 +611,10 @@ The argument is a handle to a suspended coroutine.
 Semantics:
 """"""""""
 
-If coroutine identity is known, the `coro.resume` intrinsic is replaced with a
+When possible, the `coro.resume` intrinsic is replaced with a
 direct call to coroutine resume function. Otherwise it is replaced with an
 indirect call based on the function pointer for the resume function stored 
-in the coroutine frame. Resuming a coroutine that is not suspended results in
+in the coroutine frame. Resuming a coroutine that is not suspended leads to
 undefined behavior.
 
 .. _coro.done:
@@ -615,7 +641,7 @@ Semantics:
 """"""""""
 
 Using this intrinsic on a coroutine that does not have a `final suspend`_ point 
-or on a coroutine that is not suspended results in an undefined behavior.
+or on a coroutine that is not suspended leads to undefined behavior.
 
 .. _coro.promise:
 
@@ -629,8 +655,8 @@ or on a coroutine that is not suspended results in an undefined behavior.
 Overview:
 """""""""
 
-The '``llvm.experimental.coro.promise``' intrinsic returns an address of
-a `coroutine promise`_.
+The '``llvm.experimental.coro.promise``' intrinsic returns a pointer to a 
+`coroutine promise`_.
 
 Arguments:
 """"""""""
@@ -891,7 +917,7 @@ Overview:
 
 The '``llvm.experimental.coro.fork``' intrinsic together with the conditional 
 branch consuming the boolean value returned from this intrinsic is used to 
-indicates where the control flows should transfer on the first suspension of the
+indicates where the control should transfer on the first suspension of the
 coroutine. 
 
 Arguments:
@@ -935,7 +961,7 @@ The `coro.resume.end`_ intrinsic is a no-op during an initial invocation of the
 coroutine. When the coroutine resumes, the intrinsic marks the point when 
 coroutine need to return control back to the caller.
 
-This intrinsic is removed by the CoroSplit pass when coroutine is split into
+This intrinsic is removed by the CoroSplit pass when a coroutine is split into
 the start, resume and destroy parts. In start part, the intrinsic is removed,
 in resume and destroy parts, it is replaced with `ret void` instructions and
 the rest of the block containing `coro.resume.end` instruction is discarded.
@@ -992,10 +1018,9 @@ Overview:
 """""""""
 
 The '``llvm.experimental.coro.save``' marks the point where a coroutine 
-is considered suspened (and thus eligible for resumption) but control
-is not yet transferred back to the caller. Its return value should be consumed
-by exactly one `coro.suspend` intrinsic that marks the point when control need
-to be transferred to the coroutine's caller.
+is considered suspened (and thus eligible for resumption). Its return value 
+should be consumed by exactly one `coro.suspend` intrinsic that marks the point
+when control need to be transferred to the coroutine's caller.
 
 Arguments:
 """"""""""
@@ -1010,7 +1035,8 @@ the coroutine from the corresponding suspend point should be done at the point o
 `coro.save` intrinsic.
 
 Example:
-========
+""""""""
+
 Separate save and suspend points are a necessity when coroutine is used to 
 represent an asynchronous control flow driven by callbacks representing
 completions of asynchronous operations.
@@ -1046,6 +1072,8 @@ to execute coroutine and inliner passes in the following order.
    inlined and are eligible for coroutine frame elision optimization.
 #. If function `F` is a coroutine, resume and destroy parts are extracted into
    `F.resume` and `F.destroy` functions by the CoroSplit pass. 
+
+.. _CoroSplit:
 
 CoroSplit
 ---------
