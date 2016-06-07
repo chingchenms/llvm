@@ -29,6 +29,10 @@ a handle to a suspended coroutine (**coroutine handle**) that can be passed to
 `coro.resume`_ and `coro.destroy`_ intrinsics to resume and destroy the 
 coroutine respectively.
 
+In the following example, function `f` (which may or may not be a coroutine itself)
+returns a coroutine handle that is used by `main` to resume the coroutine
+twice and then destroy it:
+
 .. code-block:: llvm
 
   define i32 @main() {
@@ -57,10 +61,10 @@ coroutine:
 
 1. a ramp function, which represents an initial invocation of the coroutine that
    creates the coroutine frame and executes the coroutine code until it 
-   encounters any suspend point or reaches the end of the function;
+   encounters a suspend point or reaches the end of the function;
 
 2. a coroutine resume function that contains the code to be 
-   executed once the coroutine is resumed at a particular suspend point;
+   executed once the coroutine is resumed;
 
 3. a coroutine destroy function that is invoked when the coroutine is destroyed.
 
@@ -83,7 +87,7 @@ by the following pseudo-code.
   void *f(int n) {
      for(;;) {
        yield(n++);
-       <suspend> // magic: returns coroutine handle on first suspend
+       <suspend> // magic: returns a coroutine handle on first suspend
      }
   }
 
@@ -162,7 +166,8 @@ is straightforward:
     %inc = add i32 %n.val, 1
     br label %coro.start
 
-When control reaches `coro.suspend`_ intrinsic, the coroutine is suspended.
+When control reaches `coro.suspend`_ intrinsic, the coroutine is suspended and
+returns control back to the caller.
 The conditional branch following the `coro.suspend` intrinsic indicates two
 alternative continuation for the coroutine, one for normal resume, another
 for destroy. The boolean parameter to `coro.suspend` indicates whether a
@@ -171,17 +176,18 @@ suspend point represents a `final suspend`_ or not.
 Coroutine Transformation
 ------------------------
 
-One of the step in coroutine transformation is to figure out what objects can
-leave on the normal function stack frame and which needs to go into a coroutine
-frame.
+One of the steps in coroutine transformation is to figure out what objects can
+reside on the normal function stack frame or in the register and which needs 
+to go into a coroutine frame.
 
 In the coroutine shown in the previous section, use of virtual register `%n.val`
 is separated from the definition by a suspend point, it cannot reside
-on the stack frame of the coroutine since it will go away once coroutine is
-suspended and therefore need to be part of the coroutine frame.
+on the stack frame since it will go away once the coroutine is
+suspended and returns control back to the caller and, therefore, need to be a 
+part of the coroutine frame.
 
-Other members of the coroutine frame are addresses of a resume and destroy
-functions representing the coroutine behavior for happen when a coroutine
+Other members of the coroutine frame are addresses of resume and destroy
+functions representing the coroutine behavior for when a coroutine
 is resumed and destroyed respectively.
 
 .. code-block:: llvm
@@ -190,7 +196,7 @@ is resumed and destroyed respectively.
 
 After coroutine transformation, function `f` is responsible for creation and
 initialization of the coroutine frame and execution of the coroutine code until
-any suspend point is reached or control reaches the end of the function. It will
+a suspend point is reached or control reaches the end of the function. It will
 look like:
 
 .. code-block:: llvm
@@ -505,7 +511,7 @@ Final Suspend
 
 A coroutine author or a frontend may designate a particular suspend to be final,
 by setting the second argument of the `coro.suspend`_ intrinsic to `true`.
-Such a suspend point have two properties:
+Such a suspend point has two properties:
 
 * it is possible to check whether a suspended coroutine is at the final suspend
   point via `coro.done` intrinsic;
@@ -547,7 +553,8 @@ Coroutine Manipulation Intrinsics
 ---------------------------------
 
 Intrinsics described in this section are used to manipulate an existing
-coroutine.
+coroutine. They can be used in any function which happen to have a pointer
+to a coroutine frame or a pointer to a coroutine promise.
 
 .. _coro.destroy:
 
@@ -660,7 +667,7 @@ Semantics:
 """"""""""
 
 Using this intrinsic on a coroutine that does not have a coroutine promise
-results in undefined behavior. It is possible to read and modify coroutine
+leads to undefined behavior. It is possible to read and modify coroutine
 promise of the coroutine which is currently executing. The coroutine author and
 a coroutine user are responsible to makes sure there is no data races.
 
@@ -768,11 +775,11 @@ Semantics:
 
 Depending on the alignment requirements of the objects in the coroutine frame
 and/or on the codegen compactness reasons the pointer returned from `coro.init` 
-may be at offset to the %mem% argument. (This could be beneficial if instructions
+may be at offset to the `%mem` argument. (This could be beneficial if instructions
 that express relative access to data can be more compactly encoded with small
 positive and negative offsets).
 
-Front-end should emit exactly one `coro.init` intrinsic per coroutine.
+Frontend should emit exactly one `coro.init` intrinsic per coroutine.
 It should appear prior to `coro.fork`_ intrinsic.
 
 .. _coro.delete:
@@ -835,7 +842,7 @@ Example (no heap allocation elision):
 Overview:
 """""""""
 
-The '``llvm.experimental.coro.frame``' intrinsic returns an address of the 
+The '``llvm.experimental.coro.elide``' intrinsic returns an address of the 
 memory on the callers frame where coroutine frame of this coroutine can be 
 placed and `null` otherwise.
 
@@ -881,7 +888,7 @@ Example:
 Overview:
 """""""""
 
-The '``llvm.experimental.coro.init``' intrinsic returns an address of the 
+The '``llvm.experimental.coro.frame``' intrinsic returns an address of the 
 coroutine frame.
 
 Arguments:
@@ -894,8 +901,8 @@ Semantics:
 
 This intrinsic is lowered to refer to the `coro.init`_ instruction. This is
 a frontend convenience intrinsic that makes it easier to refer to the
-coroutine frame during semantic analysis of the coroutine. This intrinsic maybe
-removed in the future. 
+coroutine frame. This intrinsic is not necessary for the llvm coroutine model 
+and can be removed.
 
 .. _coro.fork:
 
@@ -994,7 +1001,7 @@ If a coroutine that was suspended at the suspend point marked by this intrinsic
 is resumed via `coro.resume`_ the control will transfer to the basic block
 marked by the true branch of the conditional branch consuming the result of the
 `coro.suspend`. If it is resumed via `coro.destroy`_, it will proceed to the
-false branch.
+basic block indicated by the false branch.
 
 If suspend intrinsic is marked as final, it can consider the `true` branch
 unreachable and can perform optimizations that can take advantage of that fact.
@@ -1023,20 +1030,21 @@ None
 Semantics:
 """"""""""
 
-Whatever coroutine state changes are required to  enable resumption of
+Whatever coroutine state changes are required to enable resumption of
 the coroutine from the corresponding suspend point should be done at the point of
 `coro.save` intrinsic.
 
 Example:
 """"""""
 
-Separate save and suspend points are a necessity when coroutine is used to 
+Separate save and suspend points are a necessity when a coroutine is used to 
 represent an asynchronous control flow driven by callbacks representing
 completions of asynchronous operations.
 
-In these cases, a coroutine should be ready for resumption prior to a call to 
+In such a case, a coroutine should be ready for resumption prior to a call to 
 `async_op` function that may trigger resumption of a coroutine from the same or
-a different thread:
+a different thread possibly prior to `async_op` call returning control back
+to the coroutine:
 
 .. code-block:: llvm
 
