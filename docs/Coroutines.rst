@@ -12,9 +12,12 @@ Status
 This document describes a set of experimental extensions to LLVM. Use
 with caution.  Because the intrinsics have experimental status,
 compatibility across LLVM releases is not guaranteed. These intrinsics
-are added to support C++ Coroutines (P0057), though they are general enough 
-to be used to implement coroutines in other languages as well as to
-experiment with C++ coroutine alternatives other than P0057.
+are added to support C++ Coroutines (P0057_), though they are general enough 
+to be used to implement coroutines in other languages as well.
+
+.. as to experiment with C++ coroutine alternatives other than P0057.
+
+.. _P0057: http://www.open-std.org/jtc1/sc22/wg21/docs/papers/2016/p0057r4.pdf
 
 Overview
 ========
@@ -24,14 +27,16 @@ Overview
 LLVM coroutines are functions that have one or more `suspend points`_. 
 When a suspend point is reached, the execution of a coroutine is suspended. 
 A suspended coroutine can be resumed to continue execution from the last 
-suspend point or be destroyed. In the following example function `f` returns
-a handle to a suspended coroutine (**coroutine handle**) that can be passed to 
-`coro.resume`_ and `coro.destroy`_ intrinsics to resume and destroy the 
-coroutine respectively.
+suspend point or be destroyed. 
+
+..  In the following example function `f` returns
+    a handle to a suspended coroutine (**coroutine handle**) that can be passed to 
+    `coro.resume`_ and `coro.destroy`_ intrinsics to resume and destroy the 
+    coroutine respectively.
 
 In the following example, function `f` (which may or may not be a coroutine itself)
-returns a coroutine handle that is used by `main` to resume the coroutine
-twice and then destroy it:
+returns a handle to a suspended coroutine (**coroutine handle**) that is used 
+by `main` to resume the coroutine twice and then destroy it:
 
 .. code-block:: llvm
 
@@ -345,9 +350,11 @@ as the code in the previous section):
       %suspend2 = call i1 @llvm.experimental.coro.suspend(token none, i1 false)
       br i1 %suspend2, label %coro.start, label %cleanup
 
-In this case, coroutine frame would include a suspend index that will indicate
-at which suspend point a coroutine needs to resume and `f.resume` function
-will start with a switch as follows:
+In this case, the coroutine frame would include a suspend index that will indicate
+at which suspend point the coroutine needs to resume. The resume function will 
+use an index to jump to an appropriate basic block and will look as follows:
+
+.. start with a switch as follows:
 
 .. code-block:: llvm
 
@@ -554,7 +561,7 @@ Coroutine Manipulation Intrinsics
 
 Intrinsics described in this section are used to manipulate an existing
 coroutine. They can be used in any function which happen to have a pointer
-to a coroutine frame or a pointer to a coroutine promise.
+to a `coroutine frame`_ or a pointer to a `coroutine promise`_.
 
 .. _coro.destroy:
 
@@ -915,10 +922,8 @@ and can be removed.
 Overview:
 """""""""
 
-The '``llvm.experimental.coro.fork``' intrinsic together with the conditional 
-branch consuming the boolean value returned from this intrinsic is used to 
-indicates where the control should transfer on the first suspension of the
-coroutine. 
+The '``llvm.experimental.coro.fork``' intrinsic is used to indicate where the
+control should transfer on the first suspension of the coroutine. 
 
 Arguments:
 """"""""""
@@ -928,11 +933,12 @@ None
 Semantics:
 """"""""""
 The true branch of the the conditional branch consuming the boolean value 
-returned from this intrinsic indicate where the control flows should transfer on
-the first suspension of the coroutine. 
+returned from this intrinsic indicates where the control should transfer on
+the first suspension of the coroutine.  
+In the ramp function, when suspend points are lowered,  every `coro.suspend` is
+replaced with a jump to the basic block designated by the true branch.
 
-This intrinsic is removed by the CoroSplit pass when all suspend points are
-lowered.
+The 'coro.fork` itself is always lowered to constant `false`.
 
 .. _coro.resume.end:
 
@@ -980,8 +986,9 @@ Overview:
 
 The '``llvm.experimental.coro.suspend``' marks the point where execution
 of the coroutine need to get suspended and control returned back to the caller.
-Conditional branch consuming the result of this intrinsic marks normal
-and cleanup basic blocks that correspond to this suspend point.
+Conditional branch consuming the result of this intrinsic marks basic blocks
+where coroutine should proceed when resumed via `coro.resume` and `coro.destroy` 
+intrinsics if the coroutine is suspended at this particular suspend point.
 
 Arguments:
 """"""""""
@@ -992,7 +999,9 @@ the intrinsic behaves as if there were a `coro.save` immediately preceding
 the `coro.suspend` intrinsic.
 
 The second argument indicates whether this suspension point is `final`_.
-The second argument only accepts constants.
+The second argument only accepts constants. If more than one suspend point is
+designated as final, the resume and destroy branches should lead to the same
+basic blocks.
 
 Semantics:
 """"""""""
@@ -1019,8 +1028,7 @@ Overview:
 
 The '``llvm.experimental.coro.save``' marks the point where a coroutine 
 is considered suspened (and thus eligible for resumption). Its return value 
-should be consumed by exactly one `coro.suspend` intrinsic that marks the point
-when control need to be transferred to the coroutine's caller.
+should be consumed by exactly one `coro.suspend` intrinsic.
 
 Arguments:
 """"""""""
@@ -1037,7 +1045,7 @@ the coroutine from the corresponding suspend point should be done at the point o
 Example:
 """"""""
 
-Separate save and suspend points are a necessity when a coroutine is used to 
+Separate save and suspend points are necessary when a coroutine is used to 
 represent an asynchronous control flow driven by callbacks representing
 completions of asynchronous operations.
 
@@ -1103,8 +1111,7 @@ Areas Requiring Attention
    coroutine frames.
 
 #. The CoroElide optimization pass relies on coroutine ramp function to be
-   inlined. It is possible to split the ramp function further to increase the
-   likelihood that it will get inlined into its caller.
+   inlined. It would be beneficial to split the ramp function further to increase 
 
 #. Design a convention that would make it possible to apply coroutine heap
    elision optimization across ABI boundaries.
