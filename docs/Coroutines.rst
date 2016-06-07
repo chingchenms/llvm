@@ -1112,6 +1112,7 @@ Areas Requiring Attention
 
 #. The CoroElide optimization pass relies on coroutine ramp function to be
    inlined. It would be beneficial to split the ramp function further to increase 
+   the chance that it will get inlined into its caller.
 
 #. Design a convention that would make it possible to apply coroutine heap
    elision optimization across ABI boundaries.
