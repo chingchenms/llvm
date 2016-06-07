@@ -503,28 +503,21 @@ to get access to the coroutine handle.
 Final Suspend
 -------------
 
-.. Coroutines we considered so far do not complete on their own. They run
-   until explicitly destroyed by the call to `coro.destroy`_. If we consider a case
-   of a coroutine representing a generator that produces a finite sequence of
+A coroutine author or a frontend may designate a particular suspend to be final,
+by setting the second argument of the `coro.suspend`_ intrinsic to `true`.
+Such a suspend point have two properties:
 
-.. note::
-  * reason 1: We know suspend the final suspend point. There is no need for the
-    user to have extra code to track whether we are at final suspend point or
-    not.
-  * reason 2: Guard against misuse of a coroutine by trying to resume the 
-    coroutine that reached the end. For example replacing ResumeFnPtr in the
-    coroutine frame when final suspend is reached, will result in a trap for
-    free if someone call `coro.resume` on such a coroutine.
-  * reason 3: One less case for a switch in the beginning of the the resume 
-    function.
+* it is possible to check whether a suspended coroutine is at the final suspend
+  point via `coro.done` intrinsic;
 
-One of the common coroutine usage patterns is a generator, where a coroutine
-produces a (sometime finite) sequence of values. To facilitate this pattern
-frontend can designate a suspend point to be final. A coroutine suspended at
-the final suspend point, can only be resumed with `coro.destroy`_ intrinsic.
-Resuming such a coroutine with `coro.resume`_ leads to undefined behavior.
-The `coro.done`_ intrinsic can be used to check whether a suspended coroutine
-is at the final suspend point or not.
+* a resumption of a coroutine stopped at the final suspend point leads to 
+  undefined behavior. The only possible action for a coroutine at a final
+  suspend point is destroying it via `coro.destroy` intrinsic.
+
+From the user perspective, final suspend point represents an idea of a coroutine
+reaching the end. From the compiler perspective it is an optimization opportunity
+for reducing number of resume points (and therefore switch cases) in the resume
+function.
 
 The following is an example of a function that keeps resuming the coroutine
 until the final suspend point is reached after which point the coroutine is 
