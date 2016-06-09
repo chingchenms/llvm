@@ -25,9 +25,9 @@ Overview
 .. _coroutine handle:
 
 LLVM coroutines are functions that have one or more `suspend points`_. 
-When a suspend point is reached, the execution of a coroutine is suspended. 
-A suspended coroutine can be resumed to continue execution from the last 
-suspend point or be destroyed. 
+When a suspend point is reached, the execution of a coroutine is suspended and
+control is returned back to its caller. A suspended coroutine can be resumed 
+to continue execution from the last suspend point or be destroyed. 
 
 ..  In the following example function `f` returns
     a handle to a suspended coroutine (**coroutine handle**) that can be passed to 
@@ -1110,6 +1110,10 @@ Areas Requiring Attention
    coloring like optimization on the coroutine frame will result in tighter
    coroutine frames.
 
+#. Take advantage of the lifetime intrinsics for the data that goes into the
+   coroutine frame. Leave lifetime intrinsics as is for the data that stays in
+   allocas.
+
 #. The CoroElide optimization pass relies on coroutine ramp function to be
    inlined. It would be beneficial to split the ramp function further to increase 
    the chance that it will get inlined into its caller.
@@ -1120,3 +1124,8 @@ Areas Requiring Attention
 #. Cannot handle coroutines with inalloca parameters (used in x86 on Windows)
 
 #. Alignment is ignored by coro.init and coro.delete intrinsics.
+
+#. Make required changes to make sure that coroutine optimizations work with
+   LTO.
+
+#. Would coro.start be a better name than coro.fork?
