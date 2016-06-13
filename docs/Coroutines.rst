@@ -972,6 +972,9 @@ the start, resume and destroy parts. In start part, the intrinsic is removed,
 in resume and destroy parts, it is replaced with `ret void` instructions and
 the rest of the block containing `coro.resume.end` instruction is discarded.
 
+In landing pads it is replaced with an appropriate instruction to unwind to 
+caller.
+
 .. _coro.suspend:
 .. _suspend points:
 

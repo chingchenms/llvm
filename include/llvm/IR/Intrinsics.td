@@ -607,8 +607,13 @@ def int_experimental_coro_done : Intrinsic<[llvm_i1_ty], [llvm_ptr_ty], [IntrRea
 def int_experimental_coro_promise : Intrinsic<[llvm_anyptr_ty], [llvm_ptr_ty], [IntrReadMem]>;
 def int_experimental_coro_from_promise : Intrinsic<[llvm_ptr_ty], [llvm_anyptr_ty], [IntrReadMem]>;
 
-def int_experimental_coro_promise2 : Intrinsic<[llvm_ptr_ty], [llvm_ptr_ty], [IntrReadMem]>;
-def int_experimental_coro_from_promise2 : Intrinsic<[llvm_ptr_ty], [llvm_ptr_ty], [IntrReadMem]>;
+def int_coro_return : Intrinsic<[llvm_i1_ty], [llvm_ptr_ty], []>;
+def int_coro_start : Intrinsic<[llvm_i1_ty], [llvm_ptr_ty], []>;
+def int_coro_end : Intrinsic<[], [llvm_ptr_ty, llvm_i1_ty], []>;
+def int_coro_suspend : Intrinsic<[llvm_i8_ty], [llvm_token_ty, llvm_i1_ty, llvm_vararg_ty], []>;
+def int_coro_first : Intrinsic<[llvm_i1_ty], [llvm_i8_ty], []>;
+def int_coro_resume_addr : Intrinsic<[llvm_ptr_ty], [llvm_ptr_ty], [IntrReadMem]>;
+def int_coro_destroy_addr : Intrinsic<[llvm_ptr_ty], [llvm_ptr_ty], [IntrReadMem]>;
 //===-------------------------- Other Intrinsics --------------------------===//
 //
 def int_flt_rounds : Intrinsic<[llvm_i32_ty]>,
@@ -624,11 +629,6 @@ def int_experimental_deoptimize : Intrinsic<[llvm_any_ty], [llvm_vararg_ty],
 
 // NOP: calls/invokes to this intrinsic are removed by codegen
 def int_donothing : Intrinsic<[], [], [IntrNoMem]>;
-
-// Coroutine handle intrinsics
-def int_coro_resume : Intrinsic<[], [llvm_ptr_ty], []>;
-def int_coro_destroy : Intrinsic<[], [llvm_ptr_ty], []>;
-def int_coro_done : Intrinsic<[llvm_i1_ty], [llvm_ptr_ty], [IntrReadMem]>;
 
 // Intrisics to support half precision floating point format
 let IntrProperties = [IntrNoMem] in {
