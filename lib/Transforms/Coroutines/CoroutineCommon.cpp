@@ -250,7 +250,7 @@ bool llvm::CoroutineCommon::simplifyAndConstantFoldTerminators(Function & F) {
 
 
 void llvm::initializeCoroutines(PassRegistry &registry) {
-  initializeCoroHeapElidePass(registry);
+  initializeCoroElidePass(registry);
   initializeCoroCleanupPass(registry);
   initializeCoroInlinePass(registry);
 }

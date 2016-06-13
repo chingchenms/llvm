@@ -224,7 +224,7 @@ static void addCoroutineOpt0Passes(const PassManagerBuilder &Builder, PassManage
 
 static void addCoroutineSCCPasses(const PassManagerBuilder &Builder, PassManagerBase &PM) {
   if (Builder.OptLevel > 0) {
-    addPass(PM, createCoroHeapElidePass());
+    addPass(PM, createCoroElidePass());
     // addPass(PM, createCoroSplitPass());
   }
 }

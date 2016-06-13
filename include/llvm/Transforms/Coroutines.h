@@ -30,7 +30,7 @@ Pass *createCoroSplitPass();
 //
 // Analyze coroutine use sites and perform heap allocation elision
 //
-Pass *createCoroHeapElidePass();
+Pass *createCoroElidePass();
 
 //===----------------------------------------------------------------------===//
 //

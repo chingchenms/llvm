@@ -16,382 +16,71 @@
 
 #include "CoroutineCommon.h"
 #include "llvm/Transforms/Coroutines.h"
-#include "llvm/Analysis/CallGraphSCCPass.h"
-#include "llvm/Transforms/Utils/Cloning.h"
 
+//#include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/Statistic.h"
-#include "llvm/ADT/SmallString.h"
-#include "llvm/IR/Function.h"
-#include "llvm/IR/Module.h"
+#include "llvm/Support/Debug.h"
+//#include "llvm/IR/Function.h"
 #include "llvm/IR/InstIterator.h"
 #include "llvm/IR/IntrinsicInst.h"
+//#include "llvm/IR/Module.h"
 #include "llvm/Pass.h"
-#include "llvm/PassSupport.h"
-#include "llvm/Support/raw_ostream.h"
-#include "llvm/Transforms/Utils/Local.h"
+//#include "llvm/PassSupport.h"
+//#include "llvm/Support/raw_ostream.h"
+//#include "llvm/Transforms/Utils/Local.h"
 using namespace llvm;
 
 #define DEBUG_TYPE "coro-elide"
 
-STATISTIC(CoroHeapElideCounter, "Number of heap elision performed");
+STATISTIC(CoroElideCounter, "Number of coroutine allocation elision performed");
 
-namespace {
+namespace llvm { 
 
-struct CoroHeapElide : FunctionPass, CoroutineCommon {
-  static char ID; // Pass identification, replacement for typeid
-  bool moduleInitialized = false;
+  /// This represents the llvm.coro.init instruction.
+  struct CoroInitInst : public IntrinsicInst {
 
-  CoroHeapElide() : FunctionPass(ID) {}
-
-  // This function walks up from an operand to @llvm.coro.resume or
-  // @llvm.coro.destroy to see if it hits a @llvm.coro.init
-  // somewhere in the definition change
-  static IntrinsicInst *FindDefiningCoroInit(Value *op) {
-    for (;;) {
-      if (IntrinsicInst *intrin = dyn_cast<IntrinsicInst>(op)) {
-        if (intrin->getIntrinsicID() == Intrinsic::experimental_coro_init)
-          return intrin;
-
-        return nullptr;
-      }
-
-      if (isa<Argument>(op))
-        return nullptr;
-
-      if (auto gep = dyn_cast<GetElementPtrInst>(op)) {
-        op = gep->getPointerOperand();
-        // TODO: sanity testing
-        continue;
-      }
-      if (auto bitcast = dyn_cast<BitCastInst>(op)) {
-        op = bitcast->getOperand(0);
-        // TODO: sanity testing
-        continue;
-      }
-      return nullptr;
+    // Methods for support type inquiry through isa, cast, and dyn_cast:
+    static inline bool classof(const IntrinsicInst *I) {
+      return I->getIntrinsicID() == Intrinsic::experimental_coro_init;
     }
-  }
-
-  // Database - builds up an information about all
-  // coroutine calls from a given function
-
-  struct Database {
-    struct InlinedCoroutine {
-      IntrinsicInst *CoroInit = nullptr;
-      Function *ResumeFn = nullptr;
-      Function *DestroyFn = nullptr;
-      StoreInst *CleanupFnStore = nullptr;
-      unsigned StoreCount = 0;
-      SmallVector<IntrinsicInst *, 4> Resumes;
-      SmallVector<IntrinsicInst *, 4> Destroys;
-
-      InlinedCoroutine(IntrinsicInst *intrin) : CoroInit(intrin) {}
-
-      StructType *getFrameType() {
-        Function *func = ResumeFn;
-        FunctionType *ft =
-            cast<FunctionType>(func->getType()->getElementType());
-        assert(ft->getNumParams() == 1 &&
-               "expected exactly one parameter in destroyFn");
-        PointerType *argType = cast<PointerType>(ft->getParamType(0));
-        return cast<StructType>(argType->getElementType());
-      }
-      StringRef getRampName() {
-        Function *func = ResumeFn;
-        return func->getName().drop_back(sizeof(".resume") - 1);
-      }
-    };
-    SmallVector<InlinedCoroutine, 4> data;
-
-    InlinedCoroutine &get(IntrinsicInst *coroInit) {
-      for (auto &item : data)
-        if (item.CoroInit == coroInit)
-          return item;
-      AddCoroInit(coroInit);
-      return data.back();
-    }
-
-    void AddCoroInit(IntrinsicInst *coroInit) { data.emplace_back(coroInit); }
-
-    void AddResumeOrDestroy(IntrinsicInst *coroInit, IntrinsicInst *I) {
-      auto &item = get(coroInit);
-      if (I->getIntrinsicID() == Intrinsic::experimental_coro_destroy)
-        item.Destroys.push_back(I);
-      else
-        item.Resumes.push_back(I);
-    }
-
-    void AddStore(IntrinsicInst *coroInit, Function *Func) {
-      InlinedCoroutine &I = get(coroInit);
-      if (Func->getName().endswith(".resume")) {
-        I.ResumeFn = Func;
-      }
-      else if (Func->getName().endswith(".destroy")) {
-        I.DestroyFn = Func;
-      }
-      ++I.StoreCount;
-    }
-
-    Database(Function &F) {
-      // scan the function for a store that sets a destroy function
-      // if we elided allocation, we need to replace that store
-      // with a store of an address of a cleanup function instead
-      for (Instruction &I : instructions(F)) {
-        if (StoreInst *S = dyn_cast<StoreInst>(&I)) {
-          if (Function *func = dyn_cast<Function>(S->getOperand(0))) {
-            IntrinsicInst *coroInit = FindDefiningCoroInit(S->getOperand(1));
-            if (coroInit == nullptr)
-              continue;
-
-            AddStore(coroInit, func);
-          }
-        } else if (IntrinsicInst *intrin = dyn_cast<IntrinsicInst>(&I)) {
-          switch (intrin->getIntrinsicID()) {
-          default:
-            continue;
-          case Intrinsic::experimental_coro_destroy:
-          case Intrinsic::experimental_coro_resume: {
-            IntrinsicInst *coroInit =
-                FindDefiningCoroInit(intrin->getOperand(0));
-            if (coroInit == nullptr)
-              continue;
-            AddResumeOrDestroy(coroInit, intrin);
-            break;
-          }
-          case Intrinsic::experimental_coro_init:
-            AddCoroInit(intrin);
-            break;
-          }
-        }
-      }
+    static inline bool classof(const Value *V) {
+      return isa<IntrinsicInst>(V) && classof(cast<IntrinsicInst>(V));
     }
   };
 
-  IntrinsicInst *dyn_cast_intrin_internal(Intrinsic::ID IntrID, Value *X) {
-    auto II = dyn_cast<IntrinsicInst>(X);
-    if (!II)
-      return nullptr;
-    if (II->getIntrinsicID() != IntrID)
-      return nullptr;
-    return II;
-  }
-
-  template <Intrinsic::ID IntrID> IntrinsicInst *dyn_cast_intrin(Value *X) {
-    return dyn_cast_intrin_internal(IntrID, X);
-  }
-
-  /// Pass Manager itself does not invalidate any analysis info.
-  //void getAnalysisUsage(AnalysisUsage &Info) const override {
-  //  // CGPassManager walks SCC and it needs CallGraph.
-  //  Info.setPreservesAll();
-  //  Info.addRequired<CallGraphWrapperPass>();
-  //}
-
-  void ReplaceWithDirectCalls(//CallGraph &CG, CallGraphNode &CGN,
-                              SmallVector<IntrinsicInst *, 4> &v,
-                              Function *func) {
-    FunctionType *ft = cast<FunctionType>(func->getType()->getElementType());
-    PointerType *argType = cast<PointerType>(ft->getParamType(0));
-
-    for (IntrinsicInst *intrin : v) {
-      auto bitCast =
-          new BitCastInst(intrin->getArgOperand(0), argType, "", intrin);
-      auto call = CallInst::Create(func, bitCast, "", intrin);
-      call->setCallingConv(CallingConv::Fast);
-      //CGN.addCalledFunction(CallSite(call), CG[func]);
-      intrin->eraseFromParent();
-
-#if 0 // DONT INLINE ATM
-      InlineFunctionInfo IFI;
-      InlineFunction(call, IFI);
-#endif
-    }
-  }
-
-  SmallString<64> smallString;
-
-  Function *getFunc(Module *M, Twine Name) {
-    smallString.clear();
-    auto value = M->getNamedValue(Name.toStringRef(smallString));
-    assert(value && "coroutine auxillary function not found");
-    return cast<Function>(value);
-  }
-
-  void replaceAllCoroDeletes(IntrinsicInst* CoroInit) {
-    // walk through all the users, if one of the users is 
-    // coro.delete => replace it with NullPtr
-
-    SmallVector<IntrinsicInst*, 4> Deletes;
-
-    for (User* U : CoroInit->users())
-      if (auto II = dyn_cast_intrin<Intrinsic::experimental_coro_delete>(U))
-        Deletes.push_back(II);
-
-    for (IntrinsicInst *Del : Deletes) {
-      Del->replaceAllUsesWith(ConstantPointerNull::get(bytePtrTy));
-      Del->eraseFromParent();
-    }
-  }
-
-  bool tryElide(Function &F) {
-    bool changed = false;
-    Database db(F);
-    for (auto &item : db.data) {
-      if (!item.ResumeFn) // with nested coroutines there won't be resume in pre-split coroutines
-        continue;
-      //assert(item.ResumeFn &&
-      //       "missing ResumeFn store after @llvm.coro.init");
-
-      const bool noDestroys = item.Destroys.empty();
-      const bool noResumes = item.Resumes.empty();
-
-      if (noDestroys && noResumes)
-        continue;
-
-      StringRef rampName = item.getRampName();
-      Module *M = F.getParent();
-      Function *cleanupFn = getFunc(M, rampName + ".cleanup");
-
-      Value* vFrame = item.CoroInit;
-
-      auto CoroElide = GetCoroElide(item.CoroInit);
-
-      bool AllocationElided = false;
-
-      // FIXME: check for escapes, moves,
-      if (CoroElide && !noDestroys && rampName != F.getName()) {
-        auto InsertPt = inst_begin(F);
-        auto allocaFrame =
-            new AllocaInst(item.getFrameType(), "elided.frame", &*InsertPt);
-
-        auto vAllocaFrame = new BitCastInst(allocaFrame, bytePtrTy,
-                                            "elided.vFrame", &*InsertPt);
-
-        replaceAllCoroDeletes(item.CoroInit);
-
-        item.CoroInit->replaceAllUsesWith(vAllocaFrame);
-        item.CoroInit->eraseFromParent();
-
-        CoroElide->replaceAllUsesWith(vAllocaFrame);
-        CoroElide->eraseFromParent();
-        vFrame = vAllocaFrame;
-        AllocationElided = true;
-      }
-
-      // FIXME: remove obsolete comment 1/21/2016
-      // FIXME: handle case when we are looking at the coroutine itself
-      // that destroys itself (like in case with optional/expected)
-      ReplaceWithDirectCalls(//CG, CGN, 
-        item.Resumes, item.ResumeFn);
-
-      ReplaceWithDirectCalls(//CG, CGN, 
-        item.Destroys, AllocationElided ? cleanupFn : item.DestroyFn);
-
-//      replaceIndirectCalls(F, vFrame, item.ResumeFn);
-//      replaceIndirectCalls(F, vFrame, cleanupFn);
-
-      simplifyAndConstantFoldTerminators(F);
-      removeUnreachableBlocks(F);
-
-      changed = true;
-    }
-    return changed;
-  }
-
-  void replaceIndirectCalls(Function& F, Value* CoroInit, Function* DirectFunc) {
-    FunctionType *ft = cast<FunctionType>(DirectFunc->getType()->getElementType());
-    PointerType *argType = cast<PointerType>(ft->getParamType(0));
-
-    for (auto it = inst_begin(F), end = inst_end(F); it != end;) {
-      Instruction & I = *it++;
-      if (auto CI = dyn_cast<CallInst>(&I))
-        if (CI->getCalledFunction() == nullptr)
-          if (CI->getOperand(0) == CoroInit)
-          {
-            auto BitCast =
-              new BitCastInst(CoroInit, argType, "", CI);
-            auto DirectCall = CallInst::Create(DirectFunc, BitCast, "", CI);
-            DirectCall->setCallingConv(CallingConv::Fast);
-            CI->eraseFromParent();
-#if 0 // DONT INLINE ATM
-            InlineFunctionInfo IFI;
-            InlineFunction(DirectCall, IFI);
-#endif
-          }
-    }
-  }
-#if 0
-  bool runOnModule(Module& M) override {
-    CoroutineCommon::PerModuleInit(M);
-
-    bool changed = false;
-    for (Function &F : M.getFunctionList()) {
-      changed |= runOnFunction(F);
-    }
-    return changed;
-  }
-#endif
-  bool doInitialization(Module &M) override {
-    if (moduleInitialized)
-      return false;
-    CoroutineCommon::PerModuleInit(M);
-    moduleInitialized = true;
-    return false;
-  }
-
-  static bool hasResumeOrDestroy(Function &F) {
-    for (auto& I : instructions(F)) {
-      if (auto intrin = dyn_cast<IntrinsicInst>(&I)) {
-        switch (intrin->getIntrinsicID()) {
-        default:
-          continue;
-        case Intrinsic::experimental_coro_resume:
-        case Intrinsic::experimental_coro_destroy:
-          return true;
-        }
-      }
-    }
-    return false;
-  }
-
-  bool runOnFunction(Function &F) override {
-    bool changed = false;
-
-    if (hasResumeOrDestroy(F)) {
-      if (tryElide(F)) {
-        ++CoroHeapElideCounter;
-        changed = true;
-      }
-    }
-    return changed;
-  }
-
-#if 0
-  bool runOnSCC(CallGraphSCC &SCC) override {
-    bool changed = false;
-    for (CallGraphNode *Node : SCC) {
-      Function *F = Node->getFunction();
-      if (!F) continue;
-      doInitialization(*F->getParent());
-
-      changed |= runOnFunction(*F);
-    }
-    return changed;
-  }
-#endif
-};
 }
 
-char CoroHeapElide::ID = 0;
-INITIALIZE_PASS_BEGIN(
-    CoroHeapElide, "coro-elide",
-    "Coroutine frame allocation elision and indirect calls replacement", false,
-    false)
-  //INITIALIZE_PASS_DEPENDENCY(CallGraphWrapperPass)
-  //INITIALIZE_PASS_DEPENDENCY(CoroSplit)
-INITIALIZE_PASS_END(
-    CoroHeapElide, "coro-elide",
+namespace {
+
+// TODO: paste explanation
+struct CoroElide : FunctionPass {
+  static char ID; 
+  CoroElide() : FunctionPass(ID) {}
+  bool runOnFunction(Function &F) override;
+};
+
+}
+
+char CoroElide::ID = 0;
+INITIALIZE_PASS(
+    CoroElide, "coro-elide",
     "Coroutine frame allocation elision and indirect calls replacement", false,
     false)
 
-Pass *llvm::createCoroHeapElidePass() { return new CoroHeapElide(); }
+Pass *llvm::createCoroElidePass() { return new CoroElide(); }
+
+bool CoroElide::runOnFunction(Function &F) {
+  DEBUG(dbgs() << "CoroElide is looking at " << F.getName() << "\n");
+
+  for (auto II = inst_begin(&F), IE = inst_end(&F); II != IE;) {
+    auto &I = *II++;
+
+    if (auto CoroInit = dyn_cast<CoroInitInst>(&I)) {
+      DEBUG(dbgs() << "  found CoroInit: ");
+      DEBUG(CoroInit->print(dbgs(), true));
+      DEBUG(dbgs() << "\n");
+    }
+  }
+
+  return false;
+}

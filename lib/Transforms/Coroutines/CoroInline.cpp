@@ -96,7 +96,7 @@ namespace {
           legacy::FunctionPassManager FPM(F->getParent());
           FPM.add(createSROAPass());
           FPM.add(createInstructionCombiningPass());  // Combine silly seq's
-          FPM.add(createCoroHeapElidePass());
+          FPM.add(createCoroElidePass());
 
 #if 1
           FPM.add(createEarlyCSEPass());              // Catch trivial redundancies
