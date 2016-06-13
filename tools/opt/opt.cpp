@@ -202,6 +202,11 @@ static cl::opt<bool> DiscardValueNames(
     cl::desc("Discard names from Value (other than GlobalValue)."),
     cl::init(false), cl::Hidden);
 
+static cl::opt<bool> Coroutines(
+  "enable-coroutines",
+  cl::desc("Enable Coroutine Passes"),
+  cl::init(true), cl::Hidden);
+
 static inline void addPass(legacy::PassManagerBase &PM, Pass *P) {
   // Add the pass to the pass manager...
   PM.add(P);
@@ -209,6 +214,19 @@ static inline void addPass(legacy::PassManagerBase &PM, Pass *P) {
   // If we are verifying all of the intermediate steps, add the verifier...
   if (VerifyEach)
     PM.add(createVerifierPass());
+}
+
+static void addCoroutineOpt0Passes(const PassManagerBuilder &Builder, PassManagerBase &PM) {
+  // addPass(PM, createCoroEarlyPass());
+  // addPass(PM, createCoroSplitPass());
+  // addPass(PM, createCoroLatePass());
+}
+
+static void addCoroutineSCCPasses(const PassManagerBuilder &Builder, PassManagerBase &PM) {
+  if (Builder.OptLevel > 0) {
+    addPass(PM, createCoroHeapElidePass());
+    // addPass(PM, createCoroSplitPass());
+  }
 }
 
 /// This routine adds optimization passes based on selected optimization level,
@@ -246,6 +264,11 @@ static void AddOptimizationPasses(legacy::PassManagerBase &MPM,
   // When #pragma vectorize is on for SLP, do the same as above
   Builder.SLPVectorize =
       DisableSLPVectorization ? false : OptLevel > 1 && SizeLevel < 2;
+
+  if (Coroutines) {
+    Builder.addExtension(PassManagerBuilder::EP_CGSCCOptimizerLate,
+                         addCoroutineSCCPasses);
+  }
 
   Builder.populateFunctionPassManager(FPM);
   Builder.populateModulePassManager(MPM);
@@ -300,6 +323,8 @@ void initializePollyPasses(llvm::PassRegistry &Registry);
 }
 #endif
 
+bool fCoroutines = true;
+
 //===----------------------------------------------------------------------===//
 // main for opt
 //
@@ -339,6 +364,10 @@ int main(int argc, char **argv) {
   initializeDwarfEHPreparePass(Registry);
   initializeSafeStackPass(Registry);
   initializeSjLjEHPreparePass(Registry);
+
+  if (Coroutines) {
+    initializeCoroutines(Registry);
+  }
 
 #ifdef LINK_POLLY_INTO_TOOLS
   polly::initializePollyPasses(Registry);

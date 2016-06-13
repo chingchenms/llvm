@@ -29,7 +29,6 @@
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/ManagedStatic.h"
 #include "llvm/Target/TargetMachine.h"
-#include "llvm/Transforms/Coroutines.h"
 #include "llvm/Transforms/IPO.h"
 #include "llvm/Transforms/IPO/ForceFunctionAttrs.h"
 #include "llvm/Transforms/IPO/FunctionAttrs.h"
@@ -196,7 +195,6 @@ void PassManagerBuilder::addInstructionCombiningPass(
 void PassManagerBuilder::populateFunctionPassManager(
     legacy::FunctionPassManager &FPM) {
   addExtensionsToPM(EP_EarlyAsPossible, FPM);
-  FPM.add(createCoroEarlyPass());
 
   // Add LibraryInfo if we have some.
   if (LibraryInfo)
@@ -362,7 +360,6 @@ void PassManagerBuilder::populateModulePassManager(
     MPM.add(createInferFunctionAttrsLegacyPass());
 
     addExtensionsToPM(EP_ModuleOptimizerEarly, MPM);
-//    MPM.add(createCoroModuleEarlyPass());
 
     MPM.add(createIPSCCPPass());          // IP SCCP
     MPM.add(createGlobalOptimizerPass()); // Optimize out global vars
@@ -394,13 +391,14 @@ void PassManagerBuilder::populateModulePassManager(
     MPM.add(Inliner);
     Inliner = nullptr;
   }
-  MPM.add(createCoroInline());
   if (!DisableUnitAtATime)
     MPM.add(createPostOrderFunctionAttrsLegacyPass());
   if (OptLevel > 2)
     MPM.add(createArgumentPromotionPass()); // Scalarize uninlined fn args
 
   addFunctionSimplificationPasses(MPM);
+
+  addExtensionsToPM(EP_CGSCCOptimizerLate, MPM);
 
   // If we are planning to perform ThinLTO later, let's not bloat the code with
   // unrolling/vectorization/... now. We'll first run the inliner + CGSCC passes
@@ -570,7 +568,6 @@ void PassManagerBuilder::populateModulePassManager(
     MPM.add(createMergeFunctionsPass());
 
   addExtensionsToPM(EP_OptimizerLast, MPM);
-  MPM.add(createCoroCleanupPass());
 }
 
 void PassManagerBuilder::addLTOOptimizationPasses(legacy::PassManagerBase &PM) {
