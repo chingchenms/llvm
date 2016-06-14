@@ -53,24 +53,38 @@ namespace llvm {
         return nullptr;
       return cast<AllocaInst>(Arg->stripPointerCasts());
     }
-    Constant *getParts() const {
-      auto Arg = getArgOperand(kParts);
-      if (isa<ConstantPointerNull>(Arg))
-        return nullptr;
 
-      auto CE = cast<ConstantExpr>(Arg);
+    struct Parts {
+      Function* const ResumeFn;
+      Function* const DestroyFn;
+      Function* const CleanupFn;
+
+      // If CoroSplit pass did not generate CleanupFn
+      // Heap Allocation Elision cannot be performed
+      bool elidable() { return CleanupFn != nullptr; }
+    };
+
+    Parts getParts() const {
+      assert(isPostSplit() && "getParts is called for preSplit coroinit");
+
+      auto CE = cast<ConstantExpr>(getArgOperand(kParts));
       assert(CE->getOpcode() == Instruction::BitCast);
 
       auto GV = cast<GlobalVariable>(CE->getOperand(0));
-      auto Init = GV->getInitializer();
+      auto Value = GV->getInitializer();
 
-      return Init;
+      return {
+        cast<Function>(Value->getAggregateElement(0u)),
+        cast<Function>(Value->getAggregateElement(1u)),
+        cast_or_null<Function>(Value->getAggregateElement(2u))
+      };
     }
 
-    // post-split coroutines have non-null parts
+    // post-split coroutines have non-null parts parameter
     bool isPostSplit() const {
       return !isa<ConstantPointerNull>(getArgOperand(kParts));
     }
+    // post-split coroutine has cleanup part
 
     // Methods for support type inquiry through isa, cast, and dyn_cast:
     static inline bool classof(const IntrinsicInst *I) {
@@ -162,16 +176,6 @@ static void replaceWithConstant(Constant *Value,
 // Value *Count = Builder.CreateLoad(Counter);
 
 static bool replaceIndirectCalls(CoroInitInst *CoroInit) {
-  Constant* Parts = CoroInit->getParts();
-  // If we don't have coroutine parts, it means
-  // that coroutine has not been split yet.
-  // Nothing to do for such CoroInit.
-  if (Parts == nullptr)
-    return false;
-
-  DEBUG(dbgs() << "  found CoroInit with parts: ");
-  DEBUG(Parts->print(dbgs(), true));
-  DEBUG(dbgs() << "\n");
 
   SmallVector<IntrinsicInst*, 8> ResumeAddr;
   SmallVector<IntrinsicInst*, 8> DestroyAddr;
@@ -189,8 +193,18 @@ static bool replaceIndirectCalls(CoroInitInst *CoroInit) {
         break;
       }
   }
-  replaceWithConstant(Parts->getAggregateElement(0u), ResumeAddr);
-  replaceWithConstant(Parts->getAggregateElement(1), DestroyAddr);
+
+  auto P = CoroInit->getParts();
+  DEBUG(dbgs() << "  found CoroInit with: " 
+    << P.ResumeFn->getName() << ", "
+    << P.DestroyFn->getName());
+  if (P.CleanupFn) {
+    DEBUG(dbgs() << ", " << P.CleanupFn->getName());
+  }
+  DEBUG(dbgs() << "\n");
+
+  replaceWithConstant(P.ResumeFn, ResumeAddr);
+  replaceWithConstant(P.DestroyFn, DestroyAddr);
 
   return !ResumeAddr.empty() || !DestroyAddr.empty();
 }
