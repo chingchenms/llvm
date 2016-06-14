@@ -22,7 +22,7 @@ class PassRegistry;
 
 //===----------------------------------------------------------------------===//
 //
-// Split up coroutine into several functions
+// Split up coroutine into several functions driving its state machine
 //
 Pass *createCoroSplitPass();
 
@@ -38,14 +38,11 @@ Pass *createCoroElidePass();
 //
 Pass *createCoroCleanupPass();
 
+//===----------------------------------------------------------------------===//
+//
+// Lower coroutine intrinsics that are not used by later passes
+//
 Pass *createCoroEarlyPass();
-Pass *createCoroModuleEarlyPass();
-Pass *createCoroScalarLatePass();
-Pass *createCoroLastPass();
-Pass *createCoroOnOpt0();
-
-Pass *createCoroPreSplit();
-Pass *createCoroInline();
 
 /// TODO: move to llvm/InitializePasses.h?
 /// initializeCoroutines - Initialize all passes linked into the Coroutines library.

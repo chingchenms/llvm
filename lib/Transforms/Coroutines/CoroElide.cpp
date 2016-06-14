@@ -17,24 +17,39 @@
 #include "CoroutineCommon.h"
 #include "llvm/Transforms/Coroutines.h"
 
-//#include "llvm/ADT/SmallString.h"
+#include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/Statistic.h"
-#include "llvm/Support/Debug.h"
 #include "llvm/Analysis/ConstantFolding.h"
-//#include "llvm/IR/Function.h"
+#include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/InstIterator.h"
 #include "llvm/IR/IntrinsicInst.h"
-#include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Module.h"
 #include "llvm/Pass.h"
-//#include "llvm/PassSupport.h"
-//#include "llvm/Support/raw_ostream.h"
-//#include "llvm/Transforms/Utils/Local.h"
+#include "llvm/Support/Debug.h"
 using namespace llvm;
 
 #define DEBUG_TYPE "coro-elide"
 
 STATISTIC(CoroElideCounter, "Number of coroutine allocation elision performed");
+
+namespace {
+
+  // TODO: paste explanation
+  struct CoroElide : FunctionPass {
+    static char ID;
+    CoroElide() : FunctionPass(ID) {}
+    bool runOnFunction(Function &F) override;
+  };
+
+}
+
+char CoroElide::ID = 0;
+INITIALIZE_PASS(
+  CoroElide, "coro-elide",
+  "Coroutine frame allocation elision and indirect calls replacement", false,
+  false);
+
+Pass *llvm::createCoroElidePass() { return new CoroElide(); }
 
 namespace llvm { 
 
@@ -83,17 +98,15 @@ namespace llvm {
       ConstantAsMetadata* C1 = cast<ConstantAsMetadata>(MN->getOperand(1));
       auto* C2 = cast<ConstantAsMetadata>(MN->getOperand(2))->getValue();
       auto* C3 = cast<ConstantAsMetadata>(MN->getOperand(3))->getValue();
-      ConstantAsMetadata* C4 = 
+      auto* C4 = 
         MN->getNumOperands() < 5 ? nullptr :
-        cast<ConstantAsMetadata>(MN->getOperand(4));
-
-      ;
+        cast<ConstantAsMetadata>(MN->getOperand(4))->getValue();
 
       return{
         cast<PointerType>(C1->getType())->getElementType(),
         cast<Function>(C2),
         cast<Function>(C3),
-        nullptr };
+        cast_or_null<Function>(C4) };
     }
 
     bool isPostSplit() const {
@@ -134,27 +147,9 @@ namespace llvm {
 
 }
 
-namespace {
-
-// TODO: paste explanation
-struct CoroElide : FunctionPass {
-  static char ID; 
-  CoroElide() : FunctionPass(ID) {}
-  bool runOnFunction(Function &F) override;
-};
-
-}
-
-char CoroElide::ID = 0;
-INITIALIZE_PASS(
-    CoroElide, "coro-elide",
-    "Coroutine frame allocation elision and indirect calls replacement", false,
-    false)
-
-Pass *llvm::createCoroElidePass() { return new CoroElide(); }
-
+// TODO: Move to common?
 static void constantFoldUsers(Constant* Value) {
-  std::set<Instruction*> WorkList;
+  SmallPtrSet<Instruction*, 16> WorkList;
   for (User *U : Value->users())
     WorkList.insert(cast<Instruction>(U));
 
@@ -167,7 +162,7 @@ static void constantFoldUsers(Constant* Value) {
 
   do {
     Instruction *I = *WorkList.begin();
-    WorkList.erase(WorkList.begin());    // Get an element from the worklist...
+    WorkList.erase(I); // Get an element from the worklist...
 
     if (!I->use_empty())                 // Don't muck with dead instructions...
       if (Constant *C = ConstantFoldInstruction(I, DL)) {

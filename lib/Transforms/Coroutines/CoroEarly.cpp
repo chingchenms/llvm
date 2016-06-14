@@ -13,70 +13,33 @@
 //===----------------------------------------------------------------------===//
 
 #include "CoroutineCommon.h"
-#include "llvm/Transforms/Coroutines.h"
-#include "llvm/Transforms/Utils/PromoteMemToReg.h"
-#include "llvm/Transforms/IPO/InlinerPass.h"
-#include "llvm/Analysis/InlineCost.h"
-#include "llvm/Analysis/TargetLibraryInfo.h"
-
-#include "llvm/Analysis/CallGraphSCCPass.h"
-#include "llvm/IR/CFG.h"
 #include "llvm/IR/Module.h"
-#include "llvm/IR/CallSite.h"
-#include "llvm/Support/Casting.h"
-#include "llvm/Transforms/Utils/Cloning.h"
-
-#include "llvm/ADT/Statistic.h"
-#include "llvm/IR/Function.h"
-#include "llvm/IR/InstIterator.h"
-#include "llvm/IR/IntrinsicInst.h"
 #include "llvm/Pass.h"
-#include "llvm/Support/raw_ostream.h"
+#include "llvm/Support/Debug.h"
+#include "llvm/Transforms/Coroutines.h"
 using namespace llvm;
 
 #define DEBUG_TYPE "coro-early"
 
 namespace {
-  // inline little things in a coroutine, like a void or bool
-  // function with only a ret instruction returning a constant
-struct CoroEarly : public FunctionPass, CoroutineCommon {
+struct CoroEarly : public FunctionPass {
   static char ID; // Pass identification, replacement for typeid
   CoroEarly() : FunctionPass(ID) {}
 
   bool doInitialization(Module& M) override {
-    CoroutineCommon::PerModuleInit(M);
     return false;
   }
 
-  // replaces coro_(from_)promise and coro_done intrinsics
   bool runOnFunction(Function &F) override {
-    bool changed = false;
-
-    for (auto it = inst_begin(F), end = inst_end(F); it != end;) {
-      Instruction &I = *it++;
-      if (auto intrin = dyn_cast<IntrinsicInst>(&I)) {
-        switch (intrin->getIntrinsicID()) {
-        default:
-          continue;
-        case Intrinsic::experimental_coro_promise:
-          ReplaceCoroPromise(intrin);
-          break;
-        case Intrinsic::experimental_coro_from_promise:
-          ReplaceCoroPromise(intrin, /*From=*/true);
-          break;
-        case Intrinsic::experimental_coro_done:
-          ReplaceCoroDone(intrin);
-          break;
-        }
-        changed = true;
-      }
-    }
-    return changed;
+    DEBUG(dbgs() << "CoroEarly is looking at " << F.getName() << "\n");
+    return false;
   }
 };
 }
+
 char CoroEarly::ID = 0;
-static RegisterPass<CoroEarly> Y("CoroEarly", "replace early coro intrinsics");
-namespace llvm {
-  Pass *createCoroEarlyPass() { return new CoroEarly(); }
-}
+INITIALIZE_PASS(
+  CoroEarly, "coro-early",
+  "Coroutine frame allocation elision and indirect calls replacement", false,
+  false);
+Pass *llvm::createCoroEarlyPass() { return new CoroEarly(); }
