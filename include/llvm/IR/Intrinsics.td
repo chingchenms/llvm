@@ -607,6 +607,9 @@ def int_experimental_coro_done : Intrinsic<[llvm_i1_ty], [llvm_ptr_ty], [IntrRea
 def int_experimental_coro_promise : Intrinsic<[llvm_anyptr_ty], [llvm_ptr_ty], [IntrReadMem]>;
 def int_experimental_coro_from_promise : Intrinsic<[llvm_ptr_ty], [llvm_anyptr_ty], [IntrReadMem]>;
 
+def int_coro_init : Intrinsic<[llvm_ptr_ty], 
+                                           [llvm_ptr_ty, llvm_i32_ty, 
+                                            llvm_ptr_ty, llvm_metadata_ty], []>;
 def int_coro_return : Intrinsic<[llvm_i1_ty], [llvm_ptr_ty], []>;
 def int_coro_start : Intrinsic<[llvm_i1_ty], [llvm_ptr_ty], []>;
 def int_coro_end : Intrinsic<[], [llvm_ptr_ty, llvm_i1_ty], []>;

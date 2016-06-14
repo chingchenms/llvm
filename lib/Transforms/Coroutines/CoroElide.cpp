@@ -55,6 +55,7 @@ namespace llvm {
     }
 
     struct Parts {
+      Type* const FrameTy;
       Function* const ResumeFn;
       Function* const DestroyFn;
       Function* const CleanupFn;
@@ -64,6 +65,42 @@ namespace llvm {
       bool elidable() { return CleanupFn != nullptr; }
     };
 
+    MDNode *getRawParts() const {
+      auto MV = cast<MetadataAsValue>(getArgOperand(kParts))->getMetadata();
+      auto MN = dyn_cast<MDNode>(MV);
+      if (!MN)
+        return nullptr;
+
+      if (MN->getNumOperands() < 4)
+        return nullptr;
+
+      return MN;
+    }
+
+    // FIXME: Create class for CoroMetadata
+    Parts getParts() const {
+      auto MN = getRawParts();
+      ConstantAsMetadata* C1 = cast<ConstantAsMetadata>(MN->getOperand(1));
+      auto* C2 = cast<ConstantAsMetadata>(MN->getOperand(2))->getValue();
+      auto* C3 = cast<ConstantAsMetadata>(MN->getOperand(3))->getValue();
+      ConstantAsMetadata* C4 = 
+        MN->getNumOperands() < 5 ? nullptr :
+        cast<ConstantAsMetadata>(MN->getOperand(4));
+
+      ;
+
+      return{
+        cast<PointerType>(C1->getType())->getElementType(),
+        cast<Function>(C2),
+        cast<Function>(C3),
+        nullptr };
+    }
+
+    bool isPostSplit() const {
+      return getRawParts();
+    }
+
+#if 0
     Parts getParts() const {
       assert(isPostSplit() && "getParts is called for preSplit coroinit");
 
@@ -85,10 +122,10 @@ namespace llvm {
       return !isa<ConstantPointerNull>(getArgOperand(kParts));
     }
     // post-split coroutine has cleanup part
-
+#endif
     // Methods for support type inquiry through isa, cast, and dyn_cast:
     static inline bool classof(const IntrinsicInst *I) {
-      return I->getIntrinsicID() == Intrinsic::experimental_coro_init;
+      return I->getIntrinsicID() == Intrinsic::coro_init;
     }
     static inline bool classof(const Value *V) {
       return isa<IntrinsicInst>(V) && classof(cast<IntrinsicInst>(V));
