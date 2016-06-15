@@ -244,6 +244,8 @@ static bool replaceIndirectCalls(CoroInitInst *CoroInit) {
 bool CoroElide::runOnFunction(Function &F) {
   DEBUG(dbgs() << "CoroElide is looking at " << F.getName() << "\n");
   bool changed = false;
+  if (!changed)
+    return false;
 
   // Collect all coro inits that belong to post-split coroutines 
   SmallVector<CoroInitInst*, 4> CoroInits;
