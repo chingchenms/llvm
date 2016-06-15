@@ -21,6 +21,10 @@ using namespace llvm;
 
 #define DEBUG_TYPE "coro-early"
 
+//===----------------------------------------------------------------------===//
+//                              Top Level Driver
+//===----------------------------------------------------------------------===//
+
 namespace {
 struct CoroEarly : public FunctionPass {
   static char ID; // Pass identification, replacement for typeid

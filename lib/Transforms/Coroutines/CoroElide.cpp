@@ -51,8 +51,7 @@ INITIALIZE_PASS(
 
 Pass *llvm::createCoroElidePass() { return new CoroElide(); }
 
-namespace llvm { 
-
+#if 0
   /// This represents the llvm.coro.init instruction.
   class CoroInitInst : public IntrinsicInst {
     enum { kMem, kAlign, kPromise, kParts };
@@ -145,7 +144,7 @@ namespace llvm {
     }
   };
 
-}
+#endif
 
 // TODO: Move to common?
 static void constantFoldUsers(Constant* Value) {
@@ -203,12 +202,8 @@ static void replaceWithConstant(Constant *Value,
   constantFoldUsers(Value);
 }
 
-// IRBuilder<> Builder(I);
-// Value *Counter = Builder.CreateConstInBoundsGEP2_64(Parts, 0, Index);
-// Value *Count = Builder.CreateLoad(Counter);
 
 static bool replaceIndirectCalls(CoroInitInst *CoroInit) {
-
   SmallVector<IntrinsicInst*, 8> ResumeAddr;
   SmallVector<IntrinsicInst*, 8> DestroyAddr;
 
@@ -226,6 +221,7 @@ static bool replaceIndirectCalls(CoroInitInst *CoroInit) {
       }
   }
 
+#if 0
   auto P = CoroInit->getParts();
   DEBUG(dbgs() << "  found CoroInit with: " 
     << P.ResumeFn->getName() << ", "
@@ -237,7 +233,7 @@ static bool replaceIndirectCalls(CoroInitInst *CoroInit) {
 
   replaceWithConstant(P.ResumeFn, ResumeAddr);
   replaceWithConstant(P.DestroyFn, DestroyAddr);
-
+#endif
   return !ResumeAddr.empty() || !DestroyAddr.empty();
 }
 

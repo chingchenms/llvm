@@ -15,47 +15,12 @@
 #include <llvm/Transforms/Coroutines.h>
 
 #include <llvm/ADT/SmallVector.h>
-#include <llvm/IR/IntrinsicInst.h>
 #include <llvm/IR/Function.h>
 #include <llvm/Analysis/CallGraphSCCPass.h>
 
 using namespace llvm;
 
 #define DEBUG_TYPE "coro-split"
-
-namespace {
-  /// This represents the llvm.coro.init instruction.
-  class CoroInitInst : public IntrinsicInst {
-    enum { kElide, kMem, kAlign, kPromise, kMeta };
-  public:
-    Value *getElide() const { return getArgOperand(kElide); }
-
-    Value *getMem() const { return getArgOperand(kMem); }
-
-    ConstantInt *getAlignment() const {
-      return cast<ConstantInt>(getArgOperand(kAlign));
-    }
-
-    // if this CoroInit belongs to pre-Split coroutine function Fn,
-    // metadata contains a Function* pointing back to Fn.
-    // If so, return it, otherwise, return nullptr
-    Function* getCoroutine() const {
-      auto MD = cast<MetadataAsValue>(getArgOperand(kMeta))->getMetadata();
-      if (auto MV = dyn_cast<ValueAsMetadata>(MD))
-        return dyn_cast<Function>(MV->getValue());
-      return nullptr;
-    }
-
-    // Methods for support type inquiry through isa, cast, and dyn_cast:
-    static inline bool classof(const IntrinsicInst *I) {
-      return I->getIntrinsicID() == Intrinsic::coro_init;
-    }
-    static inline bool classof(const Value *V) {
-      return isa<IntrinsicInst>(V) && classof(cast<IntrinsicInst>(V));
-    }
-  };
-
-}
 
 // Since runOnSCC cannot create any functions,
 // we will create functions with empty bodies
