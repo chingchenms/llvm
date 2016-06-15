@@ -1,0 +1,74 @@
+Hi Sanjoy, Eli:
+
+I was thinking a little bit more about your comments related to optimizer
+moving code up and down and I think I can generalize the problem.
+
+Background
+==========
+
+A coroutine is transformed into a state machine just before it becomes eligible
+to be inlined into its caller, so that the body of the coroutine is simplified 
+as much as possible before we decide what needs to go into a coroutine frame
+and before we separate the coroutine into start, resume and destroy parts in 
+the CoroSplit pass.
+
+      SCC_Inliner - FuncPass - FuncPass - ... - SCC_CoroSplit  
+
+The Problem
+===========
+
+After we form the coroutine frame we replace 'uses' with loads from coroutine
+frame and put spills at the 'defs' for those values that must be on the 
+coroutine frame. Those values that can be on the stack or in the virtual 
+register, stay where they are. Before we do this, the optimizer has no idea 
+that 'defs' and 'uses' have any relationship with the code that allocates and
+frees the coroutine frame.
+
+IR emitted from the frontend can be thought of having several parts separated
+by coro.init, coro.fork and coro.delete intrinsics.
+
+
+        Allocate Frame Code        
+    ------ coro.init --------------------- [1]
+        Init Code 
+    ------ coro.fork --------------------- [2]
+            |        \
+            |         \
+            |          Body Code
+            |     ---- coro.delete ------- [3]
+            |       Deallocate Frame Code
+            |     ------ coro.end --------
+            |         /
+            |        /
+        Return Block Code
+
+Before CoroSplit runs, we need to make sure that:
+
+1. No instruction from below coro.init can move above it as coroutine 
+   frame is not formed yet.
+
+2. No instructions from "Init Code" can move into the return Block code, since 
+   Init Code may access the coroutine frame, but, it may be already deleted
+   when we get to the return block
+
+3. No instructions from above coro.delete can move below coro.delete, since
+   after coro.delete coroutine frame is deallocated.
+
+
+The Solution
+============
+
+Eli suggested it earlier and now I am dialing it up to 11.
+Code as emitted by the frontend is in the correct order. We will outline parts 
+of the coroutine in CoroEarly pass that runs at EP_EarlyAsPossible to prevent 
+any code motion across the barriers described earlier.
+
+I am still thinking through the details, so this is just a rough sketch.
+I will mark the parts as noinline, so that the inliner won't put them back
+together until CoroSplit. At the end of CoroSplit, I may inline them back 
+as appropriate.
+
+I will think more and experiment with this approach.
+Any thoughts and suggestions are appreciated.
+
+Gor

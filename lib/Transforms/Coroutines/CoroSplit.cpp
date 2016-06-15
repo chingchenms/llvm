@@ -66,15 +66,15 @@ namespace {
   struct CoroInfoTy {
     CoroInitInst* CoroInit;
     StructType* FrameTy;
-    Function* ResumeFn;
-    Function* DestroyFn;
-    Function* CleanupFn;
+    CallGraphNode* ResumeNode;
+    CallGraphNode* DestroyNode;
+    CallGraphNode* CleanupNode;
 
-    CoroInfoTy(Function* Coro, CoroInitInst* CoroInit);
+    CoroInfoTy(CallGraph& CG, Function* Coro, CoroInitInst* CI);
   };
 }
 
-CoroInfoTy::CoroInfoTy(Function *F, CoroInitInst *CI) 
+CoroInfoTy::CoroInfoTy(CallGraph& CG, Function *F, CoroInitInst *CI)
   : CoroInit(CI)
 {
   assert(CI->getFunction() == F && "coro.init in a pre-split coroutine"
@@ -83,9 +83,9 @@ CoroInfoTy::CoroInfoTy(Function *F, CoroInitInst *CI)
   Name.push_back('.');
   auto const FirstPartSize = Name.size();
 
-  LLVMContext& Ctx = F->getContext();
 
   Name.append("frame");
+  LLVMContext& Ctx = F->getContext();
   this->FrameTy = StructType::create(Ctx, Name);
 
   auto AS = CI->getMem()->getType()->getPointerAddressSpace();
@@ -101,12 +101,12 @@ CoroInfoTy::CoroInfoTy(Function *F, CoroInitInst *CI)
 
     auto BB = BasicBlock::Create(Ctx, "entry", Fn);
     ReturnInst::Create(Ctx, BB);
-    return Fn;
+    return CG.getOrInsertFunction(Fn);
   };
 
-  this->ResumeFn = CreateSubFunction("resume");
-  this->DestroyFn = CreateSubFunction("destroy");
-  this->CleanupFn = CreateSubFunction("cleanup");
+  this->ResumeNode = CreateSubFunction("resume");
+  this->DestroyNode = CreateSubFunction("destroy");
+  this->CleanupNode = CreateSubFunction("cleanup");
 }
 
 // CoroDatabase maintains a mapping 
@@ -114,9 +114,9 @@ CoroInfoTy::CoroInfoTy(Function *F, CoroInitInst *CI)
 namespace {
   struct CoroDatabase {
 
-    CoroInfoTy const& add(Function* Coro, CoroInitInst*);
+    CoroInfoTy const& add(CallGraph&, Function*, CoroInitInst*);
     bool empty() const { return Data == nullptr; }
-    CoroInfoTy const * find(Function* F);
+    CoroInfoTy const * find(Function*);
     void sort();
 
   private:
@@ -163,7 +163,8 @@ CoroInfoTy const *CoroDatabase::find(Function *F) {
   return &Data->Parts[I->Index];
 }
 
-CoroInfoTy const& CoroDatabase::add(Function* Coro, CoroInitInst* CoroInit) {
+CoroInfoTy const &CoroDatabase::add(CallGraph &CG, Function *F,
+                                    CoroInitInst *CoroInit) {
   if (!Data) {
     Data = std::make_unique<DataTy>();
     Data->Sorted = true; // with only one element, obviously sorted
@@ -171,36 +172,30 @@ CoroInfoTy const& CoroDatabase::add(Function* Coro, CoroInitInst* CoroInit) {
   else {
     Data->Sorted = false;
   }
-  Data->Index.push_back({ Coro, Data->Parts.size() });
-  Data->Parts.emplace_back(Coro, CoroInit);
+  Data->Index.push_back({ F, Data->Parts.size() });
+  Data->Parts.emplace_back(CG, F, CoroInit);
   return Data->Parts.back();
 }
 
-// Update CallGraph and makes sure that the coroutine
-// and all of it subfunctions are in the same SCC
-static void buildSCC(CallGraph& CG, Function* Coro, CoroInfoTy const& CoroInfo) {
-  auto CoroNode = CG[Coro];
-  auto ResumeNode = CG.getOrInsertFunction(CoroInfo.ResumeFn);
-  auto DestroyNode = CG.getOrInsertFunction(CoroInfo.DestroyFn);
-  auto CleanupNode = CG.getOrInsertFunction(CoroInfo.CleanupFn);
-
-  CoroNode->addCalledFunction(CallSite(), ResumeNode);
-  ResumeNode->addCalledFunction(CallSite(), DestroyNode);
-  DestroyNode->addCalledFunction(CallSite(), CleanupNode);
-  CleanupNode->addCalledFunction(CallSite(), CoroNode);
+/// addAbstractEdges - Add abstract edges to keep a coroutine
+/// and its subfunctions together in one SCC
+static void addAbstractEdges(CallGraphNode *CoroNode,
+                             CoroInfoTy const &CoroInfo) {
+  CoroNode->addCalledFunction(CallSite(), CoroInfo.ResumeNode);
+  CoroInfo.ResumeNode->addCalledFunction(CallSite(), CoroInfo.DestroyNode);
+  CoroInfo.DestroyNode->addCalledFunction(CallSite(), CoroInfo.CleanupNode);
+  CoroInfo.CleanupNode->addCalledFunction(CallSite(), CoroNode);
 }
 
-static void removeAbstractEdges(CallGraph &CG, Function *Coro,
+/// removeAbstractEdges - Remove abstract edges that keep a coroutine
+/// and its subfunctions together in one SCC
+static void removeAbstractEdges(CallGraphNode *CoroNode,
                              CoroInfoTy const &CoroInfo) {
-  auto CoroNode = CG[Coro];
-  auto ResumeNode = CG[CoroInfo.ResumeFn];
-  auto DestroyNode = CG[CoroInfo.DestroyFn];
-  auto CleanupNode = CG[CoroInfo.CleanupFn];
 
-  CoroNode->removeOneAbstractEdgeTo(ResumeNode);
-  ResumeNode->removeOneAbstractEdgeTo(DestroyNode);
-  DestroyNode->removeOneAbstractEdgeTo(CleanupNode);
-  CleanupNode->removeOneAbstractEdgeTo(CoroNode);
+  CoroNode->removeOneAbstractEdgeTo(CoroInfo.ResumeNode);
+  CoroInfo.ResumeNode->removeOneAbstractEdgeTo(CoroInfo.DestroyNode);
+  CoroInfo.DestroyNode->removeOneAbstractEdgeTo(CoroInfo.CleanupNode);
+  CoroInfo.CleanupNode->removeOneAbstractEdgeTo(CoroNode);
 }
 
 // CallGraphSCC Pass cannot add new functions
@@ -211,8 +206,8 @@ static bool preSplitCoroutines(CallGraph &CG, CoroDatabase& DB) {
   for (User* U : CoroInitFn->users()) {
     if (auto CoroInit = dyn_cast<CoroInitInst>(U)) {
       if (Function* CoroFn = CoroInit->getCoroutine()) {
-        auto &CoroInfo = DB.add(CoroFn, CoroInit);
-        buildSCC(CG, CoroFn, CoroInfo);
+        auto &CoroInfo = DB.add(CG, CoroFn, CoroInit);
+        addAbstractEdges(CG[CoroFn], CoroInfo);
       }
     }
   }
@@ -235,10 +230,7 @@ namespace {
     static char ID; // Pass identification, replacement for typeid
     CoroSplit() : CallGraphSCCPass(ID) {}
 
-    CallGraph* MyCG;
-
     bool doInitialization(CallGraph &CG) override {
-      MyCG = &CG;
       bool changed = preSplitCoroutines(CG, DB);
       changed |= CallGraphSCCPass::doInitialization(CG);
       return changed;
@@ -259,7 +251,7 @@ namespace {
       for (CallGraphNode *CGN : SCC) {
         if (auto F = CGN->getFunction()) {
           if (auto CoroInfo = DB.find(F)) {
-            removeAbstractEdges(*MyCG, F, *CoroInfo);
+            removeAbstractEdges(CGN, *CoroInfo);
             splitCoroutine(*F, *CoroInfo);
             changed = true;
           }
