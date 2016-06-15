@@ -17,7 +17,22 @@
 
 #include "llvm/Transforms/Coroutines.h"
 #include <llvm/IR/IntrinsicInst.h>
+#include "llvm/ADT/SetVector.h"
 #include <llvm/PassRegistry.h>
+
+namespace llvm {
+
+struct LLVM_LIBRARY_VISIBILITY CoroPartExtractor {
+  Function *createFunction(StringRef Suffix, BasicBlock *Start,
+                           BasicBlock *End);
+private:
+  void dump();
+  SetVector<BasicBlock *> Blocks;
+  void computeRegion(BasicBlock *Start, BasicBlock *End);
+};
+
+void removeLifetimeIntrinsics(Function &F);
+}
 
 namespace llvm {
 
