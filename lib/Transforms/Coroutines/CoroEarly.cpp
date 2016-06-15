@@ -21,6 +21,30 @@ using namespace llvm;
 
 #define DEBUG_TYPE "coro-early"
 
+namespace {
+  /// Holds all structural Coroutine Intrinsics for a particular function
+  struct CoroutineShape {
+    CoroInitInst* CoroInit = nullptr;
+    CoroElideInst* CoroElide = nullptr;
+
+    CoroutineShape(CoroInitInst*);
+
+    operator bool() const {
+      return CoroElide != nullptr;
+    }
+  };
+}
+
+CoroutineShape::CoroutineShape(CoroInitInst *CoroInit)
+    : CoroInit(CoroInit), CoroElide(CoroInit->getElide()) {}
+
+static void outlineCoroutineParts(CoroutineShape const& S) {
+  Function& F = *S.CoroInit->getParent()->getParent();
+  DEBUG(dbgs() << "Processing Coroutine: " << F.getName() << "\n");
+  DEBUG(S.CoroElide->dump());
+  DEBUG(S.CoroInit->dump());
+}
+
 //===----------------------------------------------------------------------===//
 //                              Top Level Driver
 //===----------------------------------------------------------------------===//
@@ -31,7 +55,15 @@ struct CoroEarly : public FunctionPass {
   CoroEarly() : FunctionPass(ID) {}
 
   bool doInitialization(Module& M) override {
-    return false;
+    Function *CoroInitFn = Intrinsic::getDeclaration(&M, Intrinsic::coro_init);
+
+    // find all coroutines and outline their parts
+    for (User* U : CoroInitFn->users())
+      if (auto CoroInit = dyn_cast<CoroInitInst>(U))
+        if (CoroutineShape S = { CoroInit })
+          outlineCoroutineParts(S);
+
+    return !CoroInitFn->user_empty();
   }
 
   bool runOnFunction(Function &F) override {

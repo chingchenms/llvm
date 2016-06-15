@@ -1,0 +1,75 @@
+Hi Mats:
+
+>> Undefined behavior is not guaranteed to cause a stop. It's 
+>> just "do something that may or may not be what you expected". 
+>> Yes, most operating systems prevent NULL accesses, and cause 
+>> the application to crash, but it's by no means guaranteed.
+
+You are right. After thinking a bit more, reading your reply and
+re-reading llvm blog post on undefined behavior, I realized, duh, 
+that even on systems where NULL access results in a crash we can 
+still get into a bad situation.
+
+  struct State {
+     FnPtr Fn;
+     State() : Fn(&SomeFunction) {}
+
+     void Go() { (*Fn)(); } // may be devirtualized to SomeFunction()
+     void Stop() { Fn = nullptr; }
+     bool IsDone() { return Fn == nullptr; }
+   };
+
+Since, calling Go() when the state machine has reached the "Done"
+state is undefined, it is perfectly legal to replace an indirect 
+call with direct call to its target. Thus, if the user end up 
+calling Go() in a done state, it won't crash, but, invoke SomeFunction()
+which may do some bad things since we are no longer in a valid state.
+
+>> Certainly in a debug build, I'd add an assert for `fn != nullptr` 
+>> in the `Go` function. Possibly even actively prevent it from getting through
+>> in release builds - presumably the `SomeFunction` is more than a few 
+>> instructions anyway.
+
+I am thinking that I will probably let the frontend/library writer to worry 
+about inserting the checks as needed. Moreover, fn != nullptr won't help 
+in the general case as the memory for the state machine might have been freed 
+and reused, so it will need some kind of flow control guard + memory sanitizer 
+if safety is desired.
+
+Thanks for your reply, Mats.
+
+--
+Gor
+
+P.S.
+
+Though, situation is not as dire. User normally does not call low level 
+coroutine machinery directly and goes through a higher level coroutine 
+library abstractions instead. 
+
+For example, in a case of a generator:
+
+    generator<int> range(int from, int to) { 
+       for(int i = from; i < to; ++n) 
+          co_yield i;
+    }
+    int main() { 
+       int sum = 0; 
+       for (auto v: range(1,100))
+          sum += v;
+       return sum;
+    }
+
+which, BTW, translates down to this in -O3 :-) 
+
+    define i32 @main() #5 {
+    entry:
+      ret i32 4950
+    }
+
+The generator destructor calls @llvm.coro.destroy to destroy the coroutine;
+An iterator calls @llvm.coro.resume and @llvm.coro.done to go to the next value
+and to check if there are no more values.
+
+In operator++() and operator* library writer can add assert(!llvm.coro.done()) 
+to make sure that we are not past the end.
