@@ -72,12 +72,36 @@ template <class F> void CoroutineShape::reflect(F&& f) {
   f(Return, "Return");
 }
 
+static BasicBlock* splitBlockIfNotFirst(Instruction* I, StringRef Name = "") {
+  auto BB = I->getParent();
+  if (&*BB->begin() == I) {
+    BB->setName(Name);
+    return BB;
+  }
+  return BB->splitBasicBlock(I, Name);
+}
+
+Instruction* findRetEnd(CoroutineShape& S) {
+  auto RetBB = S.Return.back()->getParent();
+  auto EndBB = S.CoroEndFinal.back()->getParent();
+  if (RetBB == EndBB || RetBB->getUniquePredecessor() == EndBB)
+    return S.Return.back();
+  
+  for (BasicBlock* BB : predecessors(RetBB))
+    if (BB == EndBB)
+      return &RetBB->front();
+
+  return nullptr;
+}
+
 void CoroutineShape::clear() {
   reflect([](auto &Arr, auto*) { Arr.clear(); });
 }
 
 void CoroutineShape::dump() {
   reflect([](auto &Arr, StringRef name) {
+    if (Arr.empty())
+      return;
     dbgs() << name << ":\n";
     for (auto *Val : Arr) {
       dbgs() << "    ";
@@ -100,6 +124,9 @@ void CoroutineShape::buildFrom(Function &F) {
         break;
       case Intrinsic::coro_alloc:
         CoroAlloc.push_back(cast<CoroAllocInst>(II));
+        break;
+      case Intrinsic::coro_suspend:
+        CoroSuspend.push_back(cast<CoroSuspendInst>(II));
         break;
       case Intrinsic::coro_init: {
         auto CI = cast<CoroInitInst>(II);
@@ -133,15 +160,6 @@ void CoroutineShape::buildFrom(Function &F) {
     "coroutine should have exactly one @llvm.coro.end(falthrough = true)");
 }
 
-static BasicBlock* splitBlockIfNotFirst(Instruction* I, StringRef Name = "") {
-  auto BB = I->getParent();
-  if (&*BB->begin() == I) {
-    BB->setName(Name);
-    return BB;
-  }
-  return BB->splitBasicBlock(I, Name);
-}
-
 static void outlineCoroutineParts(CoroutineShape& S) {
   Function& F = *S.CoroInit.front()->getParent()->getParent();
   CoroCommon::removeLifetimeIntrinsics(F); // for now
@@ -158,14 +176,28 @@ static void outlineCoroutineParts(CoroutineShape& S) {
 
   // Outline the parts and create a metadata tuple, so that CoroSplit
   // pass can quickly figure out what they are.
-  auto MD = MDNode::get(
-      F.getContext(),
-      {Outline(".AllocPart", S.CoroAlloc.front(),
-               S.CoroBegin.front()->getNextNode()),
-       Outline(".FreePart", S.CoroFree.front(), S.CoroEndFinal.front()),
-       Outline(".ReturnPart", S.CoroEndFinal.front(), S.Return.front())});
 
-  S.CoroInit.front()->setMeta(MetadataAsValue::get(F.getContext(), MD));
+  LLVMContext& C = F.getContext();
+  SmallVector<Metadata *, 8> MDs{
+      MDString::get(C, kCoroEarlyTagStr),
+      Outline(".AllocPart", S.CoroAlloc.front(),
+              S.CoroBegin.front()->getNextNode()),
+      Outline(".FreePart", S.CoroFree.front(), S.CoroEndFinal.front()),
+  };
+
+  // If we can figure out end of the ret part, outline it too.
+  if (auto RetEnd = findRetEnd(S)) {
+    MDs.push_back(Outline(".RetPart", S.CoroEndFinal.front(), RetEnd));
+  }
+
+  // Outline suspend points.
+  for (CoroSuspendInst *SI : S.CoroSuspend) {
+    MDs.push_back(
+        Outline(".SuspendPart", SI->getCoroSave(), SI->getNextNode()));
+  }
+
+  S.CoroInit.front()->setMeta(
+      MetadataAsValue::get(F.getContext(), MDNode::get(C, MDs)));
 }
 
 static void replaceEmulatedIntrinsicsWithRealOnes(Module& M) {
@@ -176,6 +208,8 @@ static void replaceEmulatedIntrinsicsWithRealOnes(Module& M) {
   auto Null = ConstantPointerNull::get(BytePtrTy);
   auto MetaVal = MetadataAsValue::get(C, MDString::get(C, ""));
 
+  CallInst* SavedIntrinsic = nullptr;
+
   for (Function& F : M) {
     for (auto it = inst_begin(F), e = inst_end(F); it != e;) {
       Instruction& I = *it++;
@@ -185,6 +219,8 @@ static void replaceEmulatedIntrinsicsWithRealOnes(Module& M) {
             .Case("llvm_coro_alloc", Intrinsic::coro_alloc)
             .Case("llvm_coro_init", Intrinsic::coro_init)
             .Case("llvm_coro_begin", Intrinsic::coro_begin)
+            .Case("llvm_coro_save", Intrinsic::coro_save)
+            .Case("llvm_coro_suspend", Intrinsic::coro_suspend)
             .Case("llvm_coro_free", Intrinsic::coro_free)
             .Case("llvm_coro_end", Intrinsic::coro_end)
             .Default(Intrinsic::not_intrinsic);
@@ -196,6 +232,11 @@ static void replaceEmulatedIntrinsicsWithRealOnes(Module& M) {
           case Intrinsic::not_intrinsic:
             continue;
           default:
+            break;
+          case Intrinsic::coro_suspend:
+            assert(SavedIntrinsic && "coro_suspend expects saved intrinsic");
+            Args.push_back(SavedIntrinsic);
+            Args.push_back(CI->getArgOperand(1));
             break;
           case Intrinsic::coro_begin:
             Args.push_back(Null);
@@ -217,7 +258,20 @@ static void replaceEmulatedIntrinsicsWithRealOnes(Module& M) {
           }
 
           auto IntrinCall = CallInst::Create(Fn, Args, "");
-          ReplaceInstWithInst(CI, IntrinCall);
+          if (id == Intrinsic::coro_save) {
+            IntrinCall->insertBefore(CI);
+            BasicBlock::iterator BI(CI);
+            ReplaceInstWithValue(CI->getParent()->getInstList(), BI, Null);
+            SavedIntrinsic = IntrinCall;
+            continue;
+          }
+          else if (id == Intrinsic::coro_suspend) {
+            ReplaceInstWithInst(CI, IntrinCall);
+            SavedIntrinsic = nullptr;
+          }
+          else {
+            ReplaceInstWithInst(CI, IntrinCall);
+          }
           dbgs() << "Replaced with >>>>  "; IntrinCall->dump();
         }
       }

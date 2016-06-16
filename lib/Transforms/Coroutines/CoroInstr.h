@@ -22,6 +22,11 @@
 
 #include <llvm/IR/IntrinsicInst.h>
 
+// Metadata tuple in CoroInitInstr starts with a string identifying 
+// the pass that produces the metadata. It can hold one of these values:
+#define kCoroEarlyTagStr "0 (coro-early)"
+#define kCoroSplitTagStr "1 (coro-split)"
+
 namespace llvm {
 
   using CoroAllocInst = IntrinsicInst;
@@ -30,8 +35,28 @@ namespace llvm {
   using CoroFreeInst = IntrinsicInst;
 
   using CoroFrameInst = IntrinsicInst;
-  using CoroSuspendInst = IntrinsicInst;
   using CoroSaveInst = IntrinsicInst;
+  using CoroSizeInst = IntrinsicInst;
+
+  /// This represents the llvm.coro.end instruction.
+  class LLVM_LIBRARY_VISIBILITY CoroSuspendInst : public IntrinsicInst {
+    enum { kSave, kFallthrough };
+  public:
+    CoroSaveInst *getCoroSave() const {
+      return cast<CoroSaveInst>(getArgOperand(kSave));
+    }
+    bool isFinal() const {
+      return cast<Constant>(getArgOperand(kFallthrough))->isOneValue();
+    }
+
+    // Methods to support type inquiry through isa, cast, and dyn_cast:
+    static inline bool classof(const IntrinsicInst *I) {
+      return I->getIntrinsicID() == Intrinsic::coro_suspend;
+    }
+    static inline bool classof(const Value *V) {
+      return isa<IntrinsicInst>(V) && classof(cast<IntrinsicInst>(V));
+    }
+  };
 
   /// This represents the llvm.coro.end instruction.
   class LLVM_LIBRARY_VISIBILITY CoroEndInst : public IntrinsicInst {
