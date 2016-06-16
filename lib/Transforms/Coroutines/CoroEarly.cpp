@@ -279,35 +279,39 @@ static void replaceEmulatedIntrinsicsWithRealOnes(Module& M) {
   }
 }
 
+static bool processModule(Module& M) {
+  SmallVector<Function*, 8> Coroutines;
+  replaceEmulatedIntrinsicsWithRealOnes(M);
+  Function *CoroInitFn = Intrinsic::getDeclaration(&M, Intrinsic::coro_init);
+
+  // Find all pre-split coroutines.
+  for (User* U : CoroInitFn->users())
+    if (auto CoroInit = dyn_cast<CoroInitInst>(U))
+      if (CoroInit->isPreSplit())
+        Coroutines.push_back(CoroInit->getParent()->getParent());
+
+  // Outline coroutine parts to guard against code movement
+  // during optimizations. We inline them back in CoroSplit.
+  CoroutineShape S;
+  for (Function *F : Coroutines) {
+    S.buildFrom(*F);
+    outlineCoroutineParts(S);
+  }
+  return !Coroutines.empty();
+}
+
 //===----------------------------------------------------------------------===//
 //                              Top Level Driver
 //===----------------------------------------------------------------------===//
 
+#if 0
 namespace {
 struct CoroEarly : public FunctionPass {
   static char ID; // Pass identification, replacement for typeid
   CoroEarly() : FunctionPass(ID) {}
 
   bool doInitialization(Module& M) override {
-    SmallVector<Function*, 8> Coroutines;
-    replaceEmulatedIntrinsicsWithRealOnes(M);
-    Function *CoroInitFn = Intrinsic::getDeclaration(&M, Intrinsic::coro_init);
-
-    // Find all pre-split coroutines.
-    for (User* U : CoroInitFn->users())
-      if (auto CoroInit = dyn_cast<CoroInitInst>(U))
-        if (CoroInit->isPreSplit())
-          Coroutines.push_back(CoroInit->getParent()->getParent());
-
-    // Outline coroutine parts to guard against code movement
-    // during optimizations. We inline them back in CoroSplit.
-    CoroutineShape S;
-    for (Function *F: Coroutines) {
-      S.buildFrom(*F);
-      outlineCoroutineParts(S);
-    }
-
-    return !Coroutines.empty();
+    return processModule(M);
   }
 
   bool runOnFunction(Function &F) override {
@@ -316,6 +320,18 @@ struct CoroEarly : public FunctionPass {
   }
 };
 }
+#else
+namespace {
+  struct CoroEarly : public ModulePass {
+    static char ID; // Pass identification, replacement for typeid
+    CoroEarly() : ModulePass(ID) {}
+
+    bool runOnModule(Module &M) override {
+      return processModule(M);
+    }
+  };
+}
+#endif
 
 char CoroEarly::ID = 0;
 INITIALIZE_PASS(

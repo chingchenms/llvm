@@ -272,7 +272,9 @@ static void AddOptimizationPasses(legacy::PassManagerBase &MPM,
       DisableSLPVectorization ? false : OptLevel > 1 && SizeLevel < 2;
 
   if (Coroutines) {
-    Builder.addExtension(PassManagerBuilder::EP_EarlyAsPossible,
+    //Builder.addExtension(PassManagerBuilder::EP_EarlyAsPossible,
+    //                     addCoroutineEarlyPasses);
+    Builder.addExtension(PassManagerBuilder::EP_ModuleOptimizerEarly,
                          addCoroutineEarlyPasses);
     Builder.addExtension(PassManagerBuilder::EP_CGSCCOptimizerLate,
                          addCoroutineSCCPasses);
