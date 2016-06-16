@@ -43,13 +43,51 @@ namespace {
 
     TinyPtrVector<ReturnInst*> Return;
 
-    explicit CoroutineShape(Function &F);
+    template <class F> void reflect(F&& f);
+
+    void dump();
+    void buildFrom(Function &F);
+    CoroutineShape() = default;
+    explicit CoroutineShape(Function &F) { buildFrom(F); }
     explicit CoroutineShape(CoroInitInst *CoroInit)
         : CoroutineShape(*CoroInit->getParent()->getParent()) {}
+
+  private:
+    void clear();
   };
 }
 
-CoroutineShape::CoroutineShape(Function &F) {
+template <class F> void CoroutineShape::reflect(F&& f) {
+  f(CoroInit, "CoroInit");
+  f(CoroAlloc, "CoroAlloc");
+  f(CoroBegin, "CoroBegin");
+  f(CoroEndFinal, "CoroEndFinal");
+  f(CoroEndUnwind, "CoroEndUnwind");
+
+  f(CoroSize, "CoroSize");
+  f(CoroFree, "CoroFree");
+  f(CoroFrame, "CoroFrame");
+  f(CoroSuspend, "CoroSuspend");
+
+  f(Return, "Return");
+}
+
+void CoroutineShape::clear() {
+  reflect([](auto &Arr, auto*) { Arr.clear(); });
+}
+
+void CoroutineShape::dump() {
+  reflect([](auto &Arr, StringRef name) {
+    dbgs() << name << ":\n";
+    for (auto *Val : Arr) {
+      dbgs() << "    ";
+      Val->dump();
+    }
+  });
+}
+
+void CoroutineShape::buildFrom(Function &F) {
+  clear();
   for (Instruction& I : instructions(F)) {
     if (auto RI = dyn_cast<ReturnInst>(&I))
       Return.push_back(RI);
@@ -95,69 +133,40 @@ CoroutineShape::CoroutineShape(Function &F) {
     "coroutine should have exactly one @llvm.coro.end(falthrough = true)");
 }
 
-static BasicBlock* splitBlockIfNotFirst(Instruction* I, StringRef Name) {
+static BasicBlock* splitBlockIfNotFirst(Instruction* I, StringRef Name = "") {
   auto BB = I->getParent();
   if (&*BB->begin() == I) {
     BB->setName(Name);
     return BB;
   }
-
   return BB->splitBasicBlock(I, Name);
 }
 
-#if 0
-static void outlineAllocPart(CoroutineShape& S, CoroPartExtractor& E) {
-  auto Start = splitBlockIfNotFirst(S.CoroAlloc, "AllocPart");
-  auto End = splitBlockIfNotFirst(S.CoroInit, "InitBB");
-  E.createFunction(Start, End);
-}
-
-static void outlineFreePart(CoroutineShape& S, CoroPartExtractor& E) {
-  auto Start = splitBlockIfNotFirst(S.CoroFree, "FreePart");
-  auto End = splitBlockIfNotFirst(S.CoroEnd, "EndBB");
-  E.createFunction(Start, End);
-}
-
-static void outlinePrepPart(CoroutineShape const& S, CoroPartExtractor& E) {
-  auto Start = splitBlockIfNotFirst(S.CoroInit->getNextNode(), "PrepPart");
-  auto End = splitBlockIfNotFirst(S.CoroFork, "ForkBB");
-  E.createFunction(Start, End);
-}
-
-static void outlineReturnPart(CoroutineShape const& S, CoroPartExtractor& E) {
-  Function* F = S.CoroInit->getParent()->getParent();
-
-  // coroutine should have a single return instruction
-  ReturnInst* RetInstr = nullptr;
-  for (BasicBlock& B : *F) {
-    if (auto RI = dyn_cast<ReturnInst>(B.getTerminator())) {
-      assert(!RetInstr && "multiple ReturnInst in the coroutine");
-      RetInstr = RI;
-      break;
-    }
-  }
-  assert(RetInstr && "Coroutine must have a return block");
-
-  auto Start = splitBlockIfNotFirst(S.CoroEnd, "RetPart");
-  auto End = splitBlockIfNotFirst(RetInstr, "RetBB");
-
-  E.createFunction(Start, End);
-}
-
 static void outlineCoroutineParts(CoroutineShape& S) {
-  Function& F = *S.CoroInit->getParent()->getParent();
+  Function& F = *S.CoroInit.front()->getParent()->getParent();
   CoroCommon::removeLifetimeIntrinsics(F); // for now
   DEBUG(dbgs() << "Processing Coroutine: " << F.getName() << "\n");
-  DEBUG(S.CoroAlloc->dump());
-  DEBUG(S.CoroInit->dump());
+  DEBUG(S.dump());
 
   CoroPartExtractor Extractor;
-  outlineAllocPart(S, Extractor);
-  outlinePrepPart(S, Extractor);
-  outlineFreePart(S, Extractor);
-  outlineReturnPart(S, Extractor);
+  auto Outline = [&](StringRef Name, Instruction* From, Instruction* Upto) {
+    auto First = splitBlockIfNotFirst(From, Name);
+    auto Last = splitBlockIfNotFirst(Upto);
+    auto Fn = Extractor.createFunction(First, Last);
+    return ValueAsMetadata::get(Fn);
+  };
+
+  // Outline the parts and create a metadata tuple, so that CoroSplit
+  // pass can quickly figure out what they are.
+  auto MD = MDNode::get(
+      F.getContext(),
+      {Outline(".AllocPart", S.CoroAlloc.front(),
+               S.CoroBegin.front()->getNextNode()),
+       Outline(".FreePart", S.CoroFree.front(), S.CoroEndFinal.front()),
+       Outline(".ReturnPart", S.CoroEndFinal.front(), S.Return.front())});
+
+  S.CoroInit.front()->setMeta(MetadataAsValue::get(F.getContext(), MD));
 }
-#endif
 
 static void replaceEmulatedIntrinsicsWithRealOnes(Module& M) {
   SmallVector<Value*, 8> Args;
@@ -226,7 +235,7 @@ struct CoroEarly : public FunctionPass {
   CoroEarly() : FunctionPass(ID) {}
 
   bool doInitialization(Module& M) override {
-    SmallVector<CoroInitInst*, 8> Coroutines;
+    SmallVector<Function*, 8> Coroutines;
     replaceEmulatedIntrinsicsWithRealOnes(M);
     Function *CoroInitFn = Intrinsic::getDeclaration(&M, Intrinsic::coro_init);
 
@@ -234,13 +243,14 @@ struct CoroEarly : public FunctionPass {
     for (User* U : CoroInitFn->users())
       if (auto CoroInit = dyn_cast<CoroInitInst>(U))
         if (CoroInit->isPreSplit())
-          Coroutines.push_back(CoroInit);
+          Coroutines.push_back(CoroInit->getParent()->getParent());
 
     // Outline coroutine parts to guard against code movement
     // during optimizations. We inline them back in CoroSplit.
-    for (CoroInitInst *CI : Coroutines) {
-      CoroutineShape S{ CI }; // TODO: move out
-      //outlineCoroutineParts(S);
+    CoroutineShape S;
+    for (Function *F: Coroutines) {
+      S.buildFrom(*F);
+      outlineCoroutineParts(S);
     }
 
     return !Coroutines.empty();

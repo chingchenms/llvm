@@ -72,6 +72,8 @@ namespace llvm {
                            : const_cast<Function *>(getParent()->getParent());
     }
 
+    void setMeta(Value *MD) { setArgOperand(kMeta, MD); }
+
 #if 0
     Function *getCoroutine() const {
       auto MD = cast<MetadataAsValue>(getArgOperand(kMeta))->getMetadata();

@@ -47,7 +47,7 @@ Function *llvm::CoroPartExtractor::createFunction(BasicBlock *Start,
   computeRegion(Start, End);
   auto F = CodeExtractor(Blocks.getArrayRef()).extractCodeRegion();
   assert(F && "failed to extract coroutine part");
-  //F->addFnAttr(Attribute::NoInline);
+  F->addFnAttr(Attribute::NoInline);
   return F;
 }
 
