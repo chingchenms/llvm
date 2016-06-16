@@ -19,7 +19,9 @@
 #include "llvm/Support/Debug.h"
 #include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/TinyPtrVector.h"
+#include "llvm/ADT/StringSwitch.h"
 #include "llvm/IR/InstIterator.h"
+#include <llvm/Transforms/Utils/BasicBlockUtils.h>
 
 using namespace llvm;
 
@@ -83,13 +85,13 @@ CoroutineShape::CoroutineShape(Function &F) {
       }
     }
   }
-  assert(CoroInit.size() != 1 &&
+  assert(CoroInit.size() == 1 &&
          "coroutine should have exactly one defining @llvm.coro.init");
-  assert(CoroBegin.size() != 1 &&
+  assert(CoroBegin.size() == 1 &&
          "coroutine should have exactly one @llvm.coro.begin");
-  assert(CoroAlloc.size() != 1 &&
+  assert(CoroAlloc.size() == 1 &&
          "coroutine should have exactly one @llvm.coro.alloc");
-  assert(CoroEndFinal.size() != 1 &&
+  assert(CoroEndFinal.size() == 1 &&
     "coroutine should have exactly one @llvm.coro.end(falthrough = true)");
 }
 
@@ -155,30 +157,65 @@ static void outlineCoroutineParts(CoroutineShape& S) {
   outlineFreePart(S, Extractor);
   outlineReturnPart(S, Extractor);
 }
+#endif
 
 static void replaceEmulatedIntrinsicsWithRealOnes(Module& M) {
+  SmallVector<Value*, 8> Args;
+  LLVMContext & C = M.getContext();
+  auto BytePtrTy = PointerType::get(IntegerType::get(C, 8), 0);
+  auto Zero = ConstantInt::get(IntegerType::get(C, 32), 0);
+  auto Null = ConstantPointerNull::get(BytePtrTy);
+  auto MetaVal = MetadataAsValue::get(C, MDString::get(C, ""));
+
   for (Function& F : M) {
-    for (Instruction &I : instructions(&F)) {
+    for (auto it = inst_begin(F), e = inst_end(F); it != e;) {
+      Instruction& I = *it++;
       if (auto CI = dyn_cast<CallInst>(&I)) {
         if (auto F = CI->getCalledFunction()) {
-          const auto id = StringSwitch<unsigned>(F->getName())
-            .Case("CoroAlloc", Intrinsic::coro_alloc)
-            .Case("CoroInit", Intrinsic::coro_init)
-            .Case("CoroStart", Intrinsic::coro_start)
-            .Case("CoroFree", Intrinsic::coro_free)
-            .Case("CoroEnd", Intrinsic::coro_end)
-            .Default(0);
+          const auto id = StringSwitch<Intrinsic::ID>(F->getName())
+            .Case("llvm_coro_alloc", Intrinsic::coro_alloc)
+            .Case("llvm_coro_init", Intrinsic::coro_init)
+            .Case("llvm_coro_begin", Intrinsic::coro_begin)
+            .Case("llvm_coro_free", Intrinsic::coro_free)
+            .Case("llvm_coro_end", Intrinsic::coro_end)
+            .Default(Intrinsic::not_intrinsic);
+
+          Function *Fn = Intrinsic::getDeclaration(&M, id);
+          Args.clear();
+          dbgs() << "Looking at >>>>  "; CI->dump();
           switch (id) {
-          case Intrinsic::coro_alloc:
-            CoroAllocInst::replaceCall(CI);
+          case Intrinsic::not_intrinsic:
+            continue;
+          default:
+            break;
+          case Intrinsic::coro_begin:
+            Args.push_back(Null);
+            break;
+          case Intrinsic::coro_end:
+            Args.push_back(Null);
+            Args.push_back(CI->getArgOperand(0));
+            break;
+          case Intrinsic::coro_free:
+            Args.push_back(CI->getArgOperand(0));
+            break;
+          case Intrinsic::coro_init:
+            Args.push_back(CI->getArgOperand(0));
+            Args.push_back(CI->getArgOperand(1));
+            Args.push_back(Zero);
+            Args.push_back(CI->getArgOperand(2));
+            Args.push_back(MetaVal);
             break;
           }
+
+          auto IntrinCall = CallInst::Create(Fn, Args, "");
+          ReplaceInstWithInst(CI, IntrinCall);
+          dbgs() << "Replaced with >>>>  "; IntrinCall->dump();
         }
       }
     }
   }
 }
-#endif
+
 //===----------------------------------------------------------------------===//
 //                              Top Level Driver
 //===----------------------------------------------------------------------===//
@@ -190,7 +227,7 @@ struct CoroEarly : public FunctionPass {
 
   bool doInitialization(Module& M) override {
     SmallVector<CoroInitInst*, 8> Coroutines;
-    // replaceEmulatedIntrinsicsWithRealOnes(M);
+    replaceEmulatedIntrinsicsWithRealOnes(M);
     Function *CoroInitFn = Intrinsic::getDeclaration(&M, Intrinsic::coro_init);
 
     // Find all pre-split coroutines.
