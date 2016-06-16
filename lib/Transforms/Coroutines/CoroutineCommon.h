@@ -18,20 +18,24 @@
 #include "llvm/Transforms/Coroutines.h"
 #include <llvm/IR/IntrinsicInst.h>
 #include "llvm/ADT/SetVector.h"
+#include "llvm/ADT/StringSwitch.h"
 #include <llvm/PassRegistry.h>
 
 namespace llvm {
 
 struct LLVM_LIBRARY_VISIBILITY CoroPartExtractor {
-  Function *createFunction(StringRef Suffix, BasicBlock *Start,
-                           BasicBlock *End);
+  Function *createFunction(BasicBlock *Start, BasicBlock *End);
 private:
   void dump();
   SetVector<BasicBlock *> Blocks;
   void computeRegion(BasicBlock *Start, BasicBlock *End);
 };
 
-void removeLifetimeIntrinsics(Function &F);
+struct LLVM_LIBRARY_VISIBILITY CoroCommon {
+  static void removeLifetimeIntrinsics(Function &F);
+  static void constantFoldUsers(Constant* Value);
+};
+
 }
 
 namespace llvm {
@@ -49,16 +53,56 @@ namespace llvm {
     static inline bool classof(const Value *V) {
       return isa<CallInst>(V) && classof(cast<CallInst>(V));
     }
-    static bool nameMatches(const CoroIntrinsic* I, StringRef Name) {
-      return Name == I->getCalledFunction()->getName();
+    int getIntrinsicID() const {
+      return StringSwitch<int>(getCalledFunction()->getName())
+        .Case("CoroAlloc", Intrinsic::experimental_coro_elide)
+        .Case("CoroInit", Intrinsic::coro_init)
+        .Case("CoroStart", Intrinsic::coro_fork)
+        .Case("CoroFree", Intrinsic::experimental_coro_delete)
+        .Case("CoroEnd", Intrinsic::coro_end)
+        .Default(0);
+
     }
   };
 
-  class LLVM_LIBRARY_VISIBILITY CoroElideInst : public CoroIntrinsic {
+  class LLVM_LIBRARY_VISIBILITY CoroEndInst : public CoroIntrinsic {
   public:
     // Methods to support type inquiry through isa, cast, and dyn_cast:
     static inline bool classof(const CoroIntrinsic *I) {
-      return nameMatches(I, "CoroElide");
+      return I->getIntrinsicID() == Intrinsic::coro_end;
+    }
+    static inline bool classof(const Value *V) {
+      return isa<CoroIntrinsic>(V) && classof(cast<CoroIntrinsic>(V));
+    }
+  };
+
+  class LLVM_LIBRARY_VISIBILITY CoroAllocInst : public CoroIntrinsic {
+  public:
+    // Methods to support type inquiry through isa, cast, and dyn_cast:
+    static inline bool classof(const CoroIntrinsic *I) {
+      return I->getIntrinsicID() == Intrinsic::experimental_coro_elide;
+    }
+    static inline bool classof(const Value *V) {
+      return isa<CoroIntrinsic>(V) && classof(cast<CoroIntrinsic>(V));
+    }
+  };
+
+  class LLVM_LIBRARY_VISIBILITY CoroForkInst : public CoroIntrinsic {
+  public:
+    // Methods to support type inquiry through isa, cast, and dyn_cast:
+    static inline bool classof(const CoroIntrinsic *I) {
+      return I->getIntrinsicID() == Intrinsic::coro_fork;
+    }
+    static inline bool classof(const Value *V) {
+      return isa<CoroIntrinsic>(V) && classof(cast<CoroIntrinsic>(V));
+    }
+  };
+
+  class LLVM_LIBRARY_VISIBILITY CoroFreeInst : public CoroIntrinsic {
+  public:
+    // Methods to support type inquiry through isa, cast, and dyn_cast:
+    static inline bool classof(const CoroIntrinsic *I) {
+      return I->getIntrinsicID() == Intrinsic::experimental_coro_delete;
     }
     static inline bool classof(const Value *V) {
       return isa<CoroIntrinsic>(V) && classof(cast<CoroIntrinsic>(V));
@@ -69,10 +113,10 @@ namespace llvm {
     enum { kMem, kElide, kAlign, kPromise, kMeta };
   public:
     Value *getMem() const {
-      return dyn_cast<CoroElideInst>(getArgOperand(kMem));
+      return getArgOperand(kMem);
     }
-    CoroElideInst *getElide() const {
-      return dyn_cast<CoroElideInst>(getArgOperand(kElide));
+    CoroAllocInst *getAlloc() const {
+      return dyn_cast<CoroAllocInst>(getArgOperand(kElide));
     }
     bool isPostSplit() const { return false; }
 
@@ -82,7 +126,7 @@ namespace llvm {
 
     // Methods to support type inquiry through isa, cast, and dyn_cast:
     static inline bool classof(const CoroIntrinsic *I) {
-      return nameMatches(I, "CoroInit");
+      return I->getIntrinsicID() == Intrinsic::coro_init;
     }
     static inline bool classof(const Value *V) {
       return isa<CoroIntrinsic>(V) && classof(cast<CoroIntrinsic>(V));

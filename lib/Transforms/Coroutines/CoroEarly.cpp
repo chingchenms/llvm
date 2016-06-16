@@ -19,7 +19,6 @@
 #include "llvm/Support/Debug.h"
 #include "llvm/ADT/SetVector.h"
 #include "llvm/IR/InstIterator.h"
-#include "CoroEarly.h"
 
 using namespace llvm;
 
@@ -28,19 +27,40 @@ using namespace llvm;
 namespace {
   /// Holds all structural Coroutine Intrinsics for a particular function
   struct CoroutineShape {
-    CoroInitInst* CoroInit = nullptr;
-    CoroElideInst* CoroElide = nullptr;
+    CoroInitInst* const CoroInit;
+    CoroAllocInst* CoroAlloc;
+    CoroForkInst* CoroFork = nullptr;
+    CoroFreeInst* CoroFree = nullptr;
+    CoroEndInst* CoroEnd = nullptr;
 
     CoroutineShape(CoroInitInst*);
 
-    operator bool() const {
-      return CoroElide != nullptr;
+    explicit operator bool() const {
+      return CoroFork != nullptr && CoroFree != nullptr && CoroEnd != nullptr;
     }
   };
 }
 
 CoroutineShape::CoroutineShape(CoroInitInst *CoroInit)
-    : CoroInit(CoroInit), CoroElide(CoroInit->getElide()) {}
+  : CoroInit(CoroInit), CoroAlloc(CoroInit->getAlloc()) {
+  for (User* U : CoroInit->users()) {
+    if (auto II = dyn_cast<CoroIntrinsic>(U)) {
+      switch (II->getIntrinsicID()) {
+      default:
+        continue;
+      case Intrinsic::coro_fork:
+        CoroFork = cast<CoroForkInst>(II);
+        break;
+      case Intrinsic::experimental_coro_delete:
+        CoroFree = cast<CoroFreeInst>(II);
+        break;
+      case Intrinsic::coro_end:
+        CoroEnd = cast<CoroEndInst>(II);
+        break;
+      }
+    }
+  }
+}
 
 static BasicBlock* splitBlockIfNotFirst(Instruction* I, StringRef Name) {
   auto BB = I->getParent();
@@ -52,23 +72,76 @@ static BasicBlock* splitBlockIfNotFirst(Instruction* I, StringRef Name) {
   return BB->splitBasicBlock(I, Name);
 }
 
-static void outlineAllocPart(CoroutineShape const& S, CoroPartExtractor& E) {
-  // split blocks before CoroElide and Before CoroInit
 
-  auto Start = splitBlockIfNotFirst(S.CoroElide, "AllocBB");
+static void outlineAllocPart(CoroutineShape& S, CoroPartExtractor& E) {
+  auto Start = splitBlockIfNotFirst(S.CoroAlloc, "AllocPart");
   auto End = splitBlockIfNotFirst(S.CoroInit, "InitBB");
-  E.createFunction(".AllocPart", Start, End);
+
+  // after we extract the AllocPart, we no longer need CoroAlloc
+  S.CoroAlloc->replaceAllUsesWith(
+      ConstantPointerNull::get(cast<PointerType>(S.CoroAlloc->getType())));
+  S.CoroAlloc->eraseFromParent();
+  S.CoroAlloc = nullptr;
+  E.createFunction(Start, End);
 }
 
-static void outlineCoroutineParts(CoroutineShape const& S) {
+static void outlineFreePart(CoroutineShape& S, CoroPartExtractor& E) {
+  auto Start = splitBlockIfNotFirst(S.CoroFree, "FreePart");
+  auto End = splitBlockIfNotFirst(S.CoroEnd, "EndBB");
+
+  S.CoroFree->addAttribute(0, Attribute::NonNull);
+  E.createFunction(Start, End);
+}
+
+static void outlinePrepPart(CoroutineShape const& S, CoroPartExtractor& E) {
+  auto Start = splitBlockIfNotFirst(S.CoroInit->getNextNode(), "PrepPart");
+  auto End = splitBlockIfNotFirst(S.CoroFork, "ForkBB");
+  E.createFunction(Start, End);
+}
+
+static void outlineBodyPart(CoroutineShape const& S, CoroPartExtractor& E) {
+  auto Start = splitBlockIfNotFirst(S.CoroFork->getNextNode(), "BodyPart");
+  auto End = splitBlockIfNotFirst(S.CoroEnd, "EndBB");
+  End->eraseFromParent();
+  E.createFunction(Start, End);
+}
+
+static void outlineReturnPart(CoroutineShape const& S, CoroPartExtractor& E) {
+  Function* F = S.CoroInit->getParent()->getParent();
+
+  // coroutine should have a single return instruction
+  ReturnInst* RetInstr = nullptr;
+  for (BasicBlock& B : *F) {
+    if (auto RI = dyn_cast<ReturnInst>(B.getTerminator())) {
+      assert(!RetInstr && "multiple ReturnInst in the coroutine");
+      RetInstr = RI;
+      break;
+    }
+  }
+  assert(RetInstr && "Coroutine must have a return block");
+
+  auto Start = splitBlockIfNotFirst(S.CoroEnd, "RetPart");
+  auto End = splitBlockIfNotFirst(RetInstr, "RetBB");
+
+  // we no longer need the CoroEnd
+  //S.CoroEnd->eraseFromParent();
+
+  E.createFunction(Start, End);
+}
+
+static void outlineCoroutineParts(CoroutineShape& S) {
   Function& F = *S.CoroInit->getParent()->getParent();
-  removeLifetimeIntrinsics(F); // for now
+  CoroCommon::removeLifetimeIntrinsics(F); // for now
   DEBUG(dbgs() << "Processing Coroutine: " << F.getName() << "\n");
-  DEBUG(S.CoroElide->dump());
+  DEBUG(S.CoroAlloc->dump());
   DEBUG(S.CoroInit->dump());
 
   CoroPartExtractor Extractor;
   outlineAllocPart(S, Extractor);
+  outlinePrepPart(S, Extractor);
+  outlineFreePart(S, Extractor);
+  outlineBodyPart(S, Extractor);
+  outlineReturnPart(S, Extractor);
 }
 
 //===----------------------------------------------------------------------===//

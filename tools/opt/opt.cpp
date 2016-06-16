@@ -222,10 +222,16 @@ static void addCoroutineOpt0Passes(const PassManagerBuilder &Builder, PassManage
   // addPass(PM, createCoroLatePass());
 }
 
+static void addCoroutineEarlyPasses(const PassManagerBuilder &Builder, PassManagerBase &PM) {
+   addPass(PM, createCoroEarlyPass());
+  // addPass(PM, createCoroSplitPass());
+  // addPass(PM, createCoroLatePass());
+}
+
 static void addCoroutineSCCPasses(const PassManagerBuilder &Builder, PassManagerBase &PM) {
   if (Builder.OptLevel > 0) {
-    addPass(PM, createCoroElidePass());
-    addPass(PM, createCoroSplitPass());
+    //addPass(PM, createCoroElidePass());
+    //addPass(PM, createCoroSplitPass());
   }
 }
 
@@ -266,6 +272,8 @@ static void AddOptimizationPasses(legacy::PassManagerBase &MPM,
       DisableSLPVectorization ? false : OptLevel > 1 && SizeLevel < 2;
 
   if (Coroutines) {
+    Builder.addExtension(PassManagerBuilder::EP_EarlyAsPossible,
+                         addCoroutineEarlyPasses);
     Builder.addExtension(PassManagerBuilder::EP_CGSCCOptimizerLate,
                          addCoroutineSCCPasses);
   }

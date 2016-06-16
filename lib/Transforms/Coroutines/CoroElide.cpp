@@ -146,40 +146,6 @@ Pass *llvm::createCoroElidePass() { return new CoroElide(); }
 
 #endif
 
-// TODO: Move to common?
-static void constantFoldUsers(Constant* Value) {
-  SmallPtrSet<Instruction*, 16> WorkList;
-  for (User *U : Value->users())
-    WorkList.insert(cast<Instruction>(U));
-
-  if (WorkList.empty())
-    return;
-
-  Instruction *FirstInstr = *WorkList.begin();
-  Function* F = FirstInstr->getParent()->getParent();
-  const DataLayout &DL = F->getParent()->getDataLayout();
-
-  do {
-    Instruction *I = *WorkList.begin();
-    WorkList.erase(I); // Get an element from the worklist...
-
-    if (!I->use_empty())                 // Don't muck with dead instructions...
-      if (Constant *C = ConstantFoldInstruction(I, DL)) {
-        // Add all of the users of this instruction to the worklist, they might
-        // be constant propagatable now...
-        for (User *U : I->users())
-          WorkList.insert(cast<Instruction>(U));
-
-        // Replace all of the uses of a variable with uses of the constant.
-        I->replaceAllUsesWith(C);
-
-        // Remove the dead instruction.
-        WorkList.erase(I);
-        I->eraseFromParent();
-      }
-  } while (!WorkList.empty());
-}
-
 static void replaceWithConstant(Constant *Value,
                          SmallVectorImpl<IntrinsicInst*> &Users) {
   if (Users.empty())
@@ -199,9 +165,8 @@ static void replaceWithConstant(Constant *Value,
   }
   
   // do constant propagation
-  constantFoldUsers(Value);
+  CoroCommon::constantFoldUsers(Value);
 }
-
 
 static bool replaceIndirectCalls(CoroInitInst *CoroInit) {
   SmallVector<IntrinsicInst*, 8> ResumeAddr;

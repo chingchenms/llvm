@@ -196,9 +196,12 @@ namespace {
     CoroSplit() : CallGraphSCCPass(ID) {}
 
     bool doInitialization(CallGraph &CG) override {
+      return nullptr;
+#if 0
       bool changed = preSplitCoroutines(CG, DB);
       changed |= CallGraphSCCPass::doInitialization(CG);
       return changed;
+#endif
     }
 
     bool runOnSCC(CallGraphSCC &SCC) override {
