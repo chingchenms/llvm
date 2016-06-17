@@ -15,9 +15,13 @@
 
 #include "CoroutineCommon.h"
 #include "llvm/Transforms/Utils/CodeExtractor.h"
+#include "llvm/Transforms/IPO/PassManagerBuilder.h"
+#include "llvm/IR/LegacyPassManager.h"
 #include "llvm/Transforms/Coroutines.h"
 #include "llvm/Analysis/ConstantFolding.h"
 #include "llvm/IR/InstIterator.h"
+#include "llvm/IR/Verifier.h"
+#include "llvm/IR/LegacyPassManager.h"
 #include "llvm/IR/CFG.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/IR/Module.h"
@@ -25,7 +29,7 @@
 #define DEBUG_TYPE "coro-early"
 
 using namespace llvm;
-
+using namespace llvm::legacy;
 
 void CoroCommon::removeLifetimeIntrinsics(Function &F) {
   for (auto it = inst_begin(F), end = inst_end(F); it != end;) {
@@ -122,9 +126,128 @@ void CoroCommon::constantFoldUsers(Constant* Value) {
   } while (!WorkList.empty());
 }
 
+void llvm::CoroutineShape::clear() {
+  reflect([](auto &Arr, auto*) { Arr.clear(); });
+}
+
+void llvm::CoroutineShape::dump() {
+  reflect([](auto &Arr, StringRef name) {
+    if (Arr.empty())
+      return;
+    dbgs() << name << ":\n";
+    for (auto *Val : Arr) {
+      dbgs() << "    ";
+      Val->dump();
+    }
+  });
+}
+
+void llvm::CoroutineShape::buildFrom(Function &F) {
+  clear();
+  for (Instruction& I : instructions(F)) {
+    if (auto RI = dyn_cast<ReturnInst>(&I))
+      Return.push_back(RI);
+    else if (auto II = dyn_cast<IntrinsicInst>(&I)) {
+      switch (II->getIntrinsicID()) {
+      default:
+        continue;
+      case Intrinsic::coro_size:
+        CoroSize.push_back(cast<CoroSizeInst>(II));
+        break;
+      case Intrinsic::coro_alloc:
+        CoroAlloc.push_back(cast<CoroAllocInst>(II));
+        break;
+      case Intrinsic::coro_suspend:
+        CoroSuspend.push_back(cast<CoroSuspendInst>(II));
+        break;
+      case Intrinsic::coro_init: {
+        auto CI = cast<CoroInitInst>(II);
+        if (CI->isPreSplit())
+          CoroInit.push_back(CI);
+        break;
+      }
+      case Intrinsic::coro_begin:
+        CoroBegin.push_back(cast<CoroBeginInst>(II));
+        break;
+      case Intrinsic::coro_free:
+        CoroFree.push_back(cast<CoroFreeInst>(II));
+        break;
+      case Intrinsic::coro_end:
+        auto CE = cast<CoroEndInst>(II);
+        if (CE->isFallthrough())
+          CoroEndFinal.push_back(CE);
+        else
+          CoroEndUnwind.push_back(CE);
+        break;
+      }
+    }
+  }
+  assert(CoroInit.size() == 1 &&
+    "coroutine should have exactly one defining @llvm.coro.init");
+  assert(CoroBegin.size() == 1 &&
+    "coroutine should have exactly one @llvm.coro.begin");
+  assert(CoroAlloc.size() == 1 &&
+    "coroutine should have exactly one @llvm.coro.alloc");
+  assert(CoroEndFinal.size() == 1 &&
+    "coroutine should have exactly one @llvm.coro.end(falthrough = true)");
+}
+
 void llvm::initializeCoroutines(PassRegistry &registry) {
   initializeCoroEarlyPass(registry);
   initializeCoroElidePass(registry);
   initializeCoroCleanupPass(registry);
   initializeCoroSplitPass(registry);
+}
+
+static bool g_VerifyEach = false;
+
+static inline void addPass(legacy::PassManagerBase &PM, Pass *P) {
+  // Add the pass to the pass manager...
+  PM.add(P);
+
+  // If we are verifying all of the intermediate steps, add the verifier...
+  if (g_VerifyEach)
+    PM.add(createVerifierPass());
+}
+
+// TODO: move it to CoroCommon
+static void addCoroutineOpt0Passes(const PassManagerBuilder &Builder,
+                                   PassManagerBase &PM) {
+  // addPass(PM, createCoroEarlyPass());
+  // addPass(PM, createCoroSplitPass());
+  // addPass(PM, createCoroLatePass());
+}
+
+static void addCoroutineEarlyPasses(const PassManagerBuilder &Builder,
+                                    PassManagerBase &PM) {
+  addPass(PM, createCoroEarlyPass());
+  // addPass(PM, createCoroSplitPass());
+  // addPass(PM, createCoroLatePass());
+}
+
+static void addCoroutineModuleEarlyPasses(const PassManagerBuilder &Builder,
+                                          PassManagerBase &PM) {
+  addPass(PM, createCoroPartsPass());
+  // addPass(PM, createCoroSplitPass());
+  // addPass(PM, createCoroLatePass());
+}
+
+static void addCoroutineSCCPasses(const PassManagerBuilder &Builder,
+                                  PassManagerBase &PM) {
+  if (Builder.OptLevel > 0) {
+    //addPass(PM, createCoroElidePass());
+    //addPass(PM, createCoroSplitPass());
+  }
+}
+
+void llvm::addCoroutinePassesToExtensionPoints(PassManagerBuilder &Builder,
+                                               bool VerifyEach) {
+  g_VerifyEach = VerifyEach;
+
+  Builder.addExtension(PassManagerBuilder::EP_EarlyAsPossible,
+    addCoroutineEarlyPasses);
+  Builder.addExtension(PassManagerBuilder::EP_ModuleOptimizerEarly,
+    addCoroutineModuleEarlyPasses);
+  Builder.addExtension(PassManagerBuilder::EP_CGSCCOptimizerLate,
+    addCoroutineSCCPasses);
 }

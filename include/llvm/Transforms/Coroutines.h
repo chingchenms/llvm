@@ -17,32 +17,14 @@
 
 namespace llvm {
 
-class Pass;
+class PassManagerBuilder;
 class PassRegistry;
 
-//===----------------------------------------------------------------------===//
-//
-// Split up coroutine into several functions driving its state machine
-//
-Pass *createCoroSplitPass();
-
-//===----------------------------------------------------------------------===//
-//
-// Analyze coroutine use sites and perform heap allocation elision
-//
-Pass *createCoroElidePass();
-
-//===----------------------------------------------------------------------===//
-//
-// Clean up all remaining coroutine related intrinsics from the code
-//
-Pass *createCoroCleanupPass();
-
-//===----------------------------------------------------------------------===//
-//
-// Lower coroutine intrinsics that are not used by later passes
-//
-Pass *createCoroEarlyPass();
+/// addCoroutinePassesToExtensionPoints - Adds all coroutine passes
+/// to an approriate extensions points. If VerifyEach is set to true,
+/// a verifierPass will get inserted after every coroutine pass.
+void addCoroutinePassesToExtensionPoints(PassManagerBuilder &Builder,
+                                         bool VerifyEach = false);
 
 /// TODO: move to llvm/InitializePasses.h?
 /// initializeCoroutines - Initialize all passes linked into the Coroutines library.

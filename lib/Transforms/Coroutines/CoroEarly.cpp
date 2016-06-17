@@ -27,180 +27,8 @@ using namespace llvm;
 
 #define DEBUG_TYPE "coro-early"
 
-namespace {
-  /// Holds all structural Coroutine Intrinsics for a particular function
-  struct CoroutineShape {
-    TinyPtrVector<CoroInitInst*> CoroInit;
-    TinyPtrVector<CoroAllocInst*> CoroAlloc;
-    TinyPtrVector<CoroBeginInst*> CoroBegin;
-    TinyPtrVector<CoroEndInst*> CoroEndFinal;
-    TinyPtrVector<CoroEndInst*> CoroEndUnwind;
-
-    SmallVector<CoroSizeInst*, 2> CoroSize;
-    SmallVector<CoroFreeInst*, 2> CoroFree;
-    SmallVector<CoroFrameInst*, 4> CoroFrame;
-    SmallVector<CoroSuspendInst*, 4> CoroSuspend;
-
-    TinyPtrVector<ReturnInst*> Return;
-
-    template <class F> void reflect(F&& f);
-
-    void dump();
-    void buildFrom(Function &F);
-    CoroutineShape() = default;
-    explicit CoroutineShape(Function &F) { buildFrom(F); }
-    explicit CoroutineShape(CoroInitInst *CoroInit)
-        : CoroutineShape(*CoroInit->getParent()->getParent()) {}
-
-  private:
-    void clear();
-  };
-}
-
-template <class F> void CoroutineShape::reflect(F&& f) {
-  f(CoroInit, "CoroInit");
-  f(CoroAlloc, "CoroAlloc");
-  f(CoroBegin, "CoroBegin");
-  f(CoroEndFinal, "CoroEndFinal");
-  f(CoroEndUnwind, "CoroEndUnwind");
-
-  f(CoroSize, "CoroSize");
-  f(CoroFree, "CoroFree");
-  f(CoroFrame, "CoroFrame");
-  f(CoroSuspend, "CoroSuspend");
-
-  f(Return, "Return");
-}
-
-static BasicBlock* splitBlockIfNotFirst(Instruction* I, StringRef Name = "") {
-  auto BB = I->getParent();
-  if (&*BB->begin() == I) {
-    BB->setName(Name);
-    return BB;
-  }
-  return BB->splitBasicBlock(I, Name);
-}
-
-Instruction* findRetEnd(CoroutineShape& S) {
-  auto RetBB = S.Return.back()->getParent();
-  auto EndBB = S.CoroEndFinal.back()->getParent();
-  if (RetBB == EndBB || RetBB->getUniquePredecessor() == EndBB)
-    return S.Return.back();
-  
-  for (BasicBlock* BB : predecessors(RetBB))
-    if (BB == EndBB)
-      return &RetBB->front();
-
-  return nullptr;
-}
-
-void CoroutineShape::clear() {
-  reflect([](auto &Arr, auto*) { Arr.clear(); });
-}
-
-void CoroutineShape::dump() {
-  reflect([](auto &Arr, StringRef name) {
-    if (Arr.empty())
-      return;
-    dbgs() << name << ":\n";
-    for (auto *Val : Arr) {
-      dbgs() << "    ";
-      Val->dump();
-    }
-  });
-}
-
-void CoroutineShape::buildFrom(Function &F) {
-  clear();
-  for (Instruction& I : instructions(F)) {
-    if (auto RI = dyn_cast<ReturnInst>(&I))
-      Return.push_back(RI);
-    else if (auto II = dyn_cast<IntrinsicInst>(&I)) {
-      switch (II->getIntrinsicID()) {
-      default:
-        continue;
-      case Intrinsic::coro_size:
-        CoroSize.push_back(cast<CoroSizeInst>(II));
-        break;
-      case Intrinsic::coro_alloc:
-        CoroAlloc.push_back(cast<CoroAllocInst>(II));
-        break;
-      case Intrinsic::coro_suspend:
-        CoroSuspend.push_back(cast<CoroSuspendInst>(II));
-        break;
-      case Intrinsic::coro_init: {
-        auto CI = cast<CoroInitInst>(II);
-        if (CI->isPreSplit())
-          CoroInit.push_back(CI);
-        break;
-      }
-      case Intrinsic::coro_begin:
-        CoroBegin.push_back(cast<CoroBeginInst>(II));
-        break;
-      case Intrinsic::coro_free:
-        CoroFree.push_back(cast<CoroFreeInst>(II));
-        break;
-      case Intrinsic::coro_end:
-        auto CE = cast<CoroEndInst>(II);
-        if (CE->isFallthrough())
-          CoroEndFinal.push_back(CE);
-        else
-          CoroEndUnwind.push_back(CE);
-        break;
-      }
-    }
-  }
-  assert(CoroInit.size() == 1 &&
-         "coroutine should have exactly one defining @llvm.coro.init");
-  assert(CoroBegin.size() == 1 &&
-         "coroutine should have exactly one @llvm.coro.begin");
-  assert(CoroAlloc.size() == 1 &&
-         "coroutine should have exactly one @llvm.coro.alloc");
-  assert(CoroEndFinal.size() == 1 &&
-    "coroutine should have exactly one @llvm.coro.end(falthrough = true)");
-}
-
-static void outlineCoroutineParts(CoroutineShape& S) {
-  Function& F = *S.CoroInit.front()->getParent()->getParent();
-  CoroCommon::removeLifetimeIntrinsics(F); // for now
-  DEBUG(dbgs() << "Processing Coroutine: " << F.getName() << "\n");
-  DEBUG(S.dump());
-
-  CoroPartExtractor Extractor;
-  auto Outline = [&](StringRef Name, Instruction* From, Instruction* Upto) {
-    auto First = splitBlockIfNotFirst(From, Name);
-    auto Last = splitBlockIfNotFirst(Upto);
-    auto Fn = Extractor.createFunction(First, Last);
-    return ValueAsMetadata::get(Fn);
-  };
-
-  // Outline the parts and create a metadata tuple, so that CoroSplit
-  // pass can quickly figure out what they are.
-
-  LLVMContext& C = F.getContext();
-  SmallVector<Metadata *, 8> MDs{
-      MDString::get(C, kCoroEarlyTagStr),
-      Outline(".AllocPart", S.CoroAlloc.front(),
-              S.CoroBegin.front()->getNextNode()),
-      Outline(".FreePart", S.CoroFree.front(), S.CoroEndFinal.front()),
-  };
-
-  // If we can figure out end of the ret part, outline it too.
-  if (auto RetEnd = findRetEnd(S)) {
-    MDs.push_back(Outline(".RetPart", S.CoroEndFinal.front(), RetEnd));
-  }
-
-  // Outline suspend points.
-  for (CoroSuspendInst *SI : S.CoroSuspend) {
-    MDs.push_back(
-        Outline(".SuspendPart", SI->getCoroSave(), SI->getNextNode()));
-  }
-
-  S.CoroInit.front()->setMeta(
-      MetadataAsValue::get(F.getContext(), MDNode::get(C, MDs)));
-}
-
-static void replaceEmulatedIntrinsicsWithRealOnes(Module& M) {
+static bool replaceEmulatedIntrinsicsWithRealOnes(Module& M) {
+  bool changed = true;
   SmallVector<Value*, 8> Args;
   LLVMContext & C = M.getContext();
   auto BytePtrTy = PointerType::get(IntegerType::get(C, 8), 0);
@@ -273,45 +101,25 @@ static void replaceEmulatedIntrinsicsWithRealOnes(Module& M) {
             ReplaceInstWithInst(CI, IntrinCall);
           }
           dbgs() << "Replaced with >>>>  "; IntrinCall->dump();
+          changed = true;
         }
       }
     }
   }
-}
-
-static bool processModule(Module& M) {
-  SmallVector<Function*, 8> Coroutines;
-  replaceEmulatedIntrinsicsWithRealOnes(M);
-  Function *CoroInitFn = Intrinsic::getDeclaration(&M, Intrinsic::coro_init);
-
-  // Find all pre-split coroutines.
-  for (User* U : CoroInitFn->users())
-    if (auto CoroInit = dyn_cast<CoroInitInst>(U))
-      if (CoroInit->isPreSplit())
-        Coroutines.push_back(CoroInit->getParent()->getParent());
-
-  // Outline coroutine parts to guard against code movement
-  // during optimizations. We inline them back in CoroSplit.
-  CoroutineShape S;
-  for (Function *F : Coroutines) {
-    S.buildFrom(*F);
-    outlineCoroutineParts(S);
-  }
-  return !Coroutines.empty();
+  return changed;
 }
 
 //===----------------------------------------------------------------------===//
 //                              Top Level Driver
 //===----------------------------------------------------------------------===//
 
-#if 0
 namespace {
 struct CoroEarly : public FunctionPass {
   static char ID; // Pass identification, replacement for typeid
   CoroEarly() : FunctionPass(ID) {}
 
   bool doInitialization(Module& M) override {
-    return processModule(M);
+    return replaceEmulatedIntrinsicsWithRealOnes(M);
   }
 
   bool runOnFunction(Function &F) override {
@@ -320,18 +128,6 @@ struct CoroEarly : public FunctionPass {
   }
 };
 }
-#else
-namespace {
-  struct CoroEarly : public ModulePass {
-    static char ID; // Pass identification, replacement for typeid
-    CoroEarly() : ModulePass(ID) {}
-
-    bool runOnModule(Module &M) override {
-      return processModule(M);
-    }
-  };
-}
-#endif
 
 char CoroEarly::ID = 0;
 INITIALIZE_PASS(

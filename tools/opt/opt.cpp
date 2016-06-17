@@ -216,25 +216,6 @@ static inline void addPass(legacy::PassManagerBase &PM, Pass *P) {
     PM.add(createVerifierPass());
 }
 
-static void addCoroutineOpt0Passes(const PassManagerBuilder &Builder, PassManagerBase &PM) {
-  // addPass(PM, createCoroEarlyPass());
-  // addPass(PM, createCoroSplitPass());
-  // addPass(PM, createCoroLatePass());
-}
-
-static void addCoroutineEarlyPasses(const PassManagerBuilder &Builder, PassManagerBase &PM) {
-   addPass(PM, createCoroEarlyPass());
-  // addPass(PM, createCoroSplitPass());
-  // addPass(PM, createCoroLatePass());
-}
-
-static void addCoroutineSCCPasses(const PassManagerBuilder &Builder, PassManagerBase &PM) {
-  if (Builder.OptLevel > 0) {
-    //addPass(PM, createCoroElidePass());
-    //addPass(PM, createCoroSplitPass());
-  }
-}
-
 /// This routine adds optimization passes based on selected optimization level,
 /// OptLevel.
 ///
@@ -271,14 +252,8 @@ static void AddOptimizationPasses(legacy::PassManagerBase &MPM,
   Builder.SLPVectorize =
       DisableSLPVectorization ? false : OptLevel > 1 && SizeLevel < 2;
 
-  if (Coroutines) {
-    //Builder.addExtension(PassManagerBuilder::EP_EarlyAsPossible,
-    //                     addCoroutineEarlyPasses);
-    Builder.addExtension(PassManagerBuilder::EP_ModuleOptimizerEarly,
-                         addCoroutineEarlyPasses);
-    Builder.addExtension(PassManagerBuilder::EP_CGSCCOptimizerLate,
-                         addCoroutineSCCPasses);
-  }
+  if (Coroutines)
+    addCoroutinePassesToExtensionPoints(Builder, VerifyEach);
 
   Builder.populateFunctionPassManager(FPM);
   Builder.populateModulePassManager(MPM);
