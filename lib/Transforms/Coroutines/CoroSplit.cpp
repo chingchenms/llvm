@@ -1,4 +1,4 @@
-//===- CoroSplit2.cpp - Manager for Coroutine Passes -----------------===//
+//===- CoroSplit.cpp - Converts coroutine into a state machine-------------===//
 //
 //                     The LLVM Compiler Infrastructure
 //
@@ -7,7 +7,7 @@
 //
 //===----------------------------------------------------------------------===//
 //
-// TODO: explaing what it is
+// TODO: explain what it is
 //
 //===----------------------------------------------------------------------===//
 
@@ -77,6 +77,16 @@ static CallInst *makeIndirectCall(Function *F, Intrinsic::ID IntrinsicID) {
   return makeIndirectCall(findInsertionPoint(F), IntrinsicID);
 }
 
+static CallInst* makeCallWithUndefArgs(Function* Caller, Function* Callee) {
+  FunctionType* FTy = Callee->getFunctionType();
+  SmallVector<Value*, 8> Args;
+  for (Type* Ty : FTy->params())
+    Args.push_back(UndefValue::get(Ty));
+
+  auto InsertPt = findInsertionPoint(Caller);
+  return CallInst::Create(Callee, Args, "", InsertPt);
+}
+
 /// addAbstractEdges - Add abstract edges to keep a coroutine
 /// and its subfunctions together in one SCC
 static void addAbstractEdges(std::initializer_list<CallGraphNode*> Nodes) {
@@ -85,9 +95,23 @@ static void addAbstractEdges(std::initializer_list<CallGraphNode*> Nodes) {
     auto Next = it + 1;
     auto Target = (Next == e) ? Nodes.begin() : Next;
     auto F = (*it)->getFunction();
-    auto CS = makeIndirectCall(F, Intrinsic::coro_resume_addr);
+    auto CS = makeCallWithUndefArgs(F, (*Target)->getFunction());
     (*it)->addCalledFunction(CS, *Target);
   }
+}
+
+void addCallToCoroutine(CallGraphNode *From, CallGraphNode* To) {
+  Function* F = From->getFunction();
+  Function* Callee = To->getFunction();
+  assert(Callee->hasFnAttribute(Attribute::Coroutine));
+  FunctionType* FTy = Callee->getFunctionType();
+  SmallVector<Value*, 8> Args;
+  for (Type* Ty : FTy->params())
+    Args.push_back(UndefValue::get(Ty));
+
+  auto InsertPt = findInsertionPoint(F);
+  auto CS = CallInst::Create(Callee, Args, "", InsertPt);
+  From->addCalledFunction(CS, To);
 }
 
 void addCall(CallGraphNode *From, CallGraphNode* To, Type* ArgType) {
@@ -103,15 +127,7 @@ void addCall(CallGraphNode *From, CallGraphNode* To, Type* ArgType) {
   else {
     V = &F->getArgumentList().front();
   }
-  Value* CalleeValue = nullptr;
-  if (Callee->hasFnAttribute(Attribute::Coroutine)) {
-    auto FTy = F->getFunctionType()->getPointerTo();
-    CalleeValue = new BitCastInst(Callee, FTy, "", InsertPt);
-  }
-  else {
-    CalleeValue = Callee;
-  }
-  auto CS = CallInst::Create(CalleeValue, { V }, "", InsertPt);
+  auto CS = CallInst::Create(Callee, { V }, "", InsertPt);
   From->addCalledFunction(CS, To);
 }
 
@@ -152,11 +168,14 @@ CoroInfoTy preSplit(CallGraph& CG, Function *F, CoroInitInst *CI)
   auto DestroyNode = CreateSubFunction("destroy");
   auto CleanupNode = CreateSubFunction("cleanup");
 
+  addAbstractEdges({ CG[F], ResumeNode, DestroyNode, CleanupNode});
+#if 0
   auto CoroNode = CG[F];
   addCall(CoroNode, ResumeNode, FramePtrTy);
   addCall(ResumeNode, DestroyNode, FramePtrTy);
   addCall(DestroyNode, CleanupNode, FramePtrTy);
-  addCall(CleanupNode, CoroNode, FramePtrTy);
+  addCallToCoroutine(CleanupNode, CoroNode);
+#endif
 
   Info.Resume = ResumeNode->getFunction();
   Info.Destroy = DestroyNode->getFunction();
