@@ -112,7 +112,10 @@ namespace llvm {
     enum Field { Tag, Func, Frame, Parts, Resumers, COUNT };
 
     // Updates fields of the metadata tuple.
-    void updateFields(std::initializer_list<std::pair<Field, Metadata*>>);
+    // Default value Phase::Fresh is used to indicate that no updates
+    // to tag is requested. 
+    void updateFields(std::initializer_list<std::pair<Field, Metadata *>>,
+      Phase NewPhase = Phase::Fresh);
 
     Phase getPhase() const;
     void setPhase(Phase Ph);

@@ -56,8 +56,20 @@ static Metadata *getRawMeta(IntrinsicInst* Intrin){
   return cast<MetadataAsValue>(Intrin->getArgOperand(N - 1))->getMetadata();
 }
 
+static MDString* phaseToTag(LLVMContext& C, Phase NewPhase) {
+  const char* Tag = nullptr;
+  switch (NewPhase) {
+  case Phase::PreIPO: Tag = kCoroPreIPOTag; break;
+  case Phase::PreSplit: Tag = kCoroPreSplitTag; break;
+  case Phase::PostSplit: Tag = kCoroPostSplitTag; break;
+  default:
+    llvm_unreachable("unexpected phase tag");
+  }
+  return MDString::get(C, Tag);
+}
+
 void CoroMeta::updateFields(
-    std::initializer_list<std::pair<Field, Metadata *>> Fs) {
+    std::initializer_list<std::pair<Field, Metadata *>> Fs, Phase NewPhase) {
 
   auto MD = getRawMeta(Intrin);
   auto N = dyn_cast<MDNode>(MD);
@@ -75,13 +87,21 @@ void CoroMeta::updateFields(
       Args[I] = N->getOperand(I);
   }
   else { 
-    // otherwise, fill it with empty strings
+    // otherwise, update Tag and Coroutine fields
+    // filling the rest with empty strings
     Args.fill(MDString::get(C, ""));
+    Args[Field::Func] = ValueAsMetadata::get(Intrin->getFunction());
+    NewPhase = Phase::PreIPO;
   }
+  if (NewPhase != Phase::Fresh)
+    Args[Field::Tag] = phaseToTag(C, Phase::PreIPO);
 
   // now go through all the pairs an update the fields
-  for (auto const &P : Fs)
+  for (auto const &P : Fs) {
+    assert(P.first > Field::Tag &&
+           "update tag field via dedicate NewPhase parameter");
     Args[P.first] = P.second;
+  }
 
   // TODO: add ctor for ArrayRef to take std::array
   ArrayRef<Metadata*> AR(&*Args.begin(), Args.size());
