@@ -59,7 +59,7 @@ namespace llvm {
   /// This represents the llvm.coro.end instruction.
   class LLVM_LIBRARY_VISIBILITY CoroFrameInst : public IntrinsicInst {
   public:
-    static CoroFrameInst* Create(Instruction* InsertAfter);
+    static CoroFrameInst* Create(Instruction* InsertBefore);
 
     // Methods to support type inquiry through isa, cast, and dyn_cast:
     static inline bool classof(const IntrinsicInst *I) {
@@ -77,6 +77,7 @@ namespace llvm {
     bool isFallthrough() const {
       return cast<Constant>(getArgOperand(kFallthrough))->isOneValue(); 
     }
+    static CoroEndInst *Create(Instruction *InsertBefore, Value *Addr);
 
     // Methods to support type inquiry through isa, cast, and dyn_cast:
     static inline bool classof(const IntrinsicInst *I) {

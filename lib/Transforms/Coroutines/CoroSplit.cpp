@@ -119,7 +119,10 @@ CoroInfoTy preSplit(CallGraph& CG, Function *F, CoroInitInst *CI)
     Fn->addFnAttr(Attribute::NoInline);
 
     auto BB = BasicBlock::Create(Ctx, "entry", Fn);
-    ReturnInst::Create(Ctx, BB);
+    auto Ret = ReturnInst::Create(Ctx, BB);
+    Argument* Arg = &*Fn->getArgumentList().begin();
+    auto Cast = new BitCastInst(Arg, )
+    CoroEndInst::Create(Ret, Arg);
     return CG.getOrInsertFunction(Fn);
   };
 
