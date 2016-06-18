@@ -118,7 +118,7 @@ namespace llvm {
       Phase NewPhase = Phase::Fresh);
 
     Phase getPhase() const;
-    void setPhase(Phase Ph);
+    void setPhase(Phase NewPhase);
     void setParts(ArrayRef<Metadata *> MDs);
     MDNode::op_range getParts();
   };
