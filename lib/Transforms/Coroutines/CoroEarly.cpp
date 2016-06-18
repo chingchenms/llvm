@@ -13,6 +13,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "CoroutineCommon.h"
+
 #include "llvm/IR/Module.h"
 #include "llvm/IR/CFG.h"
 #include "llvm/Pass.h"
@@ -27,6 +28,36 @@ using namespace llvm;
 
 #define DEBUG_TYPE "coro-early"
 
+// Need metadata helper
+//   Coroutine comes out of front end with !"" in place of the metadata
+// 
+// CoroEarly, will replace it with the tuple:
+//   (!func,!"",!"",!"")
+
+#if 0
+static void initMetadata(CoroInitInst& CoroInit, Function& F) {
+  if (auto S = dyn_cast<MDString>(CoroInit.getRawMeta())) {
+    assert(S->getLength() != 0 && "Unexpected metadata string on coro.init");
+    SmallVector<Metadata *, 4> Args{ValueAsMetadata::get(&F), S, S, S};
+    CoroInit.setMeta(MDNode::get(F.getContext(), Args));
+  }
+}
+#endif
+
+static void addBranchToCoroEnd(CoroutineShape &S, Function &F) {
+  S.buildFrom(F);
+  auto Zero = ConstantInt::get(S.CoroSuspend.back()->getType(), 0);
+  auto RetBB = S.CoroEndFinal.back()->getParent();
+  assert(isa<CoroEndInst>(RetBB->front()) &&
+         "coro.end must be a first instruction in a block");
+  for (CoroSuspendInst* CI : S.CoroSuspend) {
+    auto InsertPt = CI->getNextNode();
+    auto Cond =
+      new ICmpInst(InsertPt, CmpInst::Predicate::ICMP_SLT, CI, Zero);
+    SplitBlockAndInsertIfThen(Cond, InsertPt, /*unreachable=*/false);
+  }
+}
+
 static bool replaceEmulatedIntrinsicsWithRealOnes(Module& M) {
   bool changed = true;
   SmallVector<Value*, 8> Args;
@@ -37,8 +68,11 @@ static bool replaceEmulatedIntrinsicsWithRealOnes(Module& M) {
   auto MetaVal = MetadataAsValue::get(C, MDString::get(C, ""));
 
   CallInst* SavedIntrinsic = nullptr;
+  CoroutineShape CoroShape;
 
   for (Function& F : M) {
+    bool hasCoroSuspend = false;
+    bool hasCoroInit = false;
     for (auto it = inst_begin(F), e = inst_end(F); it != e;) {
       Instruction& I = *it++;
       if (auto CI = dyn_cast<CallInst>(&I)) {
@@ -62,6 +96,7 @@ static bool replaceEmulatedIntrinsicsWithRealOnes(Module& M) {
           default:
             break;
           case Intrinsic::coro_suspend:
+            hasCoroSuspend = true;
             assert(SavedIntrinsic && "coro_suspend expects saved intrinsic");
             Args.push_back(SavedIntrinsic);
             Args.push_back(CI->getArgOperand(1));
@@ -77,6 +112,7 @@ static bool replaceEmulatedIntrinsicsWithRealOnes(Module& M) {
             Args.push_back(CI->getArgOperand(0));
             break;
           case Intrinsic::coro_init:
+            hasCoroInit = true;
             Args.push_back(CI->getArgOperand(0));
             Args.push_back(CI->getArgOperand(1));
             Args.push_back(Zero);
@@ -105,6 +141,10 @@ static bool replaceEmulatedIntrinsicsWithRealOnes(Module& M) {
         }
       }
     }
+    if (hasCoroSuspend)
+      addBranchToCoroEnd(CoroShape, F);
+    if (hasCoroInit)
+      F.addFnAttr(Attribute::Coroutine);
   }
   return changed;
 }
@@ -123,9 +163,16 @@ struct CoroEarly : public FunctionPass {
   }
 
   bool runOnFunction(Function &F) override {
+    if (!F.hasFnAttribute(Attribute::Coroutine))
+      return false;
+
     DEBUG(dbgs() << "CoroEarly is looking at " << F.getName() << "\n");
-    return false;
+    Shape.buildFrom(F);
+    Shape.CoroInit.back()->setPhase(Phase::PreIPO);
+    return true;
   }
+
+  CoroutineShape Shape;
 };
 }
 

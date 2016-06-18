@@ -13,6 +13,10 @@
 
 #include "CoroutineCommon.h"
 #include <llvm/Transforms/Coroutines.h>
+#include <llvm/Transforms/Utils/Cloning.h>
+#include <llvm/Transforms/Utils/PromoteMemToReg.h>
+#include <llvm/IR/Dominators.h>
+#include <llvm/IR/LegacyPassManagers.h>
 
 #include <llvm/ADT/SmallVector.h>
 #include <llvm/IR/Function.h>
@@ -42,8 +46,6 @@ namespace {
 CoroInfoTy::CoroInfoTy(CallGraph& CG, Function *F, CoroInitInst *CI)
   : CoroInit(CI)
 {
-  assert(CI->getFunction() == F && "coro.init in a pre-split coroutine"
-                                   "must refer to an enclosing function");
   SmallString<64> Name(F->getName());
   Name.push_back('.');
   auto const FirstPartSize = Name.size();
@@ -181,8 +183,29 @@ static bool preSplitCoroutines(CallGraph &CG, CoroDatabase& DB) {
   return !DB.empty();
 }
 
+static void mem2reg(Function& F) {
+  DominatorTree DT{ F };
+  SmallVector<AllocaInst*, 8> Allocas;
+  BasicBlock &BB = F.getEntryBlock();  // Get the entry node for the function
+  while (1) {
+    Allocas.clear();
+
+    // Find allocas that are safe to promote, by looking at all instructions in
+    // the entry node
+    for (BasicBlock::iterator I = BB.begin(), E = --BB.end(); I != E; ++I)
+      if (AllocaInst *AI = dyn_cast<AllocaInst>(I))       // Is it an alloca?
+        if (isAllocaPromotable(AI))
+          Allocas.push_back(AI);
+
+    if (Allocas.empty()) break;
+
+    PromoteMemToReg(Allocas, DT, nullptr);
+  }
+}
+
 static void splitCoroutine(Function& F, CoroInfoTy const& CoroInfo) {
   DEBUG(dbgs() << "Splitting coroutine: " << F.getName() << "\n");
+  mem2reg(F);
 }
 
 //===----------------------------------------------------------------------===//
@@ -195,13 +218,17 @@ namespace {
     static char ID; // Pass identification, replacement for typeid
     CoroSplit() : CallGraphSCCPass(ID) {}
 
+    void preparePassManager(PMStack &PMS) override {
+      // Find PMT_CallGraphPassManager or lower
+      while (!PMS.empty() &&
+        PMS.top()->getPassManagerType() > PMT_CallGraphPassManager)
+        PMS.pop();
+    }
+
     bool doInitialization(CallGraph &CG) override {
-      return nullptr;
-#if 0
       bool changed = preSplitCoroutines(CG, DB);
       changed |= CallGraphSCCPass::doInitialization(CG);
       return changed;
-#endif
     }
 
     bool runOnSCC(CallGraphSCC &SCC) override {

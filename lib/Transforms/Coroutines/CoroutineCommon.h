@@ -85,10 +85,11 @@ template <class F> void CoroutineShape::reflect(F&& f) {
 }
 
 void initializeCoroEarlyPass(PassRegistry &Registry);
-void initializeCoroPartsPass(PassRegistry &Registry);
+void initializeCoroOutlinePass(PassRegistry &Registry);
 void initializeCoroElidePass(PassRegistry &Registry);
 void initializeCoroCleanupPass(PassRegistry &registry);
 void initializeCoroSplitPass(PassRegistry &registry);
+void initializeCoroInlinePass(PassRegistry&);
 
 //===----------------------------------------------------------------------===//
 //
@@ -114,7 +115,8 @@ Pass *createCoroCleanupPass();
 //
 Pass *createCoroEarlyPass();
 
-Pass *createCoroPartsPass();
+Pass *createCoroOutlinePass();
+Pass *createCoroInlinePass();
 
 
 }

@@ -23,10 +23,7 @@
 #include "llvm/IR/Verifier.h"
 #include "llvm/IR/LegacyPassManager.h"
 #include "llvm/IR/CFG.h"
-#include "llvm/Support/Debug.h"
 #include "llvm/IR/Module.h"
-
-#define DEBUG_TYPE "coro-early"
 
 using namespace llvm;
 using namespace llvm::legacy;
@@ -56,9 +53,8 @@ Function *llvm::CoroPartExtractor::createFunction(BasicBlock *Start,
 }
 
 void llvm::CoroPartExtractor::dump() {
-  for (auto* BB : Blocks) {
-    DEBUG(BB->dump());
-  }
+  for (auto *BB : Blocks)
+    BB->dump();
 }
 
 void llvm::CoroPartExtractor::computeRegion(BasicBlock *Start,
@@ -193,6 +189,7 @@ void llvm::CoroutineShape::buildFrom(Function &F) {
 }
 
 void llvm::initializeCoroutines(PassRegistry &registry) {
+  initializeCoroOutlinePass(registry);
   initializeCoroEarlyPass(registry);
   initializeCoroElidePass(registry);
   initializeCoroCleanupPass(registry);
@@ -227,7 +224,7 @@ static void addCoroutineEarlyPasses(const PassManagerBuilder &Builder,
 
 static void addCoroutineModuleEarlyPasses(const PassManagerBuilder &Builder,
                                           PassManagerBase &PM) {
-  addPass(PM, createCoroPartsPass());
+  addPass(PM, createCoroOutlinePass());
   // addPass(PM, createCoroSplitPass());
   // addPass(PM, createCoroLatePass());
 }
@@ -236,7 +233,8 @@ static void addCoroutineSCCPasses(const PassManagerBuilder &Builder,
                                   PassManagerBase &PM) {
   if (Builder.OptLevel > 0) {
     //addPass(PM, createCoroElidePass());
-    //addPass(PM, createCoroSplitPass());
+    //addPass(PM, createCoroInlinePass());
+    addPass(PM, createCoroSplitPass());
   }
 }
 
