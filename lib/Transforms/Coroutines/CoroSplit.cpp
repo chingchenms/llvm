@@ -40,13 +40,32 @@ namespace {
   };
 }
 
+static CallInst *makeIndirectCall(Instruction *InsertBefore,
+                                  Intrinsic::ID IntrinsicID,
+                                  Value *V = nullptr) {
+  BasicBlock* BB = InsertBefore->getParent();
+  Function* F = BB->getParent();
+  Module* M = F->getParent();
+  auto Fn = Intrinsic::getDeclaration(M, IntrinsicID);
+}
+
+//static CallInst *makeIndirectCall(Function *F, Intrinsic::ID IntrinsicID,
+//                                  Value *V = nullptr, ) {
+//  // find an insertion point
+//  for (auto)
+//
+//  auto ResumeAddr = Intrinsic::getDeclaration(&M, Intrinsic::coro_resume_addr);
+//  a
+//}
+//
 /// addAbstractEdges - Add abstract edges to keep a coroutine
 /// and its subfunctions together in one SCC
 static void addAbstractEdges(std::initializer_list<CallGraphNode*> Nodes) {
   assert(Nodes.size() > 0);
   for (auto it = Nodes.begin(), e = Nodes.end(); it != e; ++it) {
     auto Target = (it + 1 == e) ? Nodes.begin() : it;
-    (*it)->addCalledFunction(CallSite(), *Target);
+//    CallInst* CS = makeCall((*it)->getFunction(), (*Target)->getFunction());
+//    (*it)->addCalledFunction(CS, *Target);
   }
 }
 
