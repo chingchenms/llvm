@@ -90,8 +90,21 @@ static void addAbstractEdges(std::initializer_list<CallGraphNode*> Nodes) {
   }
 }
 
-void addCall(CallGraphNode *From, CallGraphNode* To) {
-
+void addCall(CallGraphNode *From, CallGraphNode* To, Type* ArgType) {
+  Function* F = From->getFunction();
+  Function* Callee = To->getFunction();
+  Value* V = nullptr; 
+  Instruction* InsertPt = F->getEntryBlock().getTerminator();
+  if (F->hasFnAttribute(Attribute::Coroutine)) {
+    InsertPt = findInsertionPoint(F);
+    V = CoroFrameInst::Create(InsertPt);
+    V = new BitCastInst(V, ArgType, "", InsertPt);
+  }
+  else {
+    V = &F->getArgumentList().front();
+  }
+  auto CS = CallInst::Create(Callee, { V }, "", InsertPt);
+  From->addCalledFunction(CS, To);
 }
 
 CoroInfoTy preSplit(CallGraph& CG, Function *F, CoroInitInst *CI)
@@ -105,11 +118,12 @@ CoroInfoTy preSplit(CallGraph& CG, Function *F, CoroInitInst *CI)
   Name.append("frame");
   LLVMContext& Ctx = F->getContext();
   Info.FrameTy = StructType::create(Ctx, Name);
-
   auto AS = CI->getMem()->getType()->getPointerAddressSpace();
+  auto FramePtrTy = PointerType::get(Info.FrameTy, AS);
+
   auto FnTy = FunctionType::get(
     Type::getVoidTy(Ctx),
-    PointerType::get(Info.FrameTy, AS), /*isVarArg=*/false);
+    FramePtrTy, /*isVarArg=*/false);
 
   auto CreateSubFunction = [&](StringRef Suffix) {
     Name.resize(FirstPartSize);
@@ -121,8 +135,8 @@ CoroInfoTy preSplit(CallGraph& CG, Function *F, CoroInitInst *CI)
     auto BB = BasicBlock::Create(Ctx, "entry", Fn);
     auto Ret = ReturnInst::Create(Ctx, BB);
     Argument* Arg = &*Fn->getArgumentList().begin();
-    auto Cast = new BitCastInst(Arg, )
-    CoroEndInst::Create(Ret, Arg);
+    auto Cast = new BitCastInst(Arg, Type::getInt8PtrTy(Ctx), "", Ret);
+    CoroEndInst::Create(Ret, Cast);
     return CG.getOrInsertFunction(Fn);
   };
 
@@ -131,10 +145,10 @@ CoroInfoTy preSplit(CallGraph& CG, Function *F, CoroInitInst *CI)
   auto CleanupNode = CreateSubFunction("cleanup");
 
   auto CoroNode = CG[F];
-  addCall(CoroNode, ResumeNode);
-  addCall(ResumeNode, DestroyNode);
-  addCall(DestroyNode, CleanupNode);
-  addCall(CleanupNode, ResumeNode);
+  addCall(CoroNode, ResumeNode, FramePtrTy);
+  addCall(ResumeNode, DestroyNode, FramePtrTy);
+  addCall(DestroyNode, CleanupNode, FramePtrTy);
+  addCall(CleanupNode, ResumeNode, FramePtrTy);
 
   Info.Resume = ResumeNode->getFunction();
   Info.Destroy = DestroyNode->getFunction();
@@ -228,7 +242,7 @@ namespace {
     bool runOnSCC(CallGraphSCC &SCC) override {
       // SCC should be at least of size 4
       // Coroutine + Resume + Destroy + Cleanup
-      if (SCC.size() < 4)
+      if (SCC.size() < 3)
         return false;
 
       bool changed = false;
