@@ -89,7 +89,7 @@ static bool replaceEmulatedIntrinsicsWithRealOnes(Module& M) {
 
           Function *Fn = Intrinsic::getDeclaration(&M, id);
           Args.clear();
-          dbgs() << "Looking at >>>>  "; CI->dump();
+//          dbgs() << "Looking at >>>>  "; CI->dump();
           switch (id) {
           case Intrinsic::not_intrinsic:
             continue;
@@ -136,7 +136,7 @@ static bool replaceEmulatedIntrinsicsWithRealOnes(Module& M) {
           else {
             ReplaceInstWithInst(CI, IntrinCall);
           }
-          dbgs() << "Replaced with >>>>  "; IntrinCall->dump();
+  //        dbgs() << "Replaced with >>>>  "; IntrinCall->dump();
           changed = true;
         }
       }
@@ -166,7 +166,6 @@ struct CoroEarly : public FunctionPass {
     if (!F.hasFnAttribute(Attribute::Coroutine))
       return false;
 
-    DEBUG(dbgs() << "CoroEarly is looking at " << F.getName() << "\n");
     Shape.buildFrom(F);
     Shape.CoroInit.back()->setPhase(Phase::PreIPO);
     return true;

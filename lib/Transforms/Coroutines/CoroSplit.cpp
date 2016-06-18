@@ -40,6 +40,11 @@ namespace {
   };
 }
 
+PointerType* getResumerType(LLVMContext& C) {
+  auto FnTy = FunctionType::get(Type::getVoidTy(C), Type::getInt8PtrTy(C), /*isVarArg=*/false);
+  return PointerType::get(FnTy, 0);
+}
+
 static CallInst *makeIndirectCall(Instruction *InsertBefore,
                                   Intrinsic::ID IntrinsicID,
                                   Value *V = nullptr) {
@@ -47,25 +52,37 @@ static CallInst *makeIndirectCall(Instruction *InsertBefore,
   Function* F = BB->getParent();
   Module* M = F->getParent();
   auto Fn = Intrinsic::getDeclaration(M, IntrinsicID);
+  auto Fty = cast<FunctionType>(Fn->getType()->getElementType());
+  if (V == nullptr) {
+    // Figure out what type it needs
+    auto ParamTy = Fty->getParamType(0);
+    V = ConstantPointerNull::get(cast<PointerType>(ParamTy));
+  }
+  LLVMContext& C = M->getContext();
+  auto CI = CallInst::Create(Fn, { V }, "", InsertBefore);
+  auto BI = new BitCastInst(CI, getResumerType(C), "", InsertBefore);
+  return CallInst::Create(BI, { V }, "", InsertBefore);
 }
 
-//static CallInst *makeIndirectCall(Function *F, Intrinsic::ID IntrinsicID,
-//                                  Value *V = nullptr, ) {
-//  // find an insertion point
-//  for (auto)
-//
-//  auto ResumeAddr = Intrinsic::getDeclaration(&M, Intrinsic::coro_resume_addr);
-//  a
-//}
-//
+static CallInst *makeIndirectCall(Function *F, Intrinsic::ID IntrinsicID) {
+  // find an insertion point
+  for (Instruction& I : F->getEntryBlock())
+    if (!isa<AllocaInst>(&I))
+      return makeIndirectCall(&I, IntrinsicID);
+
+  llvm_unreachable("no terminator in the entry block");
+}
+
 /// addAbstractEdges - Add abstract edges to keep a coroutine
 /// and its subfunctions together in one SCC
 static void addAbstractEdges(std::initializer_list<CallGraphNode*> Nodes) {
   assert(Nodes.size() > 0);
   for (auto it = Nodes.begin(), e = Nodes.end(); it != e; ++it) {
-    auto Target = (it + 1 == e) ? Nodes.begin() : it;
-//    CallInst* CS = makeCall((*it)->getFunction(), (*Target)->getFunction());
-//    (*it)->addCalledFunction(CS, *Target);
+    auto Next = it + 1;
+    auto Target = (Next == e) ? Nodes.begin() : Next;
+    auto F = (*it)->getFunction();
+    auto CS = makeIndirectCall(F, Intrinsic::coro_resume_addr);
+    (*it)->addCalledFunction(CS, *Target);
   }
 }
 
@@ -168,8 +185,12 @@ static void mem2reg(Function& F) {
   }
 }
 
-static void splitCoroutine(Function& F, CoroInfoTy const& CoroInfo) {
+static void splitCoroutine(Function& F, CoroInitInst * CI) {
   DEBUG(dbgs() << "Splitting coroutine: " << F.getName() << "\n");
+  if (CI->getPhase() == Phase::PreIPO) {
+    CI->setPhase(Phase::PreSplit);
+    return;
+  }
   mem2reg(F);
 }
 
@@ -190,11 +211,6 @@ namespace {
     }
 
     bool runOnSCC(CallGraphSCC &SCC) override {
-#if 0
-      // No coroutines, bail out
-      if (DB.empty())
-        return false;
-      
       // SCC should be at least of size 4
       // Coroutine + Resume + Destroy + Cleanup
       if (SCC.size() < 4)
@@ -204,15 +220,14 @@ namespace {
 
       for (CallGraphNode *CGN : SCC) {
         if (auto F = CGN->getFunction()) {
-          if (auto CoroInfo = DB.find(F)) {
-            splitCoroutine(*F, *CoroInfo);
+          if (auto CoroInit =
+                  CoroCommon::findCoroInit(F, Phase::PostSplit, false)) {
+            splitCoroutine(*F, CoroInit);
             changed = true;
           }
         }
       }
       return changed;
-#endif
-      return false;
     }
   };
 }

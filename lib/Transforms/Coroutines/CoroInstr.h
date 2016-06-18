@@ -123,6 +123,19 @@ namespace llvm {
         setMeta(MDNode::get(C, Args));
         return;
       }
+      char const* Tag;
+      switch (Ph) {
+      case Phase::PreSplit: Tag = kCoroPreSplitTag; break;
+      case Phase::PostSplit: Tag = kCoroPostSplitTag; break;
+      default:
+        llvm_unreachable("unexpected phase tag");
+      }
+
+      LLVMContext &C = getContext();
+      auto N = cast<MDNode>(getRawMeta());
+      Metadata *Args[4] = {MDString::get(C, Tag), N->getOperand(1).get(),
+                           N->getOperand(2).get(), N->getOperand(3).get()};
+      setMeta(MDNode::get(C, Args));
     }
 
     CoroAllocInst *getAlloc() const {
