@@ -6,5 +6,6 @@ add_llvm_library(LLVMCoroutines
   CoroInline.cpp
   CoroElide.cpp
   CoroSplit.cpp
+  CoroInstr.cpp
   )
 

@@ -33,7 +33,6 @@ namespace llvm {
   using CoroBeginInst = IntrinsicInst;
   using CoroFreeInst = IntrinsicInst;
 
-  using CoroFrameInst = IntrinsicInst;
   using CoroSaveInst = IntrinsicInst;
   using CoroSizeInst = IntrinsicInst;
 
@@ -51,6 +50,20 @@ namespace llvm {
     // Methods to support type inquiry through isa, cast, and dyn_cast:
     static inline bool classof(const IntrinsicInst *I) {
       return I->getIntrinsicID() == Intrinsic::coro_suspend;
+    }
+    static inline bool classof(const Value *V) {
+      return isa<IntrinsicInst>(V) && classof(cast<IntrinsicInst>(V));
+    }
+  };
+
+  /// This represents the llvm.coro.end instruction.
+  class LLVM_LIBRARY_VISIBILITY CoroFrameInst : public IntrinsicInst {
+  public:
+    static CoroFrameInst* Create(Instruction* InsertAfter);
+
+    // Methods to support type inquiry through isa, cast, and dyn_cast:
+    static inline bool classof(const IntrinsicInst *I) {
+      return I->getIntrinsicID() == Intrinsic::experimental_coro_frame;
     }
     static inline bool classof(const Value *V) {
       return isa<IntrinsicInst>(V) && classof(cast<IntrinsicInst>(V));

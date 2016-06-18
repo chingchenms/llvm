@@ -64,13 +64,17 @@ static CallInst *makeIndirectCall(Instruction *InsertBefore,
   return CallInst::Create(BI, { V }, "", InsertBefore);
 }
 
-static CallInst *makeIndirectCall(Function *F, Intrinsic::ID IntrinsicID) {
-  // find an insertion point
+static Instruction* findInsertionPoint(Function *F) {
+  // Get the first non alloca instruction
   for (Instruction& I : F->getEntryBlock())
     if (!isa<AllocaInst>(&I))
-      return makeIndirectCall(&I, IntrinsicID);
+      return &I;
 
   llvm_unreachable("no terminator in the entry block");
+}
+
+static CallInst *makeIndirectCall(Function *F, Intrinsic::ID IntrinsicID) {
+  return makeIndirectCall(findInsertionPoint(F), IntrinsicID);
 }
 
 /// addAbstractEdges - Add abstract edges to keep a coroutine
@@ -84,6 +88,10 @@ static void addAbstractEdges(std::initializer_list<CallGraphNode*> Nodes) {
     auto CS = makeIndirectCall(F, Intrinsic::coro_resume_addr);
     (*it)->addCalledFunction(CS, *Target);
   }
+}
+
+void addCall(CallGraphNode *From, CallGraphNode* To) {
+
 }
 
 CoroInfoTy preSplit(CallGraph& CG, Function *F, CoroInitInst *CI)
@@ -119,7 +127,11 @@ CoroInfoTy preSplit(CallGraph& CG, Function *F, CoroInitInst *CI)
   auto DestroyNode = CreateSubFunction("destroy");
   auto CleanupNode = CreateSubFunction("cleanup");
 
-  addAbstractEdges({ CG[F], ResumeNode, DestroyNode, CleanupNode });
+  auto CoroNode = CG[F];
+  addCall(CoroNode, ResumeNode);
+  addCall(ResumeNode, DestroyNode);
+  addCall(DestroyNode, CleanupNode);
+  addCall(CleanupNode, ResumeNode);
 
   Info.Resume = ResumeNode->getFunction();
   Info.Destroy = DestroyNode->getFunction();
