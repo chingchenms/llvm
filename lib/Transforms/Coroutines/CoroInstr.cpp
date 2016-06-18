@@ -38,10 +38,25 @@ CoroEndInst * llvm::CoroEndInst::Create(Instruction * InsertBefore, Value * Addr
   return cast<CoroEndInst>(Call);
 }
 
-///////
+/////// Coroutine Metadata
+
+#define kCoroPreIPOTag     "0 preIPO"
+#define kCoroPreSplitTag   "1 preSplit"
+#define kCoroPostSplitTag  "2 postSplit"
+
+static void setMeta(IntrinsicInst* Intrin, Metadata *MD) {
+  unsigned N = Intrin->getNumArgOperands();
+  Intrin->setArgOperand(N - 1, MetadataAsValue::get(Intrin->getContext(), MD));
+}
+
+static Metadata *getRawMeta(IntrinsicInst* Intrin){
+  unsigned N = Intrin->getNumArgOperands();
+  return cast<MetadataAsValue>(Intrin->getArgOperand(N - 1))->getMetadata();
+}
+
 
 Phase CoroMeta::getPhase() const {
-  auto MD = getRawMeta();
+  auto MD = getRawMeta(Intrin);
   if (dyn_cast<MDString>(MD))
     return Phase::Fresh;
 
@@ -63,7 +78,7 @@ void CoroMeta::setPhase(Phase NewPhase) {
     auto Empty = MDString::get(C, "");
     Metadata *Args[4] = {MDString::get(C, kCoroPreIPOTag),
                          ValueAsMetadata::get(Coroutine), Empty, Empty};
-    setMeta(MDNode::get(C, Args));
+    setMeta(Intrin, MDNode::get(C, Args));
     return;
   }
   char const* Tag;
@@ -75,36 +90,26 @@ void CoroMeta::setPhase(Phase NewPhase) {
   }
 
   LLVMContext &C = Intrin->getContext();
-  auto N = cast<MDNode>(getRawMeta());
+  auto N = cast<MDNode>(getRawMeta(Intrin));
   Metadata *Args[4] = { MDString::get(C, Tag), N->getOperand(1).get(),
     N->getOperand(2).get(), N->getOperand(3).get() };
-  setMeta(MDNode::get(C, Args));
+  setMeta(Intrin, MDNode::get(C, Args));
 }
 
 MDNode::op_range CoroMeta::getParts() {
-  auto N = cast<MDNode>(getRawMeta());
+  auto N = cast<MDNode>(getRawMeta(Intrin));
   auto P = cast<MDNode>(N->getOperand(3));
   return P->operands();
 }
 
 void CoroMeta::setParts(ArrayRef<Metadata *> MDs) {
   assert(getPhase() == Phase::PreIPO && "can only outline in preIPO phase");
-  auto N = cast<MDNode>(getRawMeta());
+  auto N = cast<MDNode>(getRawMeta(Intrin));
 
   LLVMContext &C = Intrin->getContext();
   Metadata *Args[4] = { N->getOperand(0).get(), N->getOperand(1).get(),
     N->getOperand(2).get(), MDNode::get(C, MDs) };
-  setMeta(MDNode::get(C, Args));
-}
-
-void CoroMeta::setMeta(Metadata *MD) {
-  unsigned N = Intrin->getNumArgOperands();
-  Intrin->setArgOperand(N-1, MetadataAsValue::get(Intrin->getContext(), MD));
-}
-
-Metadata *CoroMeta::getRawMeta() const {
-  unsigned N = Intrin->getNumArgOperands();
-  return cast<MetadataAsValue>(Intrin->getArgOperand(N-1))->getMetadata();
+  setMeta(Intrin, MDNode::get(C, Args));
 }
 
 

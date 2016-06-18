@@ -103,19 +103,13 @@ namespace llvm {
     PostSplit
   };
 
-#define kCoroPreIPOTag     "0 preIPO"
-#define kCoroPreSplitTag   "1 preSplit"
-#define kCoroPostSplitTag  "2 postSplit"
-
   // Assumes that the last parameter of the provided intrinsic contains
   // coroutine metadata
-  struct CoroMeta {
+  struct LLVM_LIBRARY_VISIBILITY CoroMeta {
     IntrinsicInst* Intrin;
 
     Phase getPhase() const;
     void setPhase(Phase Ph);
-    void setMeta(Metadata *MD);
-    Metadata *getRawMeta() const;
     void setParts(ArrayRef<Metadata *> MDs);
     MDNode::op_range getParts();
   };
