@@ -16,6 +16,8 @@
 #include <llvm/IR/Instructions.h>
 #include <llvm/IR/Module.h>
 
+#include <array>
+
 using namespace llvm;
 
 CoroFrameInst* CoroFrameInst::Create(Instruction* InsertBefore) {
@@ -54,6 +56,37 @@ static Metadata *getRawMeta(IntrinsicInst* Intrin){
   return cast<MetadataAsValue>(Intrin->getArgOperand(N - 1))->getMetadata();
 }
 
+void CoroMeta::updateFields(
+    std::initializer_list<std::pair<Field, Metadata *>> Fs) {
+
+  auto MD = getRawMeta(Intrin);
+  auto N = dyn_cast<MDNode>(MD);
+  assert(N || isa<MDString>(MD) && "invalid coroutine metadata");
+
+  std::array<Metadata*, Field::COUNT> Args;
+  LLVMContext& C = Intrin->getContext();
+
+  // we we had already a tuple, copy its operands
+  if (N) {
+    unsigned Count = N->getNumOperands();
+    assert(Count == Field::COUNT &&
+      "unexpected number of elements in a coroutine metadata");
+    for (unsigned I = 0; I < Count; ++I)
+      Args[I] = N->getOperand(I);
+  }
+  else { 
+    // otherwise, fill it with empty strings
+    Args.fill(MDString::get(C, ""));
+  }
+
+  // now go through all the pairs an update the fields
+  for (auto const &P : Fs)
+    Args[P.first] = P.second;
+
+  // TODO: add ctor for ArrayRef to take std::array
+  ArrayRef<Metadata*> AR(&*Args.begin(), Args.size());
+  setMeta(Intrin, MDNode::get(C, AR));
+}
 
 Phase CoroMeta::getPhase() const {
   auto MD = getRawMeta(Intrin);
@@ -73,7 +106,7 @@ Phase CoroMeta::getPhase() const {
 void CoroMeta::setPhase(Phase NewPhase) {
   if (NewPhase == Phase::PreIPO) {
     assert(getPhase() == Phase::Fresh && "invalid phase transition");
-    Function* Coroutine = Intrin->getParent()->getParent();
+    Function* Coroutine = Intrin->getFunction();
     LLVMContext& C = Intrin->getContext();
     auto Empty = MDString::get(C, "");
     Metadata *Args[4] = {MDString::get(C, kCoroPreIPOTag),

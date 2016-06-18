@@ -108,6 +108,12 @@ namespace llvm {
   struct LLVM_LIBRARY_VISIBILITY CoroMeta {
     IntrinsicInst* Intrin;
 
+    // Fields of metadata tuple
+    enum Field { Tag, Func, Frame, Parts, Resumers, COUNT };
+
+    // Updates fields of the metadata tuple.
+    void updateFields(std::initializer_list<std::pair<Field, Metadata*>>);
+
     Phase getPhase() const;
     void setPhase(Phase Ph);
     void setParts(ArrayRef<Metadata *> MDs);
