@@ -189,6 +189,7 @@ void llvm::CoroutineShape::buildFrom(Function &F) {
 }
 
 void llvm::initializeCoroutines(PassRegistry &registry) {
+  initializeCoroInlinePass(registry);
   initializeCoroOutlinePass(registry);
   initializeCoroEarlyPass(registry);
   initializeCoroElidePass(registry);
@@ -248,4 +249,23 @@ void llvm::addCoroutinePassesToExtensionPoints(PassManagerBuilder &Builder,
     addCoroutineModuleEarlyPasses);
   Builder.addExtension(PassManagerBuilder::EP_CGSCCOptimizerLate,
     addCoroutineSCCPasses);
+}
+
+CoroInitInst* CoroCommon::findCoroInit(Function* F, Phase P, bool Match) {
+  if (!F->hasFnAttribute(Attribute::Coroutine))
+    return nullptr;
+
+  for (Instruction& I : instructions(*F))
+    if (auto CI = dyn_cast<CoroInitInst>(&I)) {
+      auto Phase = CI->getPhase();
+      if (Match) {
+        if (Phase == P)
+          return CI;
+        continue;
+      }
+      if (Phase != P)
+        return CI;
+    }
+
+  return nullptr;
 }

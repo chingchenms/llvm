@@ -177,15 +177,21 @@ namespace llvm {
       }
     }
 
+    MDNode::op_range getParts() {
+      auto N = cast<MDNode>(getRawMeta());
+      auto P = cast<MDNode>(N->getOperand(3));
+      return P->operands();
+    }
+
     void setMeta(Metadata *MD) {
       setArgOperand(kMeta, MetadataAsValue::get(getContext(), MD));
     }
 
-    void setParts(ArrayRef<Metadata*> MDs) {
+    void setParts(ArrayRef<Metadata *> MDs) {
       assert(getPhase() == Phase::PreIPO && "can only outline in preIPO phase");
       auto N = cast<MDNode>(getRawMeta());
 
-      LLVMContext& C = getContext();
+      LLVMContext &C = getContext();
       Metadata *Args[4] = {N->getOperand(0).get(), N->getOperand(1).get(),
                            N->getOperand(2).get(), MDNode::get(C, MDs)};
       setMeta(MDNode::get(C, Args));

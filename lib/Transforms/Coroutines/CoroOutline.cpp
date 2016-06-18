@@ -66,10 +66,10 @@ static void outlineCoroutineParts(CoroutineShape& S) {
   // Outline the parts and create a metadata tuple, so that CoroSplit
   // pass can quickly figure out what they are.
 
-  LLVMContext& C = F.getContext();
   SmallVector<Metadata *, 8> MDs{
       Outline(".AllocPart", S.CoroAlloc.back(), S.CoroInit.back()),
-      Outline(".InitPart", S.CoroInit.back(), S.CoroBegin.back()),
+      Outline(".InitPart", S.CoroInit.back()->getNextNode(),
+              S.CoroBegin.back()),
       Outline(".FreePart", S.CoroFree.front(), S.CoroEndFinal.front()),
   };
 

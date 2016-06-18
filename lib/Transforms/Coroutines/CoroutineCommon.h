@@ -39,6 +39,7 @@ private:
 struct LLVM_LIBRARY_VISIBILITY CoroCommon {
   static void removeLifetimeIntrinsics(Function &F);
   static void constantFoldUsers(Constant* Value);
+  static CoroInitInst* findCoroInit(Function* F, Phase P, bool Match = true);
 };
 
 /// Holds all structural Coroutine Intrinsics for a particular function.
