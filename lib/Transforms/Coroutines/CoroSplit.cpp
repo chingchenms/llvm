@@ -205,9 +205,9 @@ static void mem2reg(Function& F) {
 
 static void splitCoroutine(Function& F, CoroInitInst * CI) {
   DEBUG(dbgs() << "Splitting coroutine: " << F.getName() << "\n");
-  if (CI->getPhase() == Phase::PreIPO) {
+  if (CI->meta().getPhase() == Phase::PreIPO) {
     // TODO: remove inliner field from flags
-    CI->setPhase(Phase::PreSplit);
+    CI->meta().setPhase(Phase::PreSplit);
     return;
   }
   mem2reg(F);

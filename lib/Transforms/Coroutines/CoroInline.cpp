@@ -51,7 +51,7 @@ public:
     for (CallGraphNode *CGN : SCC)
       if (auto F = CGN->getFunction())
         if (auto CI = CoroCommon::findCoroInit(F, Phase::PreSplit))
-          changed |= processParts(CI->getParts());
+          changed |= processParts(CI->meta().getParts());
 
     return changed;
   }

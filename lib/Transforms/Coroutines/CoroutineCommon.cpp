@@ -257,7 +257,7 @@ CoroInitInst* CoroCommon::findCoroInit(Function* F, Phase P, bool Match) {
 
   for (Instruction& I : instructions(*F))
     if (auto CI = dyn_cast<CoroInitInst>(&I)) {
-      auto Phase = CI->getPhase();
+      auto Phase = CI->meta().getPhase();
       if (Match) {
         if (Phase == P)
           return CI;

@@ -84,7 +84,7 @@ static void outlineCoroutineParts(CoroutineShape& S) {
       Outline(".SuspendPart", SI->getCoroSave(), SI->getNextNode()));
   }
 
-  S.CoroInit.back()->setParts(MDs);
+  S.CoroInit.back()->meta().setParts(MDs);
 }
 
 static bool processModule(Module& M) {
@@ -94,7 +94,7 @@ static bool processModule(Module& M) {
   // Find all unprocessed coroutines.
   for (User* U : CoroInitFn->users())
     if (auto CoroInit = dyn_cast<CoroInitInst>(U))
-      if (CoroInit->getPhase() == Phase::PreIPO)
+      if (CoroInit->meta().getPhase() == Phase::PreIPO)
         Coroutines.push_back(CoroInit->getParent()->getParent());
 
   // Outline coroutine parts to guard against code movement

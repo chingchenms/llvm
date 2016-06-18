@@ -167,7 +167,7 @@ struct CoroEarly : public FunctionPass {
       return false;
 
     Shape.buildFrom(F);
-    Shape.CoroInit.back()->setPhase(Phase::PreIPO);
+    Shape.CoroInit.back()->meta().setPhase(Phase::PreIPO);
     return true;
   }
 

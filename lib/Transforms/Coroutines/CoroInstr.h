@@ -107,55 +107,27 @@ namespace llvm {
 #define kCoroPreSplitTag   "1 preSplit"
 #define kCoroPostSplitTag  "2 postSplit"
 
+  // Assumes that the last parameter of the provided intrinsic contains
+  // coroutine metadata
+  struct CoroMeta {
+    IntrinsicInst* Intrin;
+
+    Phase getPhase() const;
+    void setPhase(Phase Ph);
+    void setMeta(Metadata *MD);
+    Metadata *getRawMeta() const;
+    void setParts(ArrayRef<Metadata *> MDs);
+    MDNode::op_range getParts();
+  };
 
   /// This represents the llvm.coro.init instruction.
   class LLVM_LIBRARY_VISIBILITY CoroInitInst : public IntrinsicInst {
     enum { kMem, kAlloc, kAlign, kPromise, kMeta };
   public:
 
-    Phase getPhase() const {
-      auto MD = getRawMeta();
-      if (dyn_cast<MDString>(MD))
-        return Phase::Fresh;
-
-      auto N = dyn_cast<MDNode>(MD);
-      assert(N && "invalid metadata on CoroInit instruction");
-
-      // {!"tag", {elide-info}, {outline-info}}
-      return StringSwitch<Phase>(cast<MDString>(N->getOperand(0))->getString())
-        .Case(kCoroPreIPOTag, Phase::PreIPO)
-        .Case(kCoroPreSplitTag, Phase::PreSplit)
-        .Default(Phase::PostSplit);
-    }
-
-    struct CoroMeta {
-
-    };
-
-    void setPhase(Phase Ph) {
-      if (Ph == Phase::PreIPO) {
-        assert(getPhase() == Phase::Fresh && "invalid phase transition");
-        LLVMContext& C = getContext();
-        auto Empty = MDString::get(C, "");
-        Metadata *Args[4] = {
-            MDString::get(C, kCoroPreIPOTag), ValueAsMetadata::get(getCoroutine()), Empty, Empty};
-        setMeta(MDNode::get(C, Args));
-        return;
-      }
-      char const* Tag;
-      switch (Ph) {
-      case Phase::PreSplit: Tag = kCoroPreSplitTag; break;
-      case Phase::PostSplit: Tag = kCoroPostSplitTag; break;
-      default:
-        llvm_unreachable("unexpected phase tag");
-      }
-
-      LLVMContext &C = getContext();
-      auto N = cast<MDNode>(getRawMeta());
-      Metadata *Args[4] = {MDString::get(C, Tag), N->getOperand(1).get(),
-                           N->getOperand(2).get(), N->getOperand(3).get()};
-      setMeta(MDNode::get(C, Args));
-    }
+    /// Provides a helpful Coroutine Metadata manipulation wrapper
+    CoroMeta meta() { return{ this }; }
+    CoroMeta meta() const { return {const_cast<CoroInitInst *>(this)}; }
 
     CoroAllocInst *getAlloc() const {
       return dyn_cast<CoroAllocInst>(getArgOperand(kAlloc));
@@ -167,52 +139,8 @@ namespace llvm {
       return cast<ConstantInt>(getArgOperand(kAlign));
     }
 
-    Function *getCoroutine() const {
-      switch (getPhase()) {
-      case Phase::Fresh:
-        return const_cast<Function*>(cast<Function>(getParent()->getParent()));
-      case Phase::PostSplit:
-        return nullptr; // no longer a coroutine
-      default:
-        auto MD = getRawMeta();
-        auto N = dyn_cast<MDNode>(MD);
-        return cast<Function>(
-            cast<ValueAsMetadata>(N->getOperand(1))->getValue());
-      }
-    }
-
-    MDNode::op_range getResumer() {
-      auto N = cast<MDNode>(getRawMeta());
-      auto P = cast<MDNode>(N->getOperand(2));
-      return P->operands();
-    }
-
-    void setMeta(Metadata *MD) {
-      setArgOperand(kMeta, MetadataAsValue::get(getContext(), MD));
-    }
-
-    MDNode::op_range getParts() {
-      auto N = cast<MDNode>(getRawMeta());
-      auto P = cast<MDNode>(N->getOperand(3));
-      return P->operands();
-    }
-
-    void setParts(ArrayRef<Metadata *> MDs) {
-      assert(getPhase() == Phase::PreIPO && "can only outline in preIPO phase");
-      auto N = cast<MDNode>(getRawMeta());
-
-      LLVMContext &C = getContext();
-      Metadata *Args[4] = {N->getOperand(0).get(), N->getOperand(1).get(),
-                           N->getOperand(2).get(), MDNode::get(C, MDs)};
-      setMeta(MDNode::get(C, Args));
-    }
-
-    Metadata *getRawMeta() const {
-      return cast<MetadataAsValue>(getArgOperand(kMeta))->getMetadata();
-    }
-
-    bool isUntouched() const { return getPhase() == Phase::Fresh; }
-    bool isPostSplit() const { return getPhase() >= Phase::PostSplit; }
+    bool isUntouched() const { return meta().getPhase() == Phase::Fresh; }
+    bool isPostSplit() const { return meta().getPhase() >= Phase::PostSplit; }
     bool isPreSplit() const { return !isPostSplit(); }
 
     // Methods for support type inquiry through isa, cast, and dyn_cast:
