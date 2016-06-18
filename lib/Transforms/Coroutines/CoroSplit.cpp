@@ -40,30 +40,6 @@ namespace {
   };
 }
 
-PointerType* getResumerType(LLVMContext& C) {
-  auto FnTy = FunctionType::get(Type::getVoidTy(C), Type::getInt8PtrTy(C), /*isVarArg=*/false);
-  return PointerType::get(FnTy, 0);
-}
-
-static CallInst *makeIndirectCall(Instruction *InsertBefore,
-                                  Intrinsic::ID IntrinsicID,
-                                  Value *V = nullptr) {
-  BasicBlock* BB = InsertBefore->getParent();
-  Function* F = BB->getParent();
-  Module* M = F->getParent();
-  auto Fn = Intrinsic::getDeclaration(M, IntrinsicID);
-  auto Fty = cast<FunctionType>(Fn->getType()->getElementType());
-  if (V == nullptr) {
-    // Figure out what type it needs
-    auto ParamTy = Fty->getParamType(0);
-    V = ConstantPointerNull::get(cast<PointerType>(ParamTy));
-  }
-  LLVMContext& C = M->getContext();
-  auto CI = CallInst::Create(Fn, { V }, "", InsertBefore);
-  auto BI = new BitCastInst(CI, getResumerType(C), "", InsertBefore);
-  return CallInst::Create(BI, { V }, "", InsertBefore);
-}
-
 static Instruction* findInsertionPoint(Function *F) {
   // Get the first non alloca instruction
   for (Instruction& I : F->getEntryBlock())
@@ -73,15 +49,18 @@ static Instruction* findInsertionPoint(Function *F) {
   llvm_unreachable("no terminator in the entry block");
 }
 
-static CallInst *makeIndirectCall(Function *F, Intrinsic::ID IntrinsicID) {
-  return makeIndirectCall(findInsertionPoint(F), IntrinsicID);
-}
-
-static CallInst* makeCallWithUndefArgs(Function* Caller, Function* Callee) {
+// insert nulls for pointer parameters and undef for others
+static CallInst* makeFakeCall(Function* Caller, Function* Callee) {
   FunctionType* FTy = Callee->getFunctionType();
   SmallVector<Value*, 8> Args;
-  for (Type* Ty : FTy->params())
-    Args.push_back(UndefValue::get(Ty));
+  for (Type* Ty : FTy->params()) {
+    Value* V = nullptr;
+    if (auto PTy = dyn_cast<PointerType>(Ty))
+      V = ConstantPointerNull::get(PTy);
+    else
+      V = UndefValue::get(Ty);
+    Args.push_back(V);
+  }
 
   auto InsertPt = findInsertionPoint(Caller);
   return CallInst::Create(Callee, Args, "", InsertPt);
@@ -95,7 +74,7 @@ static void addAbstractEdges(std::initializer_list<CallGraphNode*> Nodes) {
     auto Next = it + 1;
     auto Target = (Next == e) ? Nodes.begin() : Next;
     auto F = (*it)->getFunction();
-    auto CS = makeCallWithUndefArgs(F, (*Target)->getFunction());
+    auto CS = makeFakeCall(F, (*Target)->getFunction());
     (*it)->addCalledFunction(CS, *Target);
   }
 }
@@ -111,23 +90,6 @@ void addCallToCoroutine(CallGraphNode *From, CallGraphNode* To) {
 
   auto InsertPt = findInsertionPoint(F);
   auto CS = CallInst::Create(Callee, Args, "", InsertPt);
-  From->addCalledFunction(CS, To);
-}
-
-void addCall(CallGraphNode *From, CallGraphNode* To, Type* ArgType) {
-  Function* F = From->getFunction();
-  Function* Callee = To->getFunction();
-  Value* V = nullptr; 
-  Instruction* InsertPt = F->getEntryBlock().getTerminator();
-  if (F->hasFnAttribute(Attribute::Coroutine)) {
-    InsertPt = findInsertionPoint(F);
-    V = CoroFrameInst::Create(InsertPt);
-    V = new BitCastInst(V, ArgType, "", InsertPt);
-  }
-  else {
-    V = &F->getArgumentList().front();
-  }
-  auto CS = CallInst::Create(Callee, { V }, "", InsertPt);
   From->addCalledFunction(CS, To);
 }
 

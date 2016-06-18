@@ -88,6 +88,7 @@ namespace llvm {
     }
   };
 
+
   // Coroutine transformation occurs in phases tracked by
   // CoroInitInstr
   //    P
@@ -127,6 +128,10 @@ namespace llvm {
         .Default(Phase::PostSplit);
     }
 
+    struct CoroMeta {
+
+    };
+
     void setPhase(Phase Ph) {
       if (Ph == Phase::PreIPO) {
         assert(getPhase() == Phase::Fresh && "invalid phase transition");
@@ -162,34 +167,6 @@ namespace llvm {
       return cast<ConstantInt>(getArgOperand(kAlign));
     }
 
-#if 0
-    /// isUntouched() returns true if no coroutine passes
-    /// transformed coroutine yet.
-    bool isUntouched() const {
-      // If it is a string, it means it is straight out of the frontend
-      return isa<MDString>(getRawMeta());
-    }
-    MDNode *getParts() const {
-      auto MD = getRawMeta();
-      if (auto N = dyn_cast<MDNode>(MD))
-        if (N->getNumOperands() > 1)
-          if (cast<MDString>(N->getOperand(0))->getString() ==
-              kCoroEarlyTagStr)
-            return N;
-      return nullptr;
-    }
-
-    MDNode *getResumers() const {
-      auto MD = getRawMeta();
-      if (auto N = dyn_cast<MDNode>(MD))
-        if (N->getNumOperands() > 1)
-          if (cast<MDString>(N->getOperand(0))->getString() ==
-            kCoroSplitTagStr)
-            return N;
-      return nullptr;
-    }
-#endif
-
     Function *getCoroutine() const {
       switch (getPhase()) {
       case Phase::Fresh:
@@ -204,14 +181,20 @@ namespace llvm {
       }
     }
 
-    MDNode::op_range getParts() {
+    MDNode::op_range getResumer() {
       auto N = cast<MDNode>(getRawMeta());
-      auto P = cast<MDNode>(N->getOperand(3));
+      auto P = cast<MDNode>(N->getOperand(2));
       return P->operands();
     }
 
     void setMeta(Metadata *MD) {
       setArgOperand(kMeta, MetadataAsValue::get(getContext(), MD));
+    }
+
+    MDNode::op_range getParts() {
+      auto N = cast<MDNode>(getRawMeta());
+      auto P = cast<MDNode>(N->getOperand(3));
+      return P->operands();
     }
 
     void setParts(ArrayRef<Metadata *> MDs) {
