@@ -103,7 +103,15 @@ void addCall(CallGraphNode *From, CallGraphNode* To, Type* ArgType) {
   else {
     V = &F->getArgumentList().front();
   }
-  auto CS = CallInst::Create(Callee, { V }, "", InsertPt);
+  Value* CalleeValue = nullptr;
+  if (Callee->hasFnAttribute(Attribute::Coroutine)) {
+    auto FTy = F->getFunctionType()->getPointerTo();
+    CalleeValue = new BitCastInst(Callee, FTy, "", InsertPt);
+  }
+  else {
+    CalleeValue = Callee;
+  }
+  auto CS = CallInst::Create(CalleeValue, { V }, "", InsertPt);
   From->addCalledFunction(CS, To);
 }
 
@@ -148,7 +156,7 @@ CoroInfoTy preSplit(CallGraph& CG, Function *F, CoroInitInst *CI)
   addCall(CoroNode, ResumeNode, FramePtrTy);
   addCall(ResumeNode, DestroyNode, FramePtrTy);
   addCall(DestroyNode, CleanupNode, FramePtrTy);
-  addCall(CleanupNode, ResumeNode, FramePtrTy);
+  addCall(CleanupNode, CoroNode, FramePtrTy);
 
   Info.Resume = ResumeNode->getFunction();
   Info.Destroy = DestroyNode->getFunction();
@@ -217,6 +225,7 @@ static void mem2reg(Function& F) {
 static void splitCoroutine(Function& F, CoroInitInst * CI) {
   DEBUG(dbgs() << "Splitting coroutine: " << F.getName() << "\n");
   if (CI->getPhase() == Phase::PreIPO) {
+    // TODO: remove inliner field from flags
     CI->setPhase(Phase::PreSplit);
     return;
   }
