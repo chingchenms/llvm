@@ -69,7 +69,7 @@ static MDString* phaseToTag(LLVMContext& C, Phase NewPhase) {
 }
 
 void CoroMeta::updateFields(
-    std::initializer_list<std::pair<Field, Metadata *>> Fs, Phase NewPhase) {
+    std::initializer_list<std::pair<Field, Value *>> Fs, Phase NewPhase) {
 
   auto MD = getRawMeta(Intrin);
   auto N = dyn_cast<MDNode>(MD);
@@ -100,7 +100,7 @@ void CoroMeta::updateFields(
   for (auto const &P : Fs) {
     assert(P.first > Field::Tag &&
            "update tag field via dedicate NewPhase parameter");
-    Args[P.first] = P.second;
+    Args[P.first] = ValueAsMetadata::get(P.second);
   }
 
   // TODO: add ctor for ArrayRef to take std::array

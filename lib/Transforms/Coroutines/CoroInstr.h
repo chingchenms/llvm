@@ -114,7 +114,7 @@ namespace llvm {
     // Updates fields of the metadata tuple.
     // Default value Phase::Fresh is used to indicate that no updates
     // to tag is requested. 
-    void updateFields(std::initializer_list<std::pair<Field, Metadata *>>,
+    void updateFields(std::initializer_list<std::pair<Field, Value *>>,
       Phase NewPhase = Phase::Fresh);
 
     Phase getPhase() const;
