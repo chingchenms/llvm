@@ -20,6 +20,8 @@
 #ifndef LLVM_LIB_TRANSFORMS_COROUTINES_COROINSTR_H
 #define LLVM_LIB_TRANSFORMS_COROUTINES_COROINSTR_H
 
+#include "CoroMeta.h"
+
 #include <llvm/IR/IntrinsicInst.h>
 #include <llvm/ADT/StringSwitch.h>
 
@@ -86,41 +88,6 @@ namespace llvm {
     static inline bool classof(const Value *V) {
       return isa<IntrinsicInst>(V) && classof(cast<IntrinsicInst>(V));
     }
-  };
-
-
-  // Coroutine transformation occurs in phases tracked by
-  // CoroInitInstr
-  //    P
-  enum class Phase {
-    // Straight out of the front end
-    Fresh,
-    // Before interprocedural pipeline starts
-    PreIPO,
-    // Before coroutine is split
-    PreSplit,
-    // After coroutine is split
-    PostSplit
-  };
-
-  // Assumes that the last parameter of the provided intrinsic contains
-  // coroutine metadata
-  struct LLVM_LIBRARY_VISIBILITY CoroMeta {
-    IntrinsicInst* Intrin;
-
-    // Fields of metadata tuple
-    enum Field { Tag, Func, Frame, Parts, Resumers, COUNT };
-
-    // Updates fields of the metadata tuple.
-    // Default value Phase::Fresh is used to indicate that no updates
-    // to tag is requested. 
-    void updateFields(std::initializer_list<std::pair<Field, Value *>>,
-      Phase NewPhase = Phase::Fresh);
-
-    Phase getPhase() const;
-    void setPhase(Phase NewPhase);
-    void setParts(ArrayRef<Metadata *> MDs);
-    MDNode::op_range getParts();
   };
 
   /// This represents the llvm.coro.init instruction.
