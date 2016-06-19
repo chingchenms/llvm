@@ -40,9 +40,9 @@ namespace llvm {
     // Straight out of the front end
     Fresh,
     // Before interprocedural pipeline starts
-    PreIPO,
+    NotReadyForSplit,
     // Before coroutine is split
-    PreSplit,
+    ReadyForSplit,
     // After coroutine is split
     PostSplit
   };

@@ -69,20 +69,6 @@ static void addCallsToEachOther(ArrayRef<CallGraphNode *> Nodes) {
   }
 }
 
-void addCallToCoroutine(CallGraphNode *From, CallGraphNode* To) {
-  Function* F = From->getFunction();
-  Function* Callee = To->getFunction();
-  assert(Callee->hasFnAttribute(Attribute::Coroutine));
-  FunctionType* FTy = Callee->getFunctionType();
-  SmallVector<Value*, 8> Args;
-  for (Type* Ty : FTy->params())
-    Args.push_back(UndefValue::get(Ty));
-
-  auto InsertPt = findInsertionPoint(F);
-  auto CS = CallInst::Create(Callee, Args, "", InsertPt);
-  From->addCalledFunction(CS, To);
-}
-
 static void addIndirectCall(CallGraph &CG, CallGraphNode *CoroNode,
                             CoroInitInst *CI, CoroInfo const& Info) {
   IRBuilder<> Builder(CI->getNextNode());
@@ -94,6 +80,7 @@ static void addIndirectCall(CallGraph &CG, CallGraphNode *CoroNode,
   auto Fn = Builder.CreateBitCast(Addr, FnPtrType);
   auto Arg = Builder.CreateBitCast(CI, Info.FrameType->getPointerTo());
   auto CS = Builder.CreateCall(Fn, Arg);
+  CS->setCallingConv(CallingConv::Fast);
 
   CoroNode->addCalledFunction(CS, CG.getCallsExternalNode());
 }
@@ -220,11 +207,19 @@ static CallGraphNode* functionToCGN(Function* F, CallGraphSCC &SCC) {
 
 static void preSplitPass(CoroInitInst * CI, CallGraphSCC &SCC) {
   // 1. If there are parts, replace noinline with alwaysinline. (TODO)
+
+  for (MDOperand const& P : CI->meta().getParts()) {
+    auto SubF = cast<Function>(cast<ValueAsMetadata>(P)->getValue());
+    SubF->removeFnAttr(Attribute::NoInline);
+    SubF->addFnAttr(Attribute::AlwaysInline);
+  }
+
   // 2. Remove fake calls that make coroutine and its resumers to be
   //    in the same SCC.
 
   Function& F = *CI->getFunction();
   CallGraphNode* CoroNode = functionToCGN(&F, SCC);
+
   CoroInfo Info = CI->meta().getCoroInfo();
   SmallVector<CallGraphNode*, 4> CGNs;
   CGNs.push_back(CoroNode);
@@ -235,7 +230,8 @@ static void preSplitPass(CoroInitInst * CI, CallGraphSCC &SCC) {
   for (unsigned I = 0, N = CGNs.size(); I < N; ++I)
     removeCall(CGNs[I], CGNs[(I+1) % N]);
 
-  CI->meta().setPhase(Phase::PreSplit);
+  // 3. Finally, indicate that the coroutine is ready for Split
+  CI->meta().setPhase(Phase::ReadyForSplit);
 }
 
 static void splitCoroutine(CoroInitInst * CI) {
@@ -278,7 +274,7 @@ namespace {
         return false;
 
       for (CoroInitInst* CoroInit : CIs)
-        if (CoroInit->meta().getPhase() == Phase::PreIPO)
+        if (CoroInit->meta().getPhase() == Phase::NotReadyForSplit)
           preSplitPass(CoroInit, SCC);
         else
           splitCoroutine(CoroInit);
@@ -289,9 +285,22 @@ namespace {
 }
 
 char CoroSplit::ID = 0;
+#if 1
 INITIALIZE_PASS(
-  CoroSplit, "coro-split",
-  "Split coroutine into a set of functions driving its state machine", false,
-  false);
-
+    CoroSplit, "coro-split",
+    "Split coroutine into a set of functions driving its state machine", false,
+    false);
+#else
+INITIALIZE_PASS_BEGIN(
+    CoroSplit, "coro-split",
+    "Split coroutine into a set of functions driving its state machine", false,
+    false)
+INITIALIZE_PASS_DEPENDENCY(AssumptionCacheTracker)
+INITIALIZE_PASS_DEPENDENCY(CallGraphWrapperPass)
+INITIALIZE_PASS_DEPENDENCY(TargetLibraryInfoWrapperPass)
+INITIALIZE_PASS_END(
+    CoroSplit, "coro-split",
+    "Split coroutine into a set of functions driving its state machine", false,
+    false)
+#endif
 Pass *llvm::createCoroSplitPass() { return new CoroSplit(); }

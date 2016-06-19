@@ -26,8 +26,8 @@ using namespace llvm;
 
 /////// Coroutine Metadata
 
-#define kCoroPreIPOTag     "0 preIPO"
-#define kCoroPreSplitTag   "1 preSplit"
+#define kCoroPreIPOTag     "0 notReadyForSplit"
+#define kCoroPreSplitTag   "1 readyForSplit"
 #define kCoroPostSplitTag  "2 postSplit"
 
 static void setMeta(IntrinsicInst* Intrin, Metadata *MD) {
@@ -43,8 +43,8 @@ static Metadata *getRawMeta(IntrinsicInst* Intrin){
 static MDString* phaseToTag(LLVMContext& C, Phase NewPhase) {
   const char* Tag = nullptr;
   switch (NewPhase) {
-  case Phase::PreIPO: Tag = kCoroPreIPOTag; break;
-  case Phase::PreSplit: Tag = kCoroPreSplitTag; break;
+  case Phase::NotReadyForSplit: Tag = kCoroPreIPOTag; break;
+  case Phase::ReadyForSplit: Tag = kCoroPreSplitTag; break;
   case Phase::PostSplit: Tag = kCoroPostSplitTag; break;
   default:
     llvm_unreachable("unexpected phase tag");
@@ -130,8 +130,8 @@ Phase CoroMeta::getPhase() const {
 
   // {!"tag", {elide-info}, {outline-info}}
   return StringSwitch<Phase>(cast<MDString>(N->getOperand(0))->getString())
-    .Case(kCoroPreIPOTag, Phase::PreIPO)
-    .Case(kCoroPreSplitTag, Phase::PreSplit)
+    .Case(kCoroPreIPOTag, Phase::NotReadyForSplit)
+    .Case(kCoroPreSplitTag, Phase::ReadyForSplit)
     .Default(Phase::PostSplit);
 }
 
@@ -146,7 +146,7 @@ MDNode::op_range CoroMeta::getParts() {
 }
 
 void CoroMeta::setParts(ArrayRef<Metadata *> MDs) {
-  assert(getPhase() == Phase::PreIPO && "can only outline in preIPO phase");
+  assert(getPhase() == Phase::NotReadyForSplit && "can only outline in preIPO phase");
   update({{Field::Parts, MDs, Intrin->getContext()}});
 }
 

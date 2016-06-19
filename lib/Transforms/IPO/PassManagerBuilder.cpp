@@ -396,8 +396,8 @@ void PassManagerBuilder::populateModulePassManager(
   if (OptLevel > 2)
     MPM.add(createArgumentPromotionPass()); // Scalarize uninlined fn args
 
-  addFunctionSimplificationPasses(MPM);
   addExtensionsToPM(EP_CGSCCOptimizerLate, MPM);
+  addFunctionSimplificationPasses(MPM);
 
   // If we are planning to perform ThinLTO later, let's not bloat the code with
   // unrolling/vectorization/... now. We'll first run the inliner + CGSCC passes

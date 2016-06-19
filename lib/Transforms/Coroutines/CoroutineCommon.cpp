@@ -250,12 +250,16 @@ static void addCoroutineModuleEarlyPasses(const PassManagerBuilder &Builder,
   // addPass(PM, createCoroLatePass());
 }
 
+static void addCoroutineScalarOptimizerPasses(const PassManagerBuilder &Builder,
+  PassManagerBase &PM) {
+  addPass(PM, createCoroElidePass());
+}
+
 static void addCoroutineSCCPasses(const PassManagerBuilder &Builder,
                                   PassManagerBase &PM) {
   if (Builder.OptLevel > 0) {
     //addPass(PM, createCoroInlinePass());
     addPass(PM, createCoroSplitPass());
-    addPass(PM, createCoroElidePass());
   }
 }
 
@@ -269,4 +273,7 @@ void llvm::addCoroutinePassesToExtensionPoints(PassManagerBuilder &Builder,
     addCoroutineModuleEarlyPasses);
   Builder.addExtension(PassManagerBuilder::EP_CGSCCOptimizerLate,
     addCoroutineSCCPasses);
+  Builder.addExtension(PassManagerBuilder::EP_ScalarOptimizerLate,
+    addCoroutineScalarOptimizerPasses);
+  // TODO: run CoroCleanup at EP_OptimizerLast
 }

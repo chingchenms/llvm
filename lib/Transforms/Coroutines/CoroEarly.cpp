@@ -169,7 +169,7 @@ struct CoroEarly : public FunctionPass {
     Shape.buildFrom(F);
 
     Shape.CoroInit.back()->meta().update({
-      {Phase::PreIPO, F.getContext()},
+      {Phase::NotReadyForSplit, F.getContext()},
       {CoroMeta::Field::Func, &F}
     });
     return true;

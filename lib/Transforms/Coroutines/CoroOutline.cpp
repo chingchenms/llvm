@@ -94,7 +94,7 @@ static bool processModule(Module& M) {
   // Find all unprocessed coroutines.
   for (User* U : CoroInitFn->users())
     if (auto CoroInit = dyn_cast<CoroInitInst>(U))
-      if (CoroInit->meta().getPhase() == Phase::PreIPO)
+      if (CoroInit->meta().getPhase() == Phase::NotReadyForSplit)
         Coroutines.push_back(CoroInit->getParent()->getParent());
 
   // Outline coroutine parts to guard against code movement

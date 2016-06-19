@@ -101,8 +101,8 @@ public:
 
     /// EP_CGSCCOptimizerLate - This extension point allows adding passes that
     /// perform optimizations at every SCC after all other SCC passes.
-    /// Extensions added at ths point should not be module passes as those
-    /// will terminate CGSCC Pipeline
+    /// Extensions added at ths point just before function simplification
+    /// functional passes would run.
     EP_CGSCCOptimizerLate,
   };
 
