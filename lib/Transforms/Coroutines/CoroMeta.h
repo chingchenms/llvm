@@ -67,6 +67,7 @@ namespace llvm {
 
     MDNode::op_range getParts();
     void setParts(ArrayRef<Metadata *> MDs);
+
   };
 
 } // end namespace llvm

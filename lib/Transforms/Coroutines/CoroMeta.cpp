@@ -103,7 +103,7 @@ void CoroMeta::update(std::initializer_list<Setter> Updates) {
   }
 
   DEBUG(dbgs() << "--- metadata update for " << Intrin->getFunction()->getName()
-               << "-----\n");
+               << " -----\n");
   // now go through all the pairs an update the fields
   for (auto const &U : Updates) {
     DEBUG(Args[U.FieldNo]->print(dbgs(), Intrin->getModule(), true));

@@ -147,7 +147,10 @@ CoroInfoTy preSplit(CallGraph& CG, Function *F, CoroInitInst *CI)
 }
 
 void updateMetadata(CoroInitInst* CI, CoroInfoTy& Info) {
-
+  CI->meta().update(
+      {CoroMeta::Setter{Info.FrameTy},
+       CoroMeta::Setter{CoroMeta::Field::Resumers,
+                        {Info.Resume, Info.Destroy, Info.Cleanup}}});
 }
 
 #if 0
@@ -206,7 +209,6 @@ static void mem2reg(Function& F) {
 static void splitCoroutine(Function& F, CoroInitInst * CI) {
   DEBUG(dbgs() << "Splitting coroutine: " << F.getName() << "\n");
   if (CI->meta().getPhase() == Phase::PreIPO) {
-    // TODO: remove inliner field from flags
     CI->meta().setPhase(Phase::PreSplit);
     return;
   }
