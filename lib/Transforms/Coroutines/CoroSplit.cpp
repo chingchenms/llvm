@@ -31,14 +31,6 @@ using namespace llvm;
 // that we will fill later during runOnSCC.
 // This structure will keep information about
 // the functions we created during doInitialize
-namespace {
-  struct CoroInfoTy {
-    StructType* FrameTy;
-    Function* Resume;
-    Function* Destroy;
-    Function* Cleanup;
-  };
-}
 
 static Instruction* findInsertionPoint(Function *F) {
   // Get the first non alloca instruction
@@ -93,9 +85,9 @@ void addCallToCoroutine(CallGraphNode *From, CallGraphNode* To) {
   From->addCalledFunction(CS, To);
 }
 
-CoroInfoTy preSplit(CallGraph& CG, Function *F, CoroInitInst *CI)
+CoroInfo preSplit(CallGraph& CG, Function *F, CoroInitInst *CI)
 {
-  CoroInfoTy Info;
+  CoroInfo Info;
 
   SmallString<64> Name(F->getName());
   Name.push_back('.');
@@ -103,9 +95,9 @@ CoroInfoTy preSplit(CallGraph& CG, Function *F, CoroInitInst *CI)
 
   Name.append("frame");
   LLVMContext& Ctx = F->getContext();
-  Info.FrameTy = StructType::create(Ctx, Name);
+  Info.FrameType = StructType::create(Ctx, Name);
   auto AS = CI->getMem()->getType()->getPointerAddressSpace();
-  auto FramePtrTy = PointerType::get(Info.FrameTy, AS);
+  auto FramePtrTy = PointerType::get(Info.FrameType, AS);
 
   auto FnTy = FunctionType::get(
     Type::getVoidTy(Ctx),
@@ -146,11 +138,13 @@ CoroInfoTy preSplit(CallGraph& CG, Function *F, CoroInitInst *CI)
   return Info;
 }
 
-void updateMetadata(CoroInitInst* CI, CoroInfoTy& Info) {
+void updateMetadata(CoroInitInst* CI, CoroInfo& Info) {
   CI->meta().update(
-      {CoroMeta::Setter{Info.FrameTy},
+      {CoroMeta::Setter{Info.FrameType},
        CoroMeta::Setter{CoroMeta::Field::Resumers,
                         {Info.Resume, Info.Destroy, Info.Cleanup}}});
+
+  CI->meta().getCoroInfo();
 }
 
 #if 0
@@ -178,7 +172,7 @@ static bool preSplitCoroutines(CallGraph &CG) {
     if (!CoroInit)
       continue;
 
-    CoroInfoTy Info = preSplit(CG, &F, CoroInit);
+    CoroInfo Info = preSplit(CG, &F, CoroInit);
     updateMetadata(CoroInit, Info);
     changed = true;
   }

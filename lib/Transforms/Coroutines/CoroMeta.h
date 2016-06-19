@@ -26,6 +26,15 @@ namespace llvm {
   class Value;
   class Metadata;
 
+  struct LLVM_LIBRARY_VISIBILITY CoroInfo {
+    Type* FrameType;
+    Function* Resume;
+    Function* Destroy;
+    Function* Cleanup;
+
+    void dump();
+  };
+
   // Coroutine transformation occurs in phases tracked by CoroInitInstr
   enum class Phase {
     // Straight out of the front end
@@ -67,6 +76,8 @@ namespace llvm {
 
     MDNode::op_range getParts();
     void setParts(ArrayRef<Metadata *> MDs);
+
+    CoroInfo getCoroInfo();
 
   };
 

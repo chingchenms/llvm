@@ -65,8 +65,7 @@ static MDTuple* valuesToMDTuple(ArrayRef<Value*> Values) {
 
 CoroMeta::Setter::Setter(Type *T)
     : FieldNo(Field::Frame),
-      NewValue(
-          ValueAsMetadata::get(ConstantPointerNull::get(T->getPointerTo()))) {}
+      NewValue(ValueAsMetadata::get(UndefValue::get(T))) {}
 
 CoroMeta::Setter::Setter(Phase NewPhase, LLVMContext &C)
     : FieldNo(Field::Tag), NewValue(phaseToTag(C, NewPhase)) {}
@@ -142,7 +141,7 @@ void CoroMeta::setPhase(Phase NewPhase) {
 
 MDNode::op_range CoroMeta::getParts() {
   auto N = cast<MDNode>(getRawMeta(Intrin));
-  auto P = cast<MDNode>(N->getOperand(3));
+  auto P = cast<MDNode>(N->getOperand(Field::Parts));
   return P->operands();
 }
 
@@ -151,7 +150,32 @@ void CoroMeta::setParts(ArrayRef<Metadata *> MDs) {
   update({{Field::Parts, MDs, Intrin->getContext()}});
 }
 
+CoroInfo CoroMeta::getCoroInfo() { 
+  auto MD = getRawMeta(Intrin);
+  auto N = cast<MDNode>(MD);
+  auto Rs = cast<MDNode>(N->getOperand(Field::Resumers));
+  auto Fr = cast<ValueAsMetadata>(N->getOperand(Field::Frame));
 
+  CoroInfo Info;
+  Info.FrameType = Fr->getValue()->getType();
 
+  auto getFunc = [](MDNode *N, unsigned No) {
+    return cast<Function>(cast<ValueAsMetadata>(N->getOperand(No))->getValue());
+  };
 
+  Info.Resume = getFunc(Rs, 0);
+  Info.Destroy = getFunc(Rs, 1);
+  Info.Cleanup = getFunc(Rs, 2);
 
+  DEBUG(Info.dump());
+
+  return Info;
+}
+
+void CoroInfo::dump() {
+  dbgs() << "-------- CoroInfo -------\n"; 
+  FrameType->dump();
+  dbgs() << Resume->getName() << "\n";
+  dbgs() << Destroy->getName() << "\n";
+  dbgs() << Cleanup->getName() << "\n";
+}
