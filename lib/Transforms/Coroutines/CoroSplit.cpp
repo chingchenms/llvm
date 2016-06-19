@@ -20,6 +20,7 @@
 
 #include <llvm/ADT/SmallVector.h>
 #include <llvm/IR/Function.h>
+#include <llvm/IR/InstIterator.h>
 #include <llvm/Analysis/CallGraphSCCPass.h>
 
 using namespace llvm;
@@ -41,16 +42,13 @@ static Instruction* findInsertionPoint(Function *F) {
   llvm_unreachable("no terminator in the entry block");
 }
 
-// insert nulls for pointer parameters and undef for others
-static CallInst* makeFakeCall(Function* Caller, Function* Callee) {
+// make a call to Callee with undef arguments
+static CallInst* makeCallWithUndefArguments(Function* Caller, Function* Callee) {
   FunctionType* FTy = Callee->getFunctionType();
+
   SmallVector<Value*, 8> Args;
   for (Type* Ty : FTy->params()) {
-    Value* V = nullptr;
-    if (auto PTy = dyn_cast<PointerType>(Ty))
-      V = ConstantPointerNull::get(PTy);
-    else
-      V = UndefValue::get(Ty);
+    Value* V = UndefValue::get(Ty);
     Args.push_back(V);
   }
 
@@ -58,16 +56,15 @@ static CallInst* makeFakeCall(Function* Caller, Function* Callee) {
   return CallInst::Create(Callee, Args, "", InsertPt);
 }
 
-/// addAbstractEdges - Add abstract edges to keep a coroutine
-/// and its subfunctions together in one SCC
-static void addAbstractEdges(std::initializer_list<CallGraphNode*> Nodes) {
-  assert(Nodes.size() > 0);
-  for (auto it = Nodes.begin(), e = Nodes.end(); it != e; ++it) {
-    auto Next = it + 1;
-    auto Target = (Next == e) ? Nodes.begin() : Next;
-    auto F = (*it)->getFunction();
-    auto CS = makeFakeCall(F, (*Target)->getFunction());
-    (*it)->addCalledFunction(CS, *Target);
+// Make sure that all functions are in the same SCC by
+// adding calls to each other. 
+static void addCallsToEachOther(ArrayRef<CallGraphNode *> Nodes) {
+  for (unsigned I = 0, N = Nodes.size(); I < N; ++I) {
+    auto Caller = Nodes[I];
+    auto Callee = Nodes[(I + 1) % N];
+    auto CS = makeCallWithUndefArguments(Caller->getFunction(),
+                                         Callee->getFunction());
+    Caller->addCalledFunction(CS, Callee);
   }
 }
 
@@ -122,14 +119,7 @@ CoroInfo preSplit(CallGraph& CG, Function *F, CoroInitInst *CI)
   auto DestroyNode = CreateSubFunction("destroy");
   auto CleanupNode = CreateSubFunction("cleanup");
 
-  addAbstractEdges({ CG[F], ResumeNode, DestroyNode, CleanupNode});
-#if 0
-  auto CoroNode = CG[F];
-  addCall(CoroNode, ResumeNode, FramePtrTy);
-  addCall(ResumeNode, DestroyNode, FramePtrTy);
-  addCall(DestroyNode, CleanupNode, FramePtrTy);
-  addCallToCoroutine(CleanupNode, CoroNode);
-#endif
+  addCallsToEachOther({ CG[F], ResumeNode, DestroyNode, CleanupNode});
 
   Info.Resume = ResumeNode->getFunction();
   Info.Destroy = DestroyNode->getFunction();
@@ -146,19 +136,6 @@ void updateMetadata(CoroInitInst* CI, CoroInfo& Info) {
 
   CI->meta().getCoroInfo();
 }
-
-#if 0
-/// removeAbstractEdges - Remove abstract edges that keep a coroutine
-/// and its subfunctions together in one SCC
-static void removeAbstractEdges(CallGraphNode *CoroNode,
-  CoroInfoTy const &CoroInfo) {
-
-  CoroNode->removeOneAbstractEdgeTo(CoroInfo.ResumeNode);
-  CoroInfo.ResumeNode->removeOneAbstractEdgeTo(CoroInfo.DestroyNode);
-  CoroInfo.DestroyNode->removeOneAbstractEdgeTo(CoroInfo.CleanupNode);
-  CoroInfo.CleanupNode->removeOneAbstractEdgeTo(CoroNode);
-}
-#endif
 
 // CallGraphSCC Pass cannot add new functions
 static bool preSplitCoroutines(CallGraph &CG) {
@@ -200,12 +177,54 @@ static void mem2reg(Function& F) {
   }
 }
 
-static void splitCoroutine(Function& F, CoroInitInst * CI) {
+static void removeCall(CallGraphNode* From, CallGraphNode* To) {
+  auto Caller = From->getFunction();
+  auto Callee = To->getFunction();
+
+  // assumes there is exactly one call from Caller to Callee
+  for (Instruction& I : instructions(Caller))
+    if (CallSite CS = CallSite(&I))
+      if (CS.getCalledFunction() == Callee) {
+        From->removeCallEdgeFor(CS);
+        I.eraseFromParent();
+        return;
+      }
+  llvm_unreachable("subfunction call is missing from a coroutine");
+}
+
+static CallGraphNode* functionToCGN(Function* F, CallGraphSCC &SCC) {
+  for (CallGraphNode* CGN : SCC)
+    if (CGN->getFunction() == F)
+      return CGN;
+  llvm_unreachable("coroutine subfunction is missing from SCC");
+}
+
+static void preSplitPass(CoroInitInst * CI, CallGraphSCC &SCC) {
+  // 1. If there are parts, replace noinline with alwaysinline. (TODO)
+  // 2. Remove fake calls that make coroutine and its resumers to be
+  //    in the same SCC.
+  // 3. Add a dummy call to 
+
+  Function& F = *CI->getFunction();
+  CallGraphNode* CoroNode = functionToCGN(&F, SCC);
+  CoroInfo Info = CI->meta().getCoroInfo();
+  SmallVector<CallGraphNode*, 4> CGNs;
+  CGNs.push_back(CoroNode);
+  CGNs.push_back(functionToCGN(Info.Resume, SCC));
+  CGNs.push_back(functionToCGN(Info.Destroy, SCC));
+  CGNs.push_back(functionToCGN(Info.Cleanup, SCC));
+
+  for (unsigned I = 0, N = CGNs.size(); I < N; ++I)
+    removeCall(CGNs[I], CGNs[(I+1) % N]);
+
+  // We add an indirect call to be removed later by CoroElide
+  // in order to trigger rerun due to devirtualization
+  // TODO: addIndirectCall(CI, CoroNode);
+}
+
+static void splitCoroutine(CoroInitInst * CI) {
+  Function& F = *CI->getFunction();
   DEBUG(dbgs() << "Splitting coroutine: " << F.getName() << "\n");
-  if (CI->meta().getPhase() == Phase::PreIPO) {
-    CI->meta().setPhase(Phase::PreSplit);
-    return;
-  }
   mem2reg(F);
 }
 
@@ -228,21 +247,27 @@ namespace {
     bool runOnSCC(CallGraphSCC &SCC) override {
       // SCC should be at least of size 4
       // Coroutine + Resume + Destroy + Cleanup
-      if (SCC.size() < 3)
+      //if (SCC.size() < 3)
+      //  return false;
+
+      // find coroutines for processing
+      SmallVector<CoroInitInst*, 4> CIs;
+      for (CallGraphNode *CGN : SCC)
+        if (auto F = CGN->getFunction())
+          if (auto CoroInit =
+                  CoroCommon::findCoroInit(F, Phase::PostSplit, false))
+            CIs.push_back(CoroInit);
+
+      if (CIs.empty())
         return false;
 
-      bool changed = false;
+      for (CoroInitInst* CoroInit : CIs)
+        if (CoroInit->meta().getPhase() == Phase::PreIPO)
+          preSplitPass(CoroInit, SCC);
+        else
+          splitCoroutine(CoroInit);
 
-      for (CallGraphNode *CGN : SCC) {
-        if (auto F = CGN->getFunction()) {
-          if (auto CoroInit =
-                  CoroCommon::findCoroInit(F, Phase::PostSplit, false)) {
-            splitCoroutine(*F, CoroInit);
-            changed = true;
-          }
-        }
-      }
-      return changed;
+      return true;
     }
   };
 }
