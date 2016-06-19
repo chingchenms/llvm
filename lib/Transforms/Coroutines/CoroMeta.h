@@ -78,6 +78,7 @@ namespace llvm {
     void setParts(ArrayRef<Metadata *> MDs);
 
     CoroInfo getCoroInfo();
+    Type* getFrameType();
 
   };
 

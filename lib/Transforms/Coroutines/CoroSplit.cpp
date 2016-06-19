@@ -21,6 +21,7 @@
 #include <llvm/ADT/SmallVector.h>
 #include <llvm/IR/Function.h>
 #include <llvm/IR/InstIterator.h>
+#include <llvm/IR/IRBuilder.h>
 #include <llvm/Analysis/CallGraphSCCPass.h>
 
 using namespace llvm;
@@ -83,15 +84,16 @@ void addCallToCoroutine(CallGraphNode *From, CallGraphNode* To) {
 }
 
 static void addIndirectCall(CallGraph &CG, CallGraphNode *CoroNode,
-                            CoroInitInst *CI) {
-  LLVMContext& C = CI->getContext();
-  auto InsertPt = CI->getNextNode();
-  auto RA = CoroResumeAddrInst::Create(CI, InsertPt);
+                            CoroInitInst *CI, CoroInfo const& Info) {
+  IRBuilder<> Builder(CI->getNextNode());
+  auto FnPtrType = Info.Destroy->getFunctionType()->getPointerTo();
+  auto DestroyAddrIntrin =
+      Intrinsic::getDeclaration(CI->getModule(), Intrinsic::coro_destroy_addr);
 
-  auto ResumeFnTy = FunctionType::get(Type::getVoidTy(C), Type::getInt8PtrTy(C),
-    /*isVarArg=*/false);
-  auto BI = new BitCastInst(RA, ResumeFnTy->getPointerTo(), "", InsertPt);
-  auto CS = CallInst::Create(BI, { CI }, "", InsertPt);
+  auto Addr = Builder.CreateCall(DestroyAddrIntrin, CI);
+  auto Fn = Builder.CreateBitCast(Addr, FnPtrType);
+  auto Arg = Builder.CreateBitCast(CI, Info.FrameType->getPointerTo());
+  auto CS = Builder.CreateCall(Fn, Arg);
 
   CoroNode->addCalledFunction(CS, CG.getCallsExternalNode());
 }
@@ -140,7 +142,7 @@ CoroInfo preSplit(CallGraph& CG, Function *F, CoroInitInst *CI)
   Info.Destroy = DestroyNode->getFunction();
   Info.Cleanup = CleanupNode->getFunction();
 
-  addIndirectCall(CG, CoroNode, CI);
+  addIndirectCall(CG, CoroNode, CI, Info);
 
   return Info;
 }
@@ -232,6 +234,8 @@ static void preSplitPass(CoroInitInst * CI, CallGraphSCC &SCC) {
 
   for (unsigned I = 0, N = CGNs.size(); I < N; ++I)
     removeCall(CGNs[I], CGNs[(I+1) % N]);
+
+  CI->meta().setPhase(Phase::PreSplit);
 }
 
 static void splitCoroutine(CoroInitInst * CI) {
@@ -287,7 +291,7 @@ namespace {
 char CoroSplit::ID = 0;
 INITIALIZE_PASS(
   CoroSplit, "coro-split",
-  "Split coroutine into a set of funcitons driving its state machine", false,
+  "Split coroutine into a set of functions driving its state machine", false,
   false);
 
 Pass *llvm::createCoroSplitPass() { return new CoroSplit(); }

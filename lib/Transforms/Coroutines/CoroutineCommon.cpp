@@ -197,6 +197,26 @@ void llvm::initializeCoroutines(PassRegistry &registry) {
   initializeCoroSplitPass(registry);
 }
 
+CoroInitInst* CoroCommon::findCoroInit(Function* F, Phase P, bool Match) {
+  if (!F->hasFnAttribute(Attribute::Coroutine))
+    return nullptr;
+
+  for (Instruction& I : instructions(*F))
+    if (auto CI = dyn_cast<CoroInitInst>(&I)) {
+      auto Phase = CI->meta().getPhase();
+      if (Match) {
+        if (Phase == P)
+          return CI;
+        continue;
+      }
+      if (Phase != P)
+        return CI;
+    }
+
+  return nullptr;
+}
+
+// Move the code below to CoroPasses.cpp / CoroPasses.h
 static bool g_VerifyEach = false;
 
 static inline void addPass(legacy::PassManagerBase &PM, Pass *P) {
@@ -233,9 +253,9 @@ static void addCoroutineModuleEarlyPasses(const PassManagerBuilder &Builder,
 static void addCoroutineSCCPasses(const PassManagerBuilder &Builder,
                                   PassManagerBase &PM) {
   if (Builder.OptLevel > 0) {
-    //addPass(PM, createCoroElidePass());
     //addPass(PM, createCoroInlinePass());
     addPass(PM, createCoroSplitPass());
+    addPass(PM, createCoroElidePass());
   }
 }
 
@@ -249,23 +269,4 @@ void llvm::addCoroutinePassesToExtensionPoints(PassManagerBuilder &Builder,
     addCoroutineModuleEarlyPasses);
   Builder.addExtension(PassManagerBuilder::EP_CGSCCOptimizerLate,
     addCoroutineSCCPasses);
-}
-
-CoroInitInst* CoroCommon::findCoroInit(Function* F, Phase P, bool Match) {
-  if (!F->hasFnAttribute(Attribute::Coroutine))
-    return nullptr;
-
-  for (Instruction& I : instructions(*F))
-    if (auto CI = dyn_cast<CoroInitInst>(&I)) {
-      auto Phase = CI->meta().getPhase();
-      if (Match) {
-        if (Phase == P)
-          return CI;
-        continue;
-      }
-      if (Phase != P)
-        return CI;
-    }
-
-  return nullptr;
 }

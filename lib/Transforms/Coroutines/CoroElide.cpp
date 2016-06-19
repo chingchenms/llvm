@@ -51,101 +51,6 @@ INITIALIZE_PASS(
 
 Pass *llvm::createCoroElidePass() { return new CoroElide(); }
 
-#if 0
-  /// This represents the llvm.coro.init instruction.
-  class CoroInitInst : public IntrinsicInst {
-    enum { kMem, kAlign, kPromise, kParts };
-  public:
-    Value *getMem() const { return getArgOperand(kMem); }    
-    ConstantInt *getAlignment() const {
-      return cast<ConstantInt>(getArgOperand(kAlign));
-    }
-
-    AllocaInst *getPromise() const {
-      auto Arg = getArgOperand(kPromise);
-      if (isa<ConstantPointerNull>(Arg))
-        return nullptr;
-      return cast<AllocaInst>(Arg->stripPointerCasts());
-    }
-
-    struct Parts {
-      Type* const FrameTy;
-      Function* const ResumeFn;
-      Function* const DestroyFn;
-      Function* const CleanupFn;
-
-      // If CoroSplit pass did not generate CleanupFn
-      // Heap Allocation Elision cannot be performed
-      bool elidable() { return CleanupFn != nullptr; }
-    };
-
-    MDNode *getRawParts() const {
-      auto MV = cast<MetadataAsValue>(getArgOperand(kParts))->getMetadata();
-      auto MN = dyn_cast<MDNode>(MV);
-      if (!MN)
-        return nullptr;
-
-      if (MN->getNumOperands() < 4)
-        return nullptr;
-
-      return MN;
-    }
-
-    // FIXME: Create class for CoroMetadata
-    Parts getParts() const {
-      auto MN = getRawParts();
-      ConstantAsMetadata* C1 = cast<ConstantAsMetadata>(MN->getOperand(1));
-      auto* C2 = cast<ConstantAsMetadata>(MN->getOperand(2))->getValue();
-      auto* C3 = cast<ConstantAsMetadata>(MN->getOperand(3))->getValue();
-      auto* C4 = 
-        MN->getNumOperands() < 5 ? nullptr :
-        cast<ConstantAsMetadata>(MN->getOperand(4))->getValue();
-
-      return{
-        cast<PointerType>(C1->getType())->getElementType(),
-        cast<Function>(C2),
-        cast<Function>(C3),
-        cast_or_null<Function>(C4) };
-    }
-
-    bool isPostSplit() const {
-      return getRawParts();
-    }
-
-#if 0
-    Parts getParts() const {
-      assert(isPostSplit() && "getParts is called for preSplit coroinit");
-
-      auto CE = cast<ConstantExpr>(getArgOperand(kParts));
-      assert(CE->getOpcode() == Instruction::BitCast);
-
-      auto GV = cast<GlobalVariable>(CE->getOperand(0));
-      auto Value = GV->getInitializer();
-
-      return {
-        cast<Function>(Value->getAggregateElement(0u)),
-        cast<Function>(Value->getAggregateElement(1u)),
-        cast_or_null<Function>(Value->getAggregateElement(2u))
-      };
-    }
-
-    // post-split coroutines have non-null parts parameter
-    bool isPostSplit() const {
-      return !isa<ConstantPointerNull>(getArgOperand(kParts));
-    }
-    // post-split coroutine has cleanup part
-#endif
-    // Methods for support type inquiry through isa, cast, and dyn_cast:
-    static inline bool classof(const IntrinsicInst *I) {
-      return I->getIntrinsicID() == Intrinsic::coro_init;
-    }
-    static inline bool classof(const Value *V) {
-      return isa<IntrinsicInst>(V) && classof(cast<IntrinsicInst>(V));
-    }
-  };
-
-#endif
-
 static void replaceWithConstant(Constant *Value,
                          SmallVectorImpl<IntrinsicInst*> &Users) {
   if (Users.empty())
@@ -186,37 +91,26 @@ static bool replaceIndirectCalls(CoroInitInst *CoroInit) {
       }
   }
 
-#if 0
-  auto P = CoroInit->getParts();
-  DEBUG(dbgs() << "  found CoroInit with: " 
-    << P.ResumeFn->getName() << ", "
-    << P.DestroyFn->getName());
-  if (P.CleanupFn) {
-    DEBUG(dbgs() << ", " << P.CleanupFn->getName());
-  }
-  DEBUG(dbgs() << "\n");
+  CoroInfo Info = CoroInit->meta().getCoroInfo();
 
-  replaceWithConstant(P.ResumeFn, ResumeAddr);
-  replaceWithConstant(P.DestroyFn, DestroyAddr);
-#endif
+  replaceWithConstant(Info.Resume, ResumeAddr);
+  replaceWithConstant(Info.Destroy, DestroyAddr);
+
   return !ResumeAddr.empty() || !DestroyAddr.empty();
 }
 
 bool CoroElide::runOnFunction(Function &F) {
   DEBUG(dbgs() << "CoroElide is looking at " << F.getName() << "\n");
   bool changed = false;
-  if (!changed)
-    return false;
 
-  // Collect all coro inits that belong to post-split coroutines 
+  // Collect all coro inits
   SmallVector<CoroInitInst*, 4> CoroInits;
   for (auto& I : instructions(F))
     if (auto CI = dyn_cast<CoroInitInst>(&I))
-      if (CI->isPostSplit())
         CoroInits.push_back(CI);
 
   for (auto CI : CoroInits)
-    changed = replaceIndirectCalls(CI);
+    changed |= replaceIndirectCalls(CI);
 
   return changed;
 }

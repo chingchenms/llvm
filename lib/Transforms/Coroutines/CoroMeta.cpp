@@ -150,6 +150,13 @@ void CoroMeta::setParts(ArrayRef<Metadata *> MDs) {
   update({{Field::Parts, MDs, Intrin->getContext()}});
 }
 
+Type* CoroMeta::getFrameType() {
+  auto MD = getRawMeta(Intrin);
+  auto N = cast<MDNode>(MD);
+  auto Fr = cast<ValueAsMetadata>(N->getOperand(Field::Frame));
+  return Fr->getValue()->getType();
+}
+
 CoroInfo CoroMeta::getCoroInfo() { 
   auto MD = getRawMeta(Intrin);
   auto N = cast<MDNode>(MD);
