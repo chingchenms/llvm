@@ -19,14 +19,13 @@
 using namespace llvm;
 
 CoroFrameInst* CoroFrameInst::Create(Instruction* InsertBefore) {
-  auto BB = InsertBefore->getParent();
-  auto M = BB->getParent()->getParent();
+  auto M = InsertBefore->getModule();
   auto Fn = Intrinsic::getDeclaration(M, Intrinsic::experimental_coro_frame);
   auto Call = CallInst::Create(Fn, "", InsertBefore);
   return cast<CoroFrameInst>(Call);
 }
 
-CoroEndInst * llvm::CoroEndInst::Create(Instruction * InsertBefore, Value * Addr) {
+CoroEndInst *llvm::CoroEndInst::Create(Instruction *InsertBefore, Value *Addr) {
   auto BB = InsertBefore->getParent();
   auto M = BB->getParent()->getParent();
   LLVMContext& C = M->getContext();
@@ -35,4 +34,11 @@ CoroEndInst * llvm::CoroEndInst::Create(Instruction * InsertBefore, Value * Addr
   auto Call = CallInst::Create(Fn, { Addr, ConstantInt::get(BoolTy, 0) }, "",
     InsertBefore);
   return cast<CoroEndInst>(Call);
+}
+
+CoroResumeAddrInst *CoroResumeAddrInst::Create(Value *FramePtr,
+                                               Instruction *InsertBefore) {
+  auto Fn = Intrinsic::getDeclaration(InsertBefore->getModule(), ID);
+  auto Call = CallInst::Create(Fn, {FramePtr}, "", InsertBefore);
+  return cast<CoroResumeAddrInst>(Call);
 }

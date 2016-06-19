@@ -59,6 +59,22 @@ namespace llvm {
   };
 
   /// This represents the llvm.coro.end instruction.
+  class LLVM_LIBRARY_VISIBILITY CoroResumeAddrInst : public IntrinsicInst {
+    static const Intrinsic::ID ID = Intrinsic::coro_resume_addr;
+  public:
+    static CoroResumeAddrInst *Create(Value *FramePtr,
+                                      Instruction *InsertBefore);
+
+    // Methods to support type inquiry through isa, cast, and dyn_cast:
+    static inline bool classof(const IntrinsicInst *I) {
+      return I->getIntrinsicID() == ID;
+    }
+    static inline bool classof(const Value *V) {
+      return isa<IntrinsicInst>(V) && classof(cast<IntrinsicInst>(V));
+    }
+  };
+
+  /// This represents the llvm.coro.end instruction.
   class LLVM_LIBRARY_VISIBILITY CoroFrameInst : public IntrinsicInst {
   public:
     static CoroFrameInst* Create(Instruction* InsertBefore);

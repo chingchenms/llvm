@@ -82,6 +82,20 @@ void addCallToCoroutine(CallGraphNode *From, CallGraphNode* To) {
   From->addCalledFunction(CS, To);
 }
 
+static void addIndirectCall(CallGraph &CG, CallGraphNode *CoroNode,
+                            CoroInitInst *CI) {
+  LLVMContext& C = CI->getContext();
+  auto InsertPt = CI->getNextNode();
+  auto RA = CoroResumeAddrInst::Create(CI, InsertPt);
+
+  auto ResumeFnTy = FunctionType::get(Type::getVoidTy(C), Type::getInt8PtrTy(C),
+    /*isVarArg=*/false);
+  auto BI = new BitCastInst(RA, ResumeFnTy->getPointerTo(), "", InsertPt);
+  auto CS = CallInst::Create(BI, { CI }, "", InsertPt);
+
+  CoroNode->addCalledFunction(CS, CG.getCallsExternalNode());
+}
+
 CoroInfo preSplit(CallGraph& CG, Function *F, CoroInitInst *CI)
 {
   CoroInfo Info;
@@ -115,15 +129,18 @@ CoroInfo preSplit(CallGraph& CG, Function *F, CoroInitInst *CI)
     return CG.getOrInsertFunction(Fn);
   };
 
+  auto CoroNode = CG[F];
   auto ResumeNode = CreateSubFunction("resume");
   auto DestroyNode = CreateSubFunction("destroy");
   auto CleanupNode = CreateSubFunction("cleanup");
 
-  addCallsToEachOther({ CG[F], ResumeNode, DestroyNode, CleanupNode});
+  addCallsToEachOther({ CoroNode, ResumeNode, DestroyNode, CleanupNode});
 
   Info.Resume = ResumeNode->getFunction();
   Info.Destroy = DestroyNode->getFunction();
   Info.Cleanup = CleanupNode->getFunction();
+
+  addIndirectCall(CG, CoroNode, CI);
 
   return Info;
 }
@@ -203,7 +220,6 @@ static void preSplitPass(CoroInitInst * CI, CallGraphSCC &SCC) {
   // 1. If there are parts, replace noinline with alwaysinline. (TODO)
   // 2. Remove fake calls that make coroutine and its resumers to be
   //    in the same SCC.
-  // 3. Add a dummy call to 
 
   Function& F = *CI->getFunction();
   CallGraphNode* CoroNode = functionToCGN(&F, SCC);
@@ -216,10 +232,6 @@ static void preSplitPass(CoroInitInst * CI, CallGraphSCC &SCC) {
 
   for (unsigned I = 0, N = CGNs.size(); I < N; ++I)
     removeCall(CGNs[I], CGNs[(I+1) % N]);
-
-  // We add an indirect call to be removed later by CoroElide
-  // in order to trigger rerun due to devirtualization
-  // TODO: addIndirectCall(CI, CoroNode);
 }
 
 static void splitCoroutine(CoroInitInst * CI) {
