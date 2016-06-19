@@ -13,12 +13,16 @@
 //===----------------------------------------------------------------------===//
 
 #include "CoroInstr.h"
+
 #include <llvm/IR/Instructions.h>
 #include <llvm/IR/Module.h>
+#include "llvm/Support/Debug.h"
 
 #include <array>
 
 using namespace llvm;
+
+#define DEBUG_TYPE "coro-meta"
 
 /////// Coroutine Metadata
 
@@ -59,24 +63,25 @@ static MDTuple* valuesToMDTuple(ArrayRef<Value*> Values) {
   return MDNode::get(C, MDs);
 }
 
-CoroMeta::Setter::Setter(Field F, Value *V)
-    : F(F), MD(ValueAsMetadata::get(V)) {}
+CoroMeta::Setter::Setter(Type *T)
+    : FieldNo(Field::Frame),
+      NewValue(
+          ValueAsMetadata::get(ConstantPointerNull::get(T->getPointerTo()))) {}
 
-CoroMeta::Setter::Setter(Field F, Phase NewPhase, LLVMContext &C)
-    : F(F), MD(phaseToTag(C, NewPhase)) {}
+CoroMeta::Setter::Setter(Phase NewPhase, LLVMContext &C)
+    : FieldNo(Field::Tag), NewValue(phaseToTag(C, NewPhase)) {}
 
 CoroMeta::Setter::Setter(Field F, ArrayRef<Value *> Values)
-    : F(F), MD(valuesToMDTuple(Values)) {}
+    : FieldNo(F), NewValue(valuesToMDTuple(Values)) {}
+
+CoroMeta::Setter::Setter(Field F, ArrayRef<Metadata *> Values, LLVMContext& C)
+  : FieldNo(F), NewValue(MDNode::get(C, Values)) {}
 
 // Updates fields of the metadata tuple.
 // Default value Phase::Fresh is used to indicate that no updates
 // to tag is requested. 
-void CoroMeta::update(std::initializer_list<Setter>) {}
 
-#if 0
-void CoroMeta::updateFields(
-    std::initializer_list<std::pair<Field, Value *>> Fs, Phase NewPhase) {
-
+void CoroMeta::update(std::initializer_list<Setter> Updates) {
   auto MD = getRawMeta(Intrin);
   auto N = dyn_cast<MDNode>(MD);
   assert(N || isa<MDString>(MD) && "invalid coroutine metadata");
@@ -84,7 +89,7 @@ void CoroMeta::updateFields(
   std::array<Metadata*, Field::COUNT> Args;
   LLVMContext& C = Intrin->getContext();
 
-  // we we had already a tuple, copy its operands
+  // If we already had a tuple, copy its operands to Args
   if (N) {
     unsigned Count = N->getNumOperands();
     assert(Count == Field::COUNT &&
@@ -93,27 +98,28 @@ void CoroMeta::updateFields(
       Args[I] = N->getOperand(I);
   }
   else { 
-    // otherwise, update Tag and Coroutine fields
-    // filling the rest with empty strings
+    // otherwise, fill it with empty strings
     Args.fill(MDString::get(C, ""));
-    Args[Field::Func] = ValueAsMetadata::get(Intrin->getFunction());
-    NewPhase = Phase::PreIPO;
   }
-  if (NewPhase != Phase::Fresh)
-    Args[Field::Tag] = phaseToTag(C, Phase::PreIPO);
 
+  DEBUG(dbgs() << "--- metadata update for " << Intrin->getFunction()->getName()
+               << "-----\n");
   // now go through all the pairs an update the fields
-  for (auto const &P : Fs) {
-    assert(P.first > Field::Tag &&
-           "update tag field via dedicate NewPhase parameter");
-    Args[P.first] = ValueAsMetadata::get(P.second);
+  for (auto const &U : Updates) {
+    DEBUG(Args[U.FieldNo]->print(dbgs(), Intrin->getModule(), true));
+    DEBUG(dbgs() << " => ");
+    DEBUG(U.NewValue->print(dbgs(), Intrin->getModule(), true));
+    DEBUG(dbgs() << "\n");
+
+    Args[U.FieldNo] = U.NewValue;
   }
+  DEBUG(dbgs() << "------------------------------\n");
 
   // TODO: add ctor for ArrayRef to take std::array
   ArrayRef<Metadata*> AR(&*Args.begin(), Args.size());
-  setMeta(Intrin, MDNode::get(C, AR));
+  auto UpdatedMD = MDNode::get(C, AR);
+  setMeta(Intrin, UpdatedMD);
 }
-#endif
 
 Phase CoroMeta::getPhase() const {
   auto MD = getRawMeta(Intrin);
@@ -131,29 +137,7 @@ Phase CoroMeta::getPhase() const {
 }
 
 void CoroMeta::setPhase(Phase NewPhase) {
-  if (NewPhase == Phase::PreIPO) {
-    assert(getPhase() == Phase::Fresh && "invalid phase transition");
-    Function* Coroutine = Intrin->getFunction();
-    LLVMContext& C = Intrin->getContext();
-    auto Empty = MDString::get(C, "");
-    Metadata *Args[4] = {MDString::get(C, kCoroPreIPOTag),
-                         ValueAsMetadata::get(Coroutine), Empty, Empty};
-    setMeta(Intrin, MDNode::get(C, Args));
-    return;
-  }
-  char const* Tag;
-  switch (NewPhase) {
-  case Phase::PreSplit: Tag = kCoroPreSplitTag; break;
-  case Phase::PostSplit: Tag = kCoroPostSplitTag; break;
-  default:
-    llvm_unreachable("unexpected phase tag");
-  }
-
-  LLVMContext &C = Intrin->getContext();
-  auto N = cast<MDNode>(getRawMeta(Intrin));
-  Metadata *Args[4] = { MDString::get(C, Tag), N->getOperand(1).get(),
-    N->getOperand(2).get(), N->getOperand(3).get() };
-  setMeta(Intrin, MDNode::get(C, Args));
+  update({{NewPhase, Intrin->getContext()}});
 }
 
 MDNode::op_range CoroMeta::getParts() {
@@ -164,12 +148,7 @@ MDNode::op_range CoroMeta::getParts() {
 
 void CoroMeta::setParts(ArrayRef<Metadata *> MDs) {
   assert(getPhase() == Phase::PreIPO && "can only outline in preIPO phase");
-  auto N = cast<MDNode>(getRawMeta(Intrin));
-
-  LLVMContext &C = Intrin->getContext();
-  Metadata *Args[4] = { N->getOperand(0).get(), N->getOperand(1).get(),
-    N->getOperand(2).get(), MDNode::get(C, MDs) };
-  setMeta(Intrin, MDNode::get(C, Args));
+  update({{Field::Parts, MDs, Intrin->getContext()}});
 }
 
 

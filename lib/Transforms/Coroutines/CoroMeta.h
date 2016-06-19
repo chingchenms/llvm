@@ -48,12 +48,13 @@ namespace llvm {
 
     // Helper to struct to update a particular field in CoroMeta tuple
     struct Setter {
-      Field F;
-      Metadata* MD;
-
-      Setter(Field F, Value* V);
-      Setter(Field F, ArrayRef<Value*> V);
-      Setter(Field F, Phase V, LLVMContext& C);
+      Field FieldNo;
+      Metadata* NewValue;
+      
+      Setter(Field F, ArrayRef<Metadata*> MDs, LLVMContext& C);
+      Setter(Field F, ArrayRef<Value*> Values);
+      Setter(Phase V, LLVMContext& C);
+      Setter(Type* T);
     };
 
     // Updates fields of the metadata tuple.
@@ -63,8 +64,9 @@ namespace llvm {
 
     Phase getPhase() const;
     void setPhase(Phase NewPhase);
-    void setParts(ArrayRef<Metadata *> MDs);
+
     MDNode::op_range getParts();
+    void setParts(ArrayRef<Metadata *> MDs);
   };
 
 } // end namespace llvm
