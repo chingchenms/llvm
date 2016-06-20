@@ -141,8 +141,6 @@ static bool replaceEmulatedIntrinsicsWithRealOnes(Module& M) {
         }
       }
     }
-    if (hasCoroSuspend)
-      addBranchToCoroEnd(CoroShape, F);
     if (hasCoroInit)
       F.addFnAttr(Attribute::Coroutine);
   }
