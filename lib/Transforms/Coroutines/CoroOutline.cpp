@@ -24,17 +24,9 @@
 #include <llvm/Transforms/Utils/BasicBlockUtils.h>
 
 using namespace llvm;
+using namespace llvm::CoroCommon;
 
 #define DEBUG_TYPE "coro-outline"
-
-static BasicBlock* splitBlockIfNotFirst(Instruction* I, StringRef Name = "") {
-  auto BB = I->getParent();
-  if (&*BB->begin() == I) {
-    BB->setName(Name);
-    return BB;
-  }
-  return BB->splitBasicBlock(I, Name);
-}
 
 Instruction* findRetEnd(CoroutineShape& S) {
   auto RetBB = S.Return.back()->getParent();

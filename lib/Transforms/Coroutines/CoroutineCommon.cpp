@@ -43,6 +43,16 @@ void CoroCommon::removeLifetimeIntrinsics(Function &F) {
   }
 }
 
+BasicBlock *CoroCommon::splitBlockIfNotFirst(Instruction *I,
+                                             const Twine &Name) {
+  auto BB = I->getParent();
+  if (&*BB->begin() == I) {
+    BB->setName(Name);
+    return BB;
+  }
+  return BB->splitBasicBlock(I, Name);
+}
+
 Function *llvm::CoroPartExtractor::createFunction(BasicBlock *Start,
                                                   BasicBlock *End) {
   computeRegion(Start, End);

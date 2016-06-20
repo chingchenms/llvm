@@ -34,7 +34,8 @@
 
 #define DEBUG_TYPE "coro-cfb"
 
-namespace llvm {
+using namespace llvm;
+using namespace llvm::CoroCommon;
 
 enum { SmallVectorThreshold = 32 };
 // Provides two way mapping between the blocks and numbers
@@ -154,6 +155,11 @@ SuspendCrossingInfo::SuspendCrossingInfo(Function& F, CoroutineShape& Shape) : M
     for (size_t I = 0; I < N; ++I) {
       auto& B = Block[I];
       for (BasicBlock* SI : successors(B)) {
+
+        // Do not propagate beyond Coro.End
+        if (SI == Shape.CoroEndFinal.back()->getParent())
+          continue;
+
         auto SuccNo = Mapping.blockToIndex(SI);
         auto& S = Block[SuccNo];
         auto SavedCons = S.Consumes;
@@ -191,21 +197,28 @@ SuspendCrossingInfo::SuspendCrossingInfo(Function& F, CoroutineShape& Shape) : M
   dump();
 }
 
-void buildCoroutineFrame(Function &F, CoroutineShape& Shape) {
+// Split above and below a particular instruction so that it
+// is all alone by itself.
+static void splitAround(Instruction *I, const Twine &Name) {
+  splitBlockIfNotFirst(I, Name);
+  splitBlockIfNotFirst(I->getNextNode(), "After" + Name);
+}
+
+void llvm::buildCoroutineFrame(Function &F, CoroutineShape& Shape) {
   DEBUG(dbgs() << "entering buildCoroutineFrame\n");
 
   // 1 split all of the blocks on CoroSave
 
-  for (CoroSuspendInst* CSI : Shape.CoroSuspend) {
-    CoroSaveInst* CoroSave = CSI->getCoroSave();
-    // put CoroSave into its own block to simplify alter processing
-    CoroSave->getParent()->splitBasicBlock(CoroSave, "CoroSave");
-    CoroSave->getParent()->splitBasicBlock(CoroSave->getNextNode(), "AfterCoroSave");
-  }
+  for (CoroSuspendInst* CSI : Shape.CoroSuspend)
+    splitAround(CSI->getCoroSave(), "CoroSave");
 
-  // 2 make coro.begin a fork, jumping to ret block
-  // 3 Split on end(final), so that return block can never enter
+  // put and CoroEnd into their own blocks
+  splitAround(Shape.CoroEndFinal.back(), "CoroEnd");
 
+#if 0 // not sure about that
+  //// 2 make coro.begin a fork, jumping to ret block
+  //// 3 Split on end(final), so that return block can never enter
+#endif
   SuspendCrossingInfo Checker(F, Shape);
 
   SmallVector<Argument*, 4> ArgsToSpill;
@@ -231,6 +244,3 @@ void buildCoroutineFrame(Function &F, CoroutineShape& Shape) {
     DEBUG(dbgs() << " "<< I->getName());
   DEBUG(dbgs() << "\n");
 }
-
-
-} // namespace llvm

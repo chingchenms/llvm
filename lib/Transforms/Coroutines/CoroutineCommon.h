@@ -36,10 +36,11 @@ private:
   void computeRegion(BasicBlock *Start, BasicBlock *End);
 };
 
-struct LLVM_LIBRARY_VISIBILITY CoroCommon {
-  static void removeLifetimeIntrinsics(Function &F);
-  static void constantFoldUsers(Constant* Value);
-  static CoroInitInst* findCoroInit(Function* F, Phase P, bool Match = true);
+namespace CoroCommon {
+  void removeLifetimeIntrinsics(Function &F);
+  void constantFoldUsers(Constant* Value);
+  CoroInitInst* findCoroInit(Function* F, Phase P, bool Match = true);
+  BasicBlock *splitBlockIfNotFirst(Instruction *I, const Twine &Name = "");
 };
 
 /// Holds all structural Coroutine Intrinsics for a particular function.
