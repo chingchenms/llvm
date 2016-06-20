@@ -27,60 +27,111 @@
 #include <llvm/ADT/SmallVector.h>
 #include <llvm/IR/Function.h>
 #include <llvm/Support/Debug.h>
+#include <llvm/Support/circular_raw_ostream.h>
 #include <llvm/Transforms/Utils/BasicBlockUtils.h>
+#include "llvm/IR/CFG.h"
 
 #define DEBUG_TYPE "coro-cfb"
 
 namespace llvm {
 
-class BasicBlock;
-
 enum { SmallVectorThreshold = 32 };
 // Provides two way mapping between the blocks and numbers
-class BlockNumbering {
+class BlockToIndexMapping {
   SmallVector<BasicBlock*, SmallVectorThreshold> V;
 public:
-  BlockNumbering(Function& F) {
+  auto size() { return V.size(); }
+
+  BlockToIndexMapping(Function& F) {
     for (BasicBlock & BB : F)
       V.push_back(&BB);
     std::sort(V.begin(), V.end());
   }
 
-  // looks up block #
-  size_t operator[](BasicBlock* BB) const {
+  size_t blockToIndex(BasicBlock* BB) const {
     auto I = std::lower_bound(V.begin(), V.end(), BB);
     assert(I != V.end() && *I == BB && "BasicBlockNumberng: Unknown block");
     return I - V.begin();
   }
-  auto size() { return V.size(); }
 
-  // lookup by number
-  BasicBlock* operator[](unsigned Index) { return V[Index]; }
+  BasicBlock* indexToBlock(unsigned Index) { return V[Index]; }
 };
 
-struct Builder {
-  BlockNumbering BlockNumber;
+struct SuspendCrossingInfo {
+  BlockToIndexMapping Mapping;
 
   struct BlockData {
-    BitVector consumes;
-    BitVector kills;
-    bool suspend;
+    BitVector Consumes;
+    BitVector Kills;
+    bool Suspend;
   };
   SmallVector<BlockData, SmallVectorThreshold> Block;
 
-  Builder(Function& F, CoroutineShape& Shape);
+  auto successors(BlockData const& BD) {
+    BasicBlock* BB = Mapping.indexToBlock(&BD - &Block[0]);
+    return llvm::successors(BB);
+  }
+
+  void dump();
+  void dump(StringRef Label, BitVector const& BV);
+
+  SuspendCrossingInfo(Function& F, CoroutineShape& Shape);
+
+  // checks whether there is a path from
+  // definition to use that crosses as suspend point
+  bool definitionAcrossSuspend(Use* U) const {
+    Value* const Def = U->get();
+    Instruction* const User = cast<Instruction>(U->getUser());
+
+    // Figure out where the value is defined
+    BasicBlock* DefBB = nullptr;
+    if (Instruction* I = dyn_cast<Instruction>(Def))
+      DefBB = I->getParent();
+    else if (Argument* A = dyn_cast<Argument>(Def))
+      DefBB = &I->getFunction()->getEntryBlock();
+    else
+      return false; // must be global or a constant
+
+    BasicBlock* const UseBB = User->getParent();
+
+    size_t const DefIndex = Mapping.blockToIndex(DefBB);
+    size_t const UseIndex = Mapping.blockToIndex(UseBB);
+
+    assert(Block[UseIndex].Consumes[DefIndex] && "use must consume def");
+    return Block[UseIndex].Kills[DefIndex];
+  }
 };
 
-Builder::Builder(Function& F, CoroutineShape& Shape) : BlockNumber(F) {
-  const size_t N = BlockNumber.size();
+void SuspendCrossingInfo::dump(StringRef Label, BitVector const& BV) {
+  dbgs() << Label << ":";
+  for (size_t I = 0, N = BV.size(); I < N; ++I)
+    if (BV[I])
+      dbgs() << " " << Mapping.indexToBlock(I)->getName();
+  dbgs() << "\n";
+}
+
+void SuspendCrossingInfo::dump() {
+  for (size_t I = 0, N = Block.size(); I < N; ++I) {
+    BasicBlock* const B = Mapping.indexToBlock(I);
+    dbgs() << "Block " << B->getName() << ":\n";
+    dump("   Consumes", Block[I].Consumes);
+    dump("      Kills", Block[I].Kills);
+  }
+  dbgs() << "\n";
+}
+
+SuspendCrossingInfo::SuspendCrossingInfo(Function& F, CoroutineShape& Shape) : Mapping(F) {
+  const size_t N = Mapping.size();
   Block.resize(N);
 
   // Initialize every block so that it consumes itself
   for (size_t I = 0; I < N; ++I) {
     auto& B = Block[I];
-    B.consumes.set(I);
-    if (B.suspend)
-      B.kills.set(I);
+    B.Consumes.resize(N);
+    B.Kills.resize(N);
+    B.Consumes.set(I);
+    if (B.Suspend)
+      B.Kills.set(I);
   }
 
   // Mark all suspend blocks and indicate that kill everything they consume
@@ -88,10 +139,55 @@ Builder::Builder(Function& F, CoroutineShape& Shape) : BlockNumber(F) {
     CoroSaveInst* const CoroSave = CSI->getCoroSave();
     BasicBlock* const CoroSaveBB = CoroSave->getParent();
     BasicBlock* const SuspendBB = CoroSaveBB->getSingleSuccessor();
-    auto &B = Block[BlockNumber[SuspendBB]];
-    B.suspend = true;
-    B.kills |= B.consumes;
+    auto &B = Block[Mapping.blockToIndex(SuspendBB)];
+    B.Suspend = true;
+    B.Kills |= B.Consumes;
   }
+
+  // Iterate propagating consumes and kills until they stop changing
+  int Iteration = 0;
+
+  bool Changed;
+  do {
+    DEBUG(dbgs() << "iteration " << ++Iteration);
+    DEBUG(dbgs() << "==============\n");
+
+    Changed = false;
+    for (size_t I = 0; I < N; ++I) {
+      auto& B = Block[I];
+      for (BasicBlock* SI : successors(B)) {
+        auto SuccNo = Mapping.blockToIndex(SI);
+        auto& S = Block[SuccNo];
+        auto SavedCons = S.Consumes;
+        auto SavedKills = S.Kills;
+
+        S.Consumes |= B.Consumes;
+        S.Kills |= B.Kills;
+
+        if (B.Suspend) {
+          S.Kills |= B.Consumes;
+        }
+        if (!S.Suspend) {
+          S.Kills.reset(SuccNo);
+        }
+
+        Changed |=
+          (S.Kills != SavedKills) || (S.Consumes != SavedCons);
+
+        if (S.Kills != SavedKills) {
+          DEBUG(dbgs() << "\nblock " << I << " follower " << SI << "\n");
+          DEBUG(dump("s.kills", S.Kills));
+          DEBUG(dump("savedKills", SavedKills));
+        }
+        if (S.Consumes != SavedCons) {
+          DEBUG(dbgs() <<"\nblock " << I << " follower " << SI << "\n");
+          DEBUG(dump("s.consume", S.Consumes));
+          DEBUG(dump("savedCons", SavedCons));
+        }
+      }
+    }
+  } while (Changed);
+  dump();
 }
 
 void buildCoroutineFrame(Function &F, CoroutineShape& Shape) {
@@ -106,6 +202,9 @@ void buildCoroutineFrame(Function &F, CoroutineShape& Shape) {
 
   // 2 make coro.begin a fork, jumping to ret block
   // 3 Split on end(final), so that return block can never enter
+
+  SuspendCrossingInfo builder(F, Shape);
 }
+
 
 } // namespace llvm
