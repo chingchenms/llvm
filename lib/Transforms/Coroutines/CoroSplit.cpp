@@ -234,10 +234,12 @@ static void preSplitPass(CoroInitInst * CI, CallGraphSCC &SCC) {
   CI->meta().setPhase(Phase::ReadyForSplit);
 }
 
-static void splitCoroutine(CoroInitInst * CI) {
+static void splitCoroutine(CoroInitInst * CI, CoroutineShape& Shape) {
   Function& F = *CI->getFunction();
   DEBUG(dbgs() << "Splitting coroutine: " << F.getName() << "\n");
   mem2reg(F);
+  Shape.buildFrom(F);
+  buildCoroutineFrame(F, Shape);
 }
 
 //===----------------------------------------------------------------------===//
@@ -273,11 +275,13 @@ namespace {
       if (CIs.empty())
         return false;
 
+      CoroutineShape Shape;
+
       for (CoroInitInst* CoroInit : CIs)
         if (CoroInit->meta().getPhase() == Phase::NotReadyForSplit)
           preSplitPass(CoroInit, SCC);
         else
-          splitCoroutine(CoroInit);
+          splitCoroutine(CoroInit, Shape);
 
       return true;
     }

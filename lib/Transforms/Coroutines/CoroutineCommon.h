@@ -85,6 +85,8 @@ template <class F> void CoroutineShape::reflect(F&& f) {
   f(Return, "Return");
 }
 
+void buildCoroutineFrame(Function& F, CoroutineShape& Shape);
+
 void initializeCoroEarlyPass(PassRegistry &Registry);
 void initializeCoroOutlinePass(PassRegistry &Registry);
 void initializeCoroElidePass(PassRegistry &Registry);
