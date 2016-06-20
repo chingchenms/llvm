@@ -621,11 +621,12 @@ def int_coro_end : Intrinsic<[], [llvm_ptr_ty, llvm_i1_ty], []>;
 
 def int_coro_begin : Intrinsic<[], [llvm_ptr_ty], []>;
 def int_coro_return : Intrinsic<[llvm_i1_ty], [llvm_ptr_ty], []>;
-def int_coro_suspend : Intrinsic<[llvm_i8_ty], [llvm_token_ty, llvm_i1_ty, llvm_vararg_ty], []>;
+def int_coro_suspend : Intrinsic<[llvm_i8_ty], [llvm_token_ty, llvm_i1_ty], []>;
 def int_coro_first : Intrinsic<[llvm_i1_ty], [llvm_i8_ty], []>;
 def int_coro_resume_addr : Intrinsic<[llvm_ptr_ty], [llvm_ptr_ty], [IntrReadMem]>;
 def int_coro_destroy_addr : Intrinsic<[llvm_ptr_ty], [llvm_ptr_ty], [IntrReadMem]>;
-//===-------------------------- Other Intrinsics --------------------------===//
+def int_coro_subfn_addr : Intrinsic<[llvm_ptr_ty], [llvm_ptr_ty, llvm_i8_ty], [IntrReadMem]>;
+///===-------------------------- Other Intrinsics --------------------------===//
 //
 def int_flt_rounds : Intrinsic<[llvm_i32_ty]>,
                      GCCBuiltin<"__builtin_flt_rounds">;

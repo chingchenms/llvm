@@ -8,5 +8,6 @@ add_llvm_library(LLVMCoroutines
   CoroSplit.cpp
   CoroInstr.cpp
   CoroMeta.cpp
+  CoroFrameBuilder.cpp
   )
 
