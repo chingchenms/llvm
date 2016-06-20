@@ -26,6 +26,7 @@
 #include <llvm/ADT/PackedVector.h>
 #include <llvm/ADT/SmallVector.h>
 #include <llvm/IR/Function.h>
+#include <llvm/IR/InstIterator.h>
 #include <llvm/Support/Debug.h>
 #include <llvm/Support/circular_raw_ostream.h>
 #include <llvm/Transforms/Utils/BasicBlockUtils.h>
@@ -77,29 +78,29 @@ struct SuspendCrossingInfo {
 
   SuspendCrossingInfo(Function& F, CoroutineShape& Shape);
 
-  // checks whether there is a path from
-  // definition to use that crosses as suspend point
-  bool definitionAcrossSuspend(Use* U) const {
-    Value* const Def = U->get();
-    Instruction* const User = cast<Instruction>(U->getUser());
-
-    // Figure out where the value is defined
-    BasicBlock* DefBB = nullptr;
-    if (Instruction* I = dyn_cast<Instruction>(Def))
-      DefBB = I->getParent();
-    else if (Argument* A = dyn_cast<Argument>(Def))
-      DefBB = &I->getFunction()->getEntryBlock();
-    else
-      return false; // must be global or a constant
-
-    BasicBlock* const UseBB = User->getParent();
-
+  bool hasPathCrossingSuspendPoint(BasicBlock* DefBB, BasicBlock* UseBB) {
     size_t const DefIndex = Mapping.blockToIndex(DefBB);
     size_t const UseIndex = Mapping.blockToIndex(UseBB);
 
     assert(Block[UseIndex].Consumes[DefIndex] && "use must consume def");
-    return Block[UseIndex].Kills[DefIndex];
+    auto Result = Block[UseIndex].Kills[DefIndex];
+    DEBUG(dbgs() << UseBB->getName() << " => " << DefBB->getName()
+                 << " answer is " << Result << "\n");
+    return Result;
   }
+
+  bool definitionAcrossSuspend(Argument& A, User* U) {
+    BasicBlock* DefBB = &A.getParent()->getEntryBlock();
+    BasicBlock* UseBB = cast<Instruction>(U)->getParent();
+    return hasPathCrossingSuspendPoint(DefBB, UseBB);
+  }
+
+  bool definitionAcrossSuspend(Instruction& I, User* U) {
+    BasicBlock* DefBB = I.getParent();
+    BasicBlock* UseBB = cast<Instruction>(U)->getParent();
+    return hasPathCrossingSuspendPoint(DefBB, UseBB);
+  }
+
 };
 
 void SuspendCrossingInfo::dump(StringRef Label, BitVector const& BV) {
@@ -113,7 +114,7 @@ void SuspendCrossingInfo::dump(StringRef Label, BitVector const& BV) {
 void SuspendCrossingInfo::dump() {
   for (size_t I = 0, N = Block.size(); I < N; ++I) {
     BasicBlock* const B = Mapping.indexToBlock(I);
-    dbgs() << "Block " << B->getName() << ":\n";
+    dbgs() << B->getName() << ":\n";
     dump("   Consumes", Block[I].Consumes);
     dump("      Kills", Block[I].Kills);
   }
@@ -130,16 +131,13 @@ SuspendCrossingInfo::SuspendCrossingInfo(Function& F, CoroutineShape& Shape) : M
     B.Consumes.resize(N);
     B.Kills.resize(N);
     B.Consumes.set(I);
-    if (B.Suspend)
-      B.Kills.set(I);
   }
 
   // Mark all suspend blocks and indicate that kill everything they consume
   for (CoroSuspendInst* CSI : Shape.CoroSuspend) {
     CoroSaveInst* const CoroSave = CSI->getCoroSave();
     BasicBlock* const CoroSaveBB = CoroSave->getParent();
-    BasicBlock* const SuspendBB = CoroSaveBB->getSingleSuccessor();
-    auto &B = Block[Mapping.blockToIndex(SuspendBB)];
+    auto &B = Block[Mapping.blockToIndex(CoroSaveBB)];
     B.Suspend = true;
     B.Kills |= B.Consumes;
   }
@@ -167,7 +165,10 @@ SuspendCrossingInfo::SuspendCrossingInfo(Function& F, CoroutineShape& Shape) : M
         if (B.Suspend) {
           S.Kills |= B.Consumes;
         }
-        if (!S.Suspend) {
+        if (S.Suspend) {
+          S.Kills |= S.Consumes;
+        }
+        else {
           S.Kills.reset(SuccNo);
         }
 
@@ -175,7 +176,7 @@ SuspendCrossingInfo::SuspendCrossingInfo(Function& F, CoroutineShape& Shape) : M
           (S.Kills != SavedKills) || (S.Consumes != SavedCons);
 
         if (S.Kills != SavedKills) {
-          DEBUG(dbgs() << "\nblock " << I << " follower " << SI << "\n");
+          DEBUG(dbgs() << "\nblock " << I << " follower " << SI->getName() << "\n");
           DEBUG(dump("s.kills", S.Kills));
           DEBUG(dump("savedKills", SavedKills));
         }
@@ -197,13 +198,38 @@ void buildCoroutineFrame(Function &F, CoroutineShape& Shape) {
 
   for (CoroSuspendInst* CSI : Shape.CoroSuspend) {
     CoroSaveInst* CoroSave = CSI->getCoroSave();
-    CoroSave->getParent()->splitBasicBlock(CoroSave->getNextNode());
+    // put CoroSave into its own block to simplify alter processing
+    CoroSave->getParent()->splitBasicBlock(CoroSave, "CoroSave");
+    CoroSave->getParent()->splitBasicBlock(CoroSave->getNextNode(), "AfterCoroSave");
   }
 
   // 2 make coro.begin a fork, jumping to ret block
   // 3 Split on end(final), so that return block can never enter
 
-  SuspendCrossingInfo builder(F, Shape);
+  SuspendCrossingInfo Checker(F, Shape);
+
+  SmallVector<Argument*, 4> ArgsToSpill;
+  for (Argument& A : F.getArgumentList())
+    for (User* U : A.users())
+      if (Checker.definitionAcrossSuspend(A, U))
+        ArgsToSpill.push_back(&A);
+
+  SmallVector<Instruction*, 4> ValuesToSpill;
+  for (Instruction& I : instructions(F))
+    for (User* U : I.users())
+      if (Checker.definitionAcrossSuspend(I, U))
+        ValuesToSpill.push_back(&I);
+
+  DEBUG(dbgs() << "Args to spill:");
+  BasicBlock& EntryBB = F.getEntryBlock();
+  for (Argument* A : ArgsToSpill)
+    DEBUG(dbgs() << " " << A->getName());
+  DEBUG(dbgs() << "\n");
+
+  DEBUG(dbgs() << "Values to spill:");
+  for (Instruction* I : ValuesToSpill)
+    DEBUG(dbgs() << " "<< I->getName());
+  DEBUG(dbgs() << "\n");
 }
 
 
