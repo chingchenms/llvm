@@ -206,7 +206,8 @@ static CallGraphNode* functionToCGN(Function* F, CallGraphSCC &SCC) {
 }
 
 static void preSplitPass(CoroInitInst * CI, CallGraphSCC &SCC) {
-  // 1. If there are parts, replace noinline with alwaysinline. (TODO)
+
+  // If there are parts, replace noinline with alwaysinline
 
   for (MDOperand const& P : CI->meta().getParts()) {
     auto SubF = cast<Function>(cast<ValueAsMetadata>(P)->getValue());
@@ -214,23 +215,7 @@ static void preSplitPass(CoroInitInst * CI, CallGraphSCC &SCC) {
     SubF->addFnAttr(Attribute::AlwaysInline);
   }
 
-  // 2. Remove fake calls that make coroutine and its resumers to be
-  //    in the same SCC.
-
-  Function& F = *CI->getFunction();
-  CallGraphNode* CoroNode = functionToCGN(&F, SCC);
-
-  CoroInfo Info = CI->meta().getCoroInfo();
-  SmallVector<CallGraphNode*, 4> CGNs;
-  CGNs.push_back(CoroNode);
-  CGNs.push_back(functionToCGN(Info.Resume, SCC));
-  CGNs.push_back(functionToCGN(Info.Destroy, SCC));
-  CGNs.push_back(functionToCGN(Info.Cleanup, SCC));
-
-  for (unsigned I = 0, N = CGNs.size(); I < N; ++I)
-    removeCall(CGNs[I], CGNs[(I+1) % N]);
-
-  // 3. Finally, indicate that the coroutine is ready for Split
+  // Finally, indicate that the coroutine is ready for Split
   CI->meta().setPhase(Phase::ReadyForSplit);
 }
 
@@ -253,6 +238,7 @@ namespace {
     CoroSplit() : CallGraphSCCPass(ID) {}
 
     bool runOnSCC(CallGraphSCC &SCC) override {
+
       // find coroutines for processing
       SmallVector<CoroInitInst*, 4> CIs;
       for (CallGraphNode *CGN : SCC)
@@ -267,7 +253,7 @@ namespace {
       CoroutineShape Shape;
 
       for (CoroInitInst* CoroInit : CIs)
-        if (CoroInit->meta().getPhase() == Phase::NotReadyForSplit)
+        if (CoroInit->meta().getPhase() == Phase::NotReadyForSplit) 
           preSplitPass(CoroInit, SCC);
         else
           splitCoroutine(CoroInit, Shape);
