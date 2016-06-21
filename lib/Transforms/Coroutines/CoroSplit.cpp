@@ -251,13 +251,6 @@ namespace {
   struct CoroSplit : public CallGraphSCCPass {
     static char ID; // Pass identification, replacement for typeid
     CoroSplit() : CallGraphSCCPass(ID) {}
-#if 0
-    bool doInitialization(CallGraph &CG) override {
-      bool changed = preSplitCoroutines(CG);
-      changed |= CallGraphSCCPass::doInitialization(CG);
-      return changed;
-    }
-#endif
 
     bool runOnSCC(CallGraphSCC &SCC) override {
       // find coroutines for processing
