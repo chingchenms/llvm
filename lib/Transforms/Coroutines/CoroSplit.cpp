@@ -259,7 +259,7 @@ namespace {
     }
 #endif
 
-    bool runOnSCC(CallGraphSCC &SCC) override {
+    bool runOnSCC(CallGraphSCC &SCC, bool& Devirt) override {
       // find coroutines for processing
       SmallVector<CoroInitInst*, 4> CIs;
       for (CallGraphNode *CGN : SCC)
@@ -274,8 +274,10 @@ namespace {
       CoroutineShape Shape;
 
       for (CoroInitInst* CoroInit : CIs)
-        if (CoroInit->meta().getPhase() == Phase::NotReadyForSplit)
+        if (CoroInit->meta().getPhase() == Phase::NotReadyForSplit) {
           preSplitPass(CoroInit, SCC);
+          Devirt = true;
+        }
         else
           splitCoroutine(CoroInit, Shape);
 

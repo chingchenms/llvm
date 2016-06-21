@@ -69,7 +69,7 @@ struct CallGraphSCCPassPrinter : public CallGraphSCCPass {
     PassName = "CallGraphSCCPass Printer: " + PassToPrintName;
   }
 
-  bool runOnSCC(CallGraphSCC &SCC) override {
+  bool runOnSCC(CallGraphSCC &SCC, bool& Devirt) override {
     if (!QuietPass)
       Out << "Printing analysis '" << PassToPrint->getPassName() << "':\n";
 

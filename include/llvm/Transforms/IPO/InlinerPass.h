@@ -40,7 +40,7 @@ struct Inliner : public CallGraphSCCPass {
 
   // Main run interface method, this implements the interface required by the
   // Pass class.
-  bool runOnSCC(CallGraphSCC &SCC) override;
+  bool runOnSCC(CallGraphSCC &SCC, bool& Devirt) override;
 
   using llvm::Pass::doFinalization;
   // doFinalization - Remove now-dead linkonce functions at the end of

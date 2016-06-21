@@ -123,7 +123,7 @@ bool CGPassManager::RunPassOnSCC(Pass *P, CallGraphSCC &CurSCC,
 
     {
       TimeRegion PassTimer(getPassTimer(CGSP));
-      Changed = CGSP->runOnSCC(CurSCC);
+      Changed = CGSP->runOnSCC(CurSCC, DevirtualizedCall);
     }
     
     // After the CGSCCPass is done, when assertions are enabled, use
@@ -609,7 +609,7 @@ namespace {
       AU.setPreservesAll();
     }
 
-    bool runOnSCC(CallGraphSCC &SCC) override {
+    bool runOnSCC(CallGraphSCC &SCC, bool& Devirt) override {
       Out << Banner;
       for (CallGraphNode *CGN : SCC) {
         if (CGN->getFunction()) {

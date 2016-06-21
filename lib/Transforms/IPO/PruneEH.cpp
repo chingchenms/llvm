@@ -46,7 +46,7 @@ namespace {
     }
 
     // runOnSCC - Analyze the SCC, performing the transformation if possible.
-    bool runOnSCC(CallGraphSCC &SCC) override;
+    bool runOnSCC(CallGraphSCC &SCC, bool& Devirt) override;
 
     bool SimplifyFunction(Function *F);
     void DeleteBasicBlock(BasicBlock *BB);
@@ -63,7 +63,7 @@ INITIALIZE_PASS_END(PruneEH, "prune-eh",
 Pass *llvm::createPruneEHPass() { return new PruneEH(); }
 
 
-bool PruneEH::runOnSCC(CallGraphSCC &SCC) {
+bool PruneEH::runOnSCC(CallGraphSCC &SCC, bool& Devirt) {
   SmallPtrSet<CallGraphNode *, 8> SCCNodes;
   CallGraph &CG = getAnalysis<CallGraphWrapperPass>().getCallGraph();
   bool MadeChange = false;
