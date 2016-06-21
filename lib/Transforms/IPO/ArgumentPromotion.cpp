@@ -73,7 +73,7 @@ namespace {
       CallGraphSCCPass::getAnalysisUsage(AU);
     }
 
-    bool runOnSCC(CallGraphSCC &SCC, bool& Devirt) override;
+    bool runOnSCC(CallGraphSCC &SCC) override;
     static char ID; // Pass identification, replacement for typeid
     explicit ArgPromotion(unsigned maxElements = 3)
         : CallGraphSCCPass(ID), maxElements(maxElements) {
@@ -113,7 +113,7 @@ Pass *llvm::createArgumentPromotionPass(unsigned maxElements) {
   return new ArgPromotion(maxElements);
 }
 
-bool ArgPromotion::runOnSCC(CallGraphSCC &SCC, bool& Devirt) {
+bool ArgPromotion::runOnSCC(CallGraphSCC &SCC) {
   bool Changed = false, LocalChange;
 
   do {  // Iterate until we stop promoting from this SCC.

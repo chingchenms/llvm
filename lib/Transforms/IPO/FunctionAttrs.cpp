@@ -1051,7 +1051,7 @@ struct PostOrderFunctionAttrsLegacyPass : public CallGraphSCCPass {
     initializePostOrderFunctionAttrsLegacyPassPass(*PassRegistry::getPassRegistry());
   }
 
-  bool runOnSCC(CallGraphSCC &SCC, bool& Devirt) override;
+  bool runOnSCC(CallGraphSCC &SCC) override;
 
   void getAnalysisUsage(AnalysisUsage &AU) const override {
     AU.setPreservesCFG();
@@ -1077,8 +1077,7 @@ INITIALIZE_PASS_END(PostOrderFunctionAttrsLegacyPass, "functionattrs",
 
 Pass *llvm::createPostOrderFunctionAttrsLegacyPass() { return new PostOrderFunctionAttrsLegacyPass(); }
 
-bool PostOrderFunctionAttrsLegacyPass::runOnSCC(CallGraphSCC &SCC,
-                                                bool &Devirt) {
+bool PostOrderFunctionAttrsLegacyPass::runOnSCC(CallGraphSCC &SCC) {
   TLI = &getAnalysis<TargetLibraryInfoWrapperPass>().getTLI();
   bool Changed = false;
 

@@ -45,7 +45,7 @@ public:
 
   static char ID; // Pass identification, replacement for typeid
 
-  bool runOnSCC(CallGraphSCC &SCC, bool& Devirt) override {
+  bool runOnSCC(CallGraphSCC &SCC) override {
     bool changed = false;
 
     for (CallGraphNode *CGN : SCC)

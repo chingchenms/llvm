@@ -57,9 +57,7 @@ public:
   /// SCC passes that add or delete functions to the SCC are required to update
   /// the SCC list, otherwise stale pointers may be dereferenced.
   ///
-  /// If the SCC pass requires the entire CGSCC pipeline to rerun on 
-  /// the current SCC. Set Devirt to true.
-  virtual bool runOnSCC(CallGraphSCC &SCC, bool& Devirt) = 0;
+  virtual bool runOnSCC(CallGraphSCC &SCC) = 0;
 
   /// doFinalization - This method is called after the SCC's of the program has
   /// been processed, allowing the pass to do final cleanup as necessary.

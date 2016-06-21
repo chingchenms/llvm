@@ -62,7 +62,7 @@ public:
     return llvm::getInlineCost(CS, DefaultThreshold, TTI, ACT);
   }
 
-  bool runOnSCC(CallGraphSCC &SCC, bool& Devirt) override;
+  bool runOnSCC(CallGraphSCC &SCC) override;
   void getAnalysisUsage(AnalysisUsage &AU) const override;
 
 private:
@@ -93,9 +93,9 @@ Pass *llvm::createFunctionInliningPass(unsigned OptLevel,
       llvm::computeThresholdFromOptLevels(OptLevel, SizeOptLevel));
 }
 
-bool SimpleInliner::runOnSCC(CallGraphSCC &SCC, bool& Devirt) {
+bool SimpleInliner::runOnSCC(CallGraphSCC &SCC) {
   TTIWP = &getAnalysis<TargetTransformInfoWrapperPass>();
-  return Inliner::runOnSCC(SCC, Devirt);
+  return Inliner::runOnSCC(SCC);
 }
 
 void SimpleInliner::getAnalysisUsage(AnalysisUsage &AU) const {
