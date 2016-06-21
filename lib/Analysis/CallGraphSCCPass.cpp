@@ -435,6 +435,14 @@ bool CGPassManager::RunAllPassesOnSCC(CallGraphSCC &CurSCC, CallGraph &CG,
   return Changed;
 }
 
+static bool hasCoroutines(CallGraphSCC const& CurSCC) {
+  for (CallGraphNode *CGN : CurSCC)
+    if (auto F = CGN->getFunction())
+      if (F->hasFnAttribute(Attribute::Coroutine))
+        return true;
+  return false;
+}
+
 /// Execute all of the passes scheduled for execution.  Keep track of
 /// whether any of the passes modifies the module, and if so, return true.
 bool CGPassManager::runOnModule(Module &M) {
@@ -470,7 +478,7 @@ bool CGPassManager::runOnModule(Module &M) {
       DEBUG(if (Iteration)
               dbgs() << "  SCCPASSMGR: Re-visiting SCC, iteration #"
                      << Iteration << '\n');
-      DevirtualizedCall = false;
+      DevirtualizedCall = hasCoroutines(CurSCC);
       Changed |= RunAllPassesOnSCC(CurSCC, CG, DevirtualizedCall);
     } while (Iteration++ < MaxIterations && DevirtualizedCall);
     
