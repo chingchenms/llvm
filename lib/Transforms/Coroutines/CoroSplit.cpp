@@ -237,8 +237,12 @@ namespace {
     static char ID; // Pass identification, replacement for typeid
     CoroSplit() : CallGraphSCCPass(ID) {}
 
-    bool runOnSCC(CallGraphSCC &SCC) override {
+    bool needToRestart;
+    
+    bool restartRequested() const override { return needToRestart; }
 
+    bool runOnSCC(CallGraphSCC &SCC) override {
+      needToRestart = false;
       // find coroutines for processing
       SmallVector<CoroInitInst*, 4> CIs;
       for (CallGraphNode *CGN : SCC)
@@ -253,8 +257,10 @@ namespace {
       CoroutineShape Shape;
 
       for (CoroInitInst* CoroInit : CIs)
-        if (CoroInit->meta().getPhase() == Phase::NotReadyForSplit) 
+        if (CoroInit->meta().getPhase() == Phase::NotReadyForSplit) {
           preSplitPass(CoroInit, SCC);
+          needToRestart = true;
+        }
         else
           splitCoroutine(CoroInit, Shape);
 
