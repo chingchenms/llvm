@@ -13,6 +13,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "CoroutineCommon.h"
+#include "CoroExtract.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/CFG.h"
 #include "llvm/Pass.h"
@@ -22,28 +23,36 @@
 #include "llvm/ADT/StringSwitch.h"
 #include "llvm/IR/InstIterator.h"
 #include <llvm/Transforms/Utils/BasicBlockUtils.h>
+#include <utility>
 
 using namespace llvm;
 using namespace llvm::CoroCommon;
 
 #define DEBUG_TYPE "coro-outline"
 
-#if 0
-Instruction* findRetEnd(CoroutineShape& S) {
-  auto RetBB = S.Return.back()->getParent();
-  auto EndBB = S.CoroEndFinal.back()->getParent();
-  if (RetBB == EndBB || RetBB->getUniquePredecessor() == EndBB)
-    return S.Return.back();
+bool contains(pred_range range, BasicBlock* BB) {
+  for (BasicBlock* V : range)
+    if (V == BB)
+      return true;
+  return false;
+}
 
-  for (BasicBlock* BB : predecessors(RetBB))
-    if (BB == EndBB)
-      return &RetBB->front();
-
-  return nullptr;
+std::pair<Instruction*,Instruction*> getRetCode(CoroutineShape& S) {
+  auto RetStartBB = S.CoroEndFinal.back()->getParent()->getSingleSuccessor();
+  assert(RetStartBB && "Expecting single successor after coro.end(final)");
+  auto CoroBegBB = S.CoroBegin.back()->getParent();
+  assert(contains(predecessors(RetStartBB), CoroBegBB) &&
+         "expecting coro.end(final) flow into the same block as if-false "
+         "branch from coro.begin");
+  auto RetEndBB = RetStartBB;
+  while (BasicBlock* Next = RetEndBB->getSingleSuccessor()) {
+    RetEndBB = Next;
+  }
+  return {&RetStartBB->front(), RetEndBB->getTerminator()};
 }
 
 static void outlineCoroutineParts(CoroutineShape& S) {
-  Function& F = *S.CoroInit.front()->getParent()->getParent();
+  Function& F = *S.CoroBegin.front()->getFunction();
   CoroCommon::removeLifetimeIntrinsics(F); // for now
   DEBUG(dbgs() << "Processing Coroutine: " << F.getName() << "\n");
   DEBUG(S.dump());
@@ -53,23 +62,18 @@ static void outlineCoroutineParts(CoroutineShape& S) {
     auto First = splitBlockIfNotFirst(From, Name);
     auto Last = splitBlockIfNotFirst(Upto);
     auto Fn = Extractor.createFunction(First, Last);
-    return ValueAsMetadata::get(Fn);
+    return Fn;
   };
 
   // Outline the parts and create a metadata tuple, so that CoroSplit
   // pass can quickly figure out what they are.
 
-  SmallVector<Metadata *, 8> MDs{
-      Outline(".AllocPart", S.CoroAlloc.back(), S.CoroInit.back()),
-      Outline(".InitPart", S.CoroInit.back()->getNextNode(),
-              S.CoroBegin.back()),
-      Outline(".FreePart", S.CoroFree.front(), S.CoroEndFinal.front()),
+  auto RC = getRetCode(S);
+  SmallVector<Function *, 8> MDs{
+      Outline(".AllocPart", S.CoroAlloc.back(), S.CoroBegin.back()),
+      Outline(".FreePart", S.CoroFree.back(), S.CoroEndFinal.back()),
+      Outline(".RetPart", RC.first, RC.second)
   };
-
-  // If we can figure out end of the ret part, outline it too.
-  if (auto RetEnd = findRetEnd(S)) {
-    MDs.push_back(Outline(".RetPart", S.CoroEndFinal.front(), RetEnd));
-  }
 
   // Outline suspend points.
   for (CoroSuspendInst *SI : S.CoroSuspend) {
@@ -77,18 +81,19 @@ static void outlineCoroutineParts(CoroutineShape& S) {
       Outline(".SuspendPart", SI->getCoroSave(), SI->getNextNode()));
   }
 
-  S.CoroInit.back()->meta().setParts(MDs);
+  // TODO: update info
+//  S.CoroInit.back()->meta().setParts(MDs);
 }
 
 static bool processModule(Module& M) {
   SmallVector<Function*, 8> Coroutines;
-  Function *CoroInitFn = Intrinsic::getDeclaration(&M, Intrinsic::coro_init);
+  Function *CoroBeginFn = Intrinsic::getDeclaration(&M, Intrinsic::coro_begin);
 
   // Find all unprocessed coroutines.
-  for (User* U : CoroInitFn->users())
-    if (auto CoroInit = dyn_cast<CoroInitInst>(U))
-      if (CoroInit->meta().getPhase() == Phase::NotReadyForSplit)
-        Coroutines.push_back(CoroInit->getParent()->getParent());
+  for (User* U : CoroBeginFn->users())
+    if (auto CoroBeg = dyn_cast<CoroBeginInst>(U))
+      if (CoroBeg->unprocessed())
+        Coroutines.push_back(CoroBeg->getFunction());
 
   // Outline coroutine parts to guard against code movement
   // during optimizations. We inline them back in CoroSplit.
@@ -99,7 +104,7 @@ static bool processModule(Module& M) {
   }
   return !Coroutines.empty();
 }
-#endif
+
 //===----------------------------------------------------------------------===//
 //                              Top Level Driver
 //===----------------------------------------------------------------------===//
@@ -110,7 +115,7 @@ namespace {
     CoroOutline() : ModulePass(ID) {}
 
     bool runOnModule(Module &M) override {
-      return false; // processModule(M);
+      return processModule(M);
     }
   };
 }

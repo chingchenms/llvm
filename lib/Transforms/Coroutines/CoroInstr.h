@@ -117,6 +117,10 @@ namespace llvm {
       setArgOperand(kInfo, C);
     }
 
+    bool unprocessed() const { 
+      auto V = getInfo();
+      return isa<ConstantPointerNull>(V); 
+    }
     //bool isUntouched() const { return meta().getPhase() == Phase::Fresh; }
     //bool isPostSplit() const { return meta().getPhase() >= Phase::PostSplit; }
     bool isPreSplit() const { return true; } // FIXME:

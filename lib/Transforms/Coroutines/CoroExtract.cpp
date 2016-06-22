@@ -15,7 +15,13 @@
 
 #include "CoroExtract.h"
 
-#if 0
+#include <llvm/Transforms/Utils/CodeExtractor.h>
+#include <llvm/IR/Function.h>
+#include <llvm/IR/CFG.h>
+
+using namespace llvm;
+
+#if 1
 Function *llvm::CoroPartExtractor::createFunction(BasicBlock *Start,
   BasicBlock *End) {
   computeRegion(Start, End);
