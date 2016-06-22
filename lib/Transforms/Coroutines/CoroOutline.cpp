@@ -16,6 +16,7 @@
 #include "CoroExtract.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/CFG.h"
+#include "llvm/IR/ConstantFolder.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/ADT/SetVector.h"
@@ -53,6 +54,7 @@ std::pair<Instruction*,Instruction*> getRetCode(CoroutineShape& S) {
 
 static void outlineCoroutineParts(CoroutineShape& S) {
   Function& F = *S.CoroBegin.front()->getFunction();
+  Module& M = *F.getParent();
   CoroCommon::removeLifetimeIntrinsics(F); // for now
   DEBUG(dbgs() << "Processing Coroutine: " << F.getName() << "\n");
   DEBUG(S.dump());
@@ -69,7 +71,7 @@ static void outlineCoroutineParts(CoroutineShape& S) {
   // pass can quickly figure out what they are.
 
   auto RC = getRetCode(S);
-  SmallVector<Function *, 8> MDs{
+  SmallVector<Constant *, 8> Funcs{
       Outline(".AllocPart", S.CoroAlloc.back(), S.CoroBegin.back()),
       Outline(".FreePart", S.CoroFree.back(), S.CoroEndFinal.back()),
       Outline(".RetPart", RC.first, RC.second)
@@ -77,12 +79,19 @@ static void outlineCoroutineParts(CoroutineShape& S) {
 
   // Outline suspend points.
   for (CoroSuspendInst *SI : S.CoroSuspend) {
-    MDs.push_back(
+    Funcs.push_back(
       Outline(".SuspendPart", SI->getCoroSave(), SI->getNextNode()));
   }
 
-  // TODO: update info
-//  S.CoroInit.back()->meta().setParts(MDs);
+  auto ConstVal = ConstantStruct::getAnon(Funcs);
+  auto GV = new GlobalVariable(M, ConstVal->getType(), /*isConstant=*/true,
+                               GlobalVariable::PrivateLinkage, ConstVal,
+                               F.getName() + Twine(".outlined"));
+
+  // Update coro.begin instruction to refer to this constant
+  LLVMContext& C = F.getContext();
+  auto BC = ConstantFolder().CreateBitCast(GV, Type::getInt8PtrTy(C));
+  S.CoroBegin.back()->setInfo(BC);
 }
 
 static bool processModule(Module& M) {
