@@ -6,6 +6,12 @@ Thoughts after discussion with Chandler, Hal and Richard.
   Outline using cloning. Make them fastcc.
   Return values using insertvalue, extractvalue
 
+  Constant *ConstantFolder::CreateExtractValue(Constant *Agg,
+                               ArrayRef<unsigned> IdxList) const {
+    return ConstantExpr::getExtractValue(Agg, IdxList);
+  }
+
+
 * three-way or two-way coro.suspend?
   A: Two-way, there will be a branch from coro.init or coro.begin to make sure
      that return block is not discarded by SimplifyCFG in case we have an

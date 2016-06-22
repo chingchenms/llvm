@@ -21,6 +21,7 @@
 #define LLVM_LIB_TRANSFORMS_COROUTINES_COROINSTR_H
 
 #include <llvm/IR/IntrinsicInst.h>
+#include <llvm/IR/GlobalVariable.h> // TODO: move to .cpp
 
 // Metadata tuple in CoroInitInstr starts with a string identifying 
 // the pass that produces the metadata. It can hold one of these values:
@@ -117,10 +118,42 @@ namespace llvm {
       setArgOperand(kInfo, C);
     }
 
-    bool unprocessed() const { 
+    bool isUnprocessed() const { 
       auto V = getInfo();
       return isa<ConstantPointerNull>(V); 
     }
+    bool isReadyForSplit() const {
+      if (isUnprocessed())
+        return false;
+      auto V = getInfo();V;
+      return true;
+    }
+
+    ConstantStruct* getOutlinedParts() const {
+      auto GV = cast<GlobalVariable>(getInfo());
+      assert(GV->isConstant() && GV->hasDefinitiveInitializer());
+      auto init = GV->getInitializer();
+      return cast<ConstantStruct>(init);
+    }
+
+    ConstantArray* getResumers() const {
+      auto GV = cast<GlobalVariable>(getInfo());
+      assert(GV->isConstant() && GV->hasDefinitiveInitializer());
+      auto init = GV->getInitializer();
+      return cast<ConstantArray>(init);
+    }
+
+    bool isPostSplit() const {
+      auto GV = dyn_cast<GlobalVariable>(getInfo());
+      if (!GV)
+        return false;
+
+      assert(GV->isConstant() && GV->hasDefinitiveInitializer());
+      auto init = GV->getInitializer();
+      bool isArray = isa<ConstantArray>(init);
+      return isArray;
+    }
+
     //bool isUntouched() const { return meta().getPhase() == Phase::Fresh; }
     //bool isPostSplit() const { return meta().getPhase() >= Phase::PostSplit; }
     bool isPreSplit() const { return true; } // FIXME:

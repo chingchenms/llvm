@@ -101,7 +101,7 @@ static bool processModule(Module& M) {
   // Find all unprocessed coroutines.
   for (User* U : CoroBeginFn->users())
     if (auto CoroBeg = dyn_cast<CoroBeginInst>(U))
-      if (CoroBeg->unprocessed())
+      if (CoroBeg->isUnprocessed())
         Coroutines.push_back(CoroBeg->getFunction());
 
   // Outline coroutine parts to guard against code movement

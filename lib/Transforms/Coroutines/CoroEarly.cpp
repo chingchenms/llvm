@@ -43,7 +43,7 @@ static void initMetadata(CoroInitInst& CoroInit, Function& F) {
   }
 }
 #endif
-
+#if 0
 static void addBranchToCoroEnd(CoroutineShape &S, Function &F) {
   S.buildFrom(F);
   auto Zero = ConstantInt::get(S.CoroSuspend.back()->getType(), 0);
@@ -57,13 +57,14 @@ static void addBranchToCoroEnd(CoroutineShape &S, Function &F) {
     SplitBlockAndInsertIfThen(Cond, InsertPt, /*unreachable=*/false);
   }
 }
+#endif
 
 static bool replaceEmulatedIntrinsicsWithRealOnes(Module& M) {
   bool changed = true;
   SmallVector<Value*, 8> Args;
   LLVMContext & C = M.getContext();
   auto BytePtrTy = PointerType::get(IntegerType::get(C, 8), 0);
-  auto Zero = ConstantInt::get(IntegerType::get(C, 32), 0);
+//  auto Zero = ConstantInt::get(IntegerType::get(C, 32), 0);
   auto Null = ConstantPointerNull::get(BytePtrTy);
 
   CallInst* SavedIntrinsic = nullptr;

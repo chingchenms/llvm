@@ -229,6 +229,33 @@ static void splitCoroutine(CoroInitInst * CI, CoroutineShape& Shape) {
   buildCoroutineFrame(F, Shape);
 }
 #endif
+
+// FIXME: Use explicit tag for the phase
+// it is likely that we would like to control inlining by
+// ourselves prior to split
+bool removeNoInline(Function& F, CoroBeginInst& CoroBeg) {
+  ConstantStruct *ST = CoroBeg.getOutlinedParts();
+  unsigned I = 0, N = ST->getNumOperands();
+  assert(N > 0);
+
+  for (;I < N; ++I) {
+    auto Part = cast<Function>(ConstantFolder().CreateExtractValue(ST, I)); 
+    if (!Part->hasFnAttribute(Attribute::NoInline))
+      return false;
+    Part->removeFnAttr(Attribute::NoInline);
+    Part->addFnAttr(Attribute::AlwaysInline);
+  }
+  return true;
+}
+
+CoroBeginInst* findDefiningCoroBegin(Function* F) {
+  for (auto& I : instructions(*F))
+    if (auto CB = dyn_cast<CoroBeginInst>(&I))
+      if (!CB->isUnprocessed() && !CB->isPostSplit())
+        return CB;
+  return nullptr;
+}
+
 //===----------------------------------------------------------------------===//
 //                              Top Level Driver
 //===----------------------------------------------------------------------===//
@@ -239,11 +266,6 @@ namespace {
     static char ID; // Pass identification, replacement for typeid
     CoroSplit() : CallGraphSCCPass(ID) {}
 
-    bool runOnSCC(CallGraphSCC &SCC) override {
-      return false;
-    }
-
-#if 0
     bool needToRestart;
     
     bool restartRequested() const override { return needToRestart; }
@@ -251,29 +273,38 @@ namespace {
     bool runOnSCC(CallGraphSCC &SCC) override {
       needToRestart = false;
       // find coroutines for processing
-      SmallVector<CoroInitInst*, 4> CIs;
+      SmallVector<Function*, 4> Coroutines;
       for (CallGraphNode *CGN : SCC)
         if (auto F = CGN->getFunction())
-          if (auto CoroInit =
-                  CoroCommon::findCoroInit(F, Phase::PostSplit, false))
-            CIs.push_back(CoroInit);
+          if (F->hasFnAttribute(Attribute::Coroutine))
+            Coroutines.push_back(F);
 
-      if (CIs.empty())
+      if (Coroutines.empty())
         return false;
 
       CoroutineShape Shape;
 
-      for (CoroInitInst* CoroInit : CIs)
+      for (Function* F: Coroutines) {
+        auto CoroBeg = findDefiningCoroBegin(F);
+        assert(CoroBeg && "missing coro.begin in a coroutine");
+
+        // we make two passes over coroutines, in the first one we
+        // only remove noinline
+        if (removeNoInline(*F, *CoroBeg))
+          continue;
+//        splitCoroutine(*F, *CoroBeg);
+      }
+#if 0
         if (CoroInit->meta().getPhase() == Phase::NotReadyForSplit) {
           preSplitPass(CoroInit, SCC);
           needToRestart = true;
         }
         else
           splitCoroutine(CoroInit, Shape);
-
+#endif
       return true;
     }
-#endif
+
   };
 }
 
