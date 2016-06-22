@@ -164,12 +164,12 @@ struct CoroEarly : public FunctionPass {
     if (!F.hasFnAttribute(Attribute::Coroutine))
       return false;
 
-    Shape.buildFrom(F);
+    //Shape.buildFrom(F);
 
-    Shape.CoroInit.back()->meta().update({
-      {Phase::NotReadyForSplit, F.getContext()},
-      {CoroMeta::Field::Func, &F}
-    });
+    //Shape.CoroInit.back()->meta().update({
+    //  {Phase::NotReadyForSplit, F.getContext()},
+    //  {CoroMeta::Field::Func, &F}
+    //});
     return true;
   }
 

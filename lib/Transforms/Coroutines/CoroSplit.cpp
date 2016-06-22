@@ -28,6 +28,8 @@ using namespace llvm;
 
 #define DEBUG_TYPE "coro-split"
 
+#if 0
+
 // Since runOnSCC cannot create any functions,
 // we will create functions with empty bodies
 // that we will fill later during runOnSCC.
@@ -226,7 +228,7 @@ static void splitCoroutine(CoroInitInst * CI, CoroutineShape& Shape) {
   Shape.buildFrom(F);
   buildCoroutineFrame(F, Shape);
 }
-
+#endif
 //===----------------------------------------------------------------------===//
 //                              Top Level Driver
 //===----------------------------------------------------------------------===//
@@ -237,6 +239,11 @@ namespace {
     static char ID; // Pass identification, replacement for typeid
     CoroSplit() : CallGraphSCCPass(ID) {}
 
+    bool runOnSCC(CallGraphSCC &SCC) override {
+      return false;
+    }
+
+#if 0
     bool needToRestart;
     
     bool restartRequested() const override { return needToRestart; }
@@ -266,6 +273,7 @@ namespace {
 
       return true;
     }
+#endif
   };
 }
 

@@ -243,4 +243,6 @@ void llvm::buildCoroutineFrame(Function &F, CoroutineShape& Shape) {
   for (Instruction* I : ValuesToSpill)
     DEBUG(dbgs() << " "<< I->getName());
   DEBUG(dbgs() << "\n");
+
+  EntryBB; // Do spills and reloads
 }

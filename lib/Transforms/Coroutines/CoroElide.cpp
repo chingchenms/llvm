@@ -51,6 +51,7 @@ INITIALIZE_PASS(
 
 Pass *llvm::createCoroElidePass() { return new CoroElide(); }
 
+#if 0
 static void replaceWithConstant(Constant *Value,
                          SmallVectorImpl<IntrinsicInst*> &Users) {
   if (Users.empty())
@@ -114,3 +115,6 @@ bool CoroElide::runOnFunction(Function &F) {
 
   return changed;
 }
+#endif
+
+bool CoroElide::runOnFunction(Function &F) { return false; }

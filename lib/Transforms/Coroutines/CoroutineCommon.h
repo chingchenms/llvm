@@ -28,24 +28,14 @@ class Function;
 class BasicBlock;
 class Constant;
 
-struct LLVM_LIBRARY_VISIBILITY CoroPartExtractor {
-  Function *createFunction(BasicBlock *Start, BasicBlock *End);
-private:
-  void dump();
-  SetVector<BasicBlock *> Blocks;
-  void computeRegion(BasicBlock *Start, BasicBlock *End);
-};
-
 namespace CoroCommon {
   void removeLifetimeIntrinsics(Function &F);
   void constantFoldUsers(Constant* Value);
-  CoroInitInst* findCoroInit(Function* F, Phase P, bool Match = true);
   BasicBlock *splitBlockIfNotFirst(Instruction *I, const Twine &Name = "");
 };
 
 /// Holds all structural Coroutine Intrinsics for a particular function.
 struct LLVM_LIBRARY_VISIBILITY CoroutineShape {
-  TinyPtrVector<CoroInitInst*> CoroInit;
   TinyPtrVector<CoroAllocInst*> CoroAlloc;
   TinyPtrVector<CoroBeginInst*> CoroBegin;
   TinyPtrVector<CoroEndInst*> CoroEndFinal;
@@ -63,16 +53,12 @@ struct LLVM_LIBRARY_VISIBILITY CoroutineShape {
   void dump();
   CoroutineShape() = default;
   void buildFrom(Function &F);
-  //explicit CoroutineShape(Function &F) { buildFrom(F); }
-  //explicit CoroutineShape(CoroInitInst *CoroInit)
-  //  : CoroutineShape(*CoroInit->getParent()->getParent()) {}
 
 private:
   void clear();
 };
 
 template <class F> void CoroutineShape::reflect(F&& f) {
-  f(CoroInit, "CoroInit");
   f(CoroAlloc, "CoroAlloc");
   f(CoroBegin, "CoroBegin");
   f(CoroEndFinal, "CoroEndFinal");
@@ -93,7 +79,6 @@ void initializeCoroOutlinePass(PassRegistry &Registry);
 void initializeCoroElidePass(PassRegistry &Registry);
 void initializeCoroCleanupPass(PassRegistry &registry);
 void initializeCoroSplitPass(PassRegistry &registry);
-void initializeCoroInlinePass(PassRegistry&);
 
 //===----------------------------------------------------------------------===//
 //

@@ -28,6 +28,7 @@ using namespace llvm::CoroCommon;
 
 #define DEBUG_TYPE "coro-outline"
 
+#if 0
 Instruction* findRetEnd(CoroutineShape& S) {
   auto RetBB = S.Return.back()->getParent();
   auto EndBB = S.CoroEndFinal.back()->getParent();
@@ -98,7 +99,7 @@ static bool processModule(Module& M) {
   }
   return !Coroutines.empty();
 }
-
+#endif
 //===----------------------------------------------------------------------===//
 //                              Top Level Driver
 //===----------------------------------------------------------------------===//
@@ -109,7 +110,7 @@ namespace {
     CoroOutline() : ModulePass(ID) {}
 
     bool runOnModule(Module &M) override {
-      return processModule(M);
+      return false; // processModule(M);
     }
   };
 }

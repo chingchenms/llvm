@@ -36,9 +36,9 @@ CoroEndInst *llvm::CoroEndInst::Create(Instruction *InsertBefore, Value *Addr) {
   return cast<CoroEndInst>(Call);
 }
 
-CoroResumeAddrInst *CoroResumeAddrInst::Create(Value *FramePtr,
-                                               Instruction *InsertBefore) {
-  auto Fn = Intrinsic::getDeclaration(InsertBefore->getModule(), ID);
-  auto Call = CallInst::Create(Fn, {FramePtr}, "", InsertBefore);
-  return cast<CoroResumeAddrInst>(Call);
-}
+//CoroResumeAddrInst *CoroResumeAddrInst::Create(Value *FramePtr,
+//                                               Instruction *InsertBefore) {
+//  auto Fn = Intrinsic::getDeclaration(InsertBefore->getModule(), ID);
+//  auto Call = CallInst::Create(Fn, {FramePtr}, "", InsertBefore);
+//  return cast<CoroResumeAddrInst>(Call);
+//}

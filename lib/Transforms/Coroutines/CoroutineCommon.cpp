@@ -53,52 +53,6 @@ BasicBlock *CoroCommon::splitBlockIfNotFirst(Instruction *I,
   return BB->splitBasicBlock(I, Name);
 }
 
-Function *llvm::CoroPartExtractor::createFunction(BasicBlock *Start,
-                                                  BasicBlock *End) {
-  computeRegion(Start, End);
-  auto F = CodeExtractor(Blocks.getArrayRef()).extractCodeRegion();
-  assert(F && "failed to extract coroutine part");
-  F->addFnAttr(Attribute::NoInline);
-  return F;
-}
-
-void llvm::CoroPartExtractor::dump() {
-  for (auto *BB : Blocks)
-    BB->dump();
-}
-
-void llvm::CoroPartExtractor::computeRegion(BasicBlock *Start,
-                                            BasicBlock *End) {
-  SmallVector<BasicBlock*, 4> WorkList({ End });
-  SmallPtrSet<BasicBlock*, 4> PredSet;
-
-  // Collect all predecessors of the End block
-  do {
-    auto BB = WorkList.pop_back_val();
-    PredSet.insert(BB);
-    for (auto PBB : predecessors(BB))
-      if (PredSet.count(PBB) == 0)
-        WorkList.push_back(PBB);
-  } while (!WorkList.empty());
-
-  // Now collect all successors of the Start block from the
-  // set of predecessors of End
-  Blocks.clear();
-  WorkList.push_back(Start);
-  do {
-    auto BB = WorkList.pop_back_val();
-    if (PredSet.count(BB) == 0)
-      continue;
-
-    Blocks.insert(BB);
-    for (auto SBB : successors(BB))
-      if (Blocks.count(SBB) == 0)
-        WorkList.push_back(SBB);
-  } while (!WorkList.empty());
-
-  Blocks.remove(End);
-}
-
 void CoroCommon::constantFoldUsers(Constant* Value) {
   SmallPtrSet<Instruction*, 16> WorkList;
   for (User *U : Value->users())
@@ -166,15 +120,12 @@ void llvm::CoroutineShape::buildFrom(Function &F) {
       case Intrinsic::coro_suspend:
         CoroSuspend.push_back(cast<CoroSuspendInst>(II));
         break;
-      case Intrinsic::coro_init: {
-        auto CI = cast<CoroInitInst>(II);
-        if (CI->isPreSplit())
-          CoroInit.push_back(CI);
+      case Intrinsic::coro_begin: {
+        auto CB = cast<CoroBeginInst>(II);
+        if (CB->isPreSplit())
+          CoroBegin.push_back(CB);
         break;
       }
-      case Intrinsic::coro_begin:
-        CoroBegin.push_back(cast<CoroBeginInst>(II));
-        break;
       case Intrinsic::coro_free:
         CoroFree.push_back(cast<CoroFreeInst>(II));
         break;
@@ -188,10 +139,8 @@ void llvm::CoroutineShape::buildFrom(Function &F) {
       }
     }
   }
-  assert(CoroInit.size() == 1 &&
-    "coroutine should have exactly one defining @llvm.coro.init");
   assert(CoroBegin.size() == 1 &&
-    "coroutine should have exactly one @llvm.coro.begin");
+    "coroutine should have exactly one defining @llvm.coro.begin");
   assert(CoroAlloc.size() == 1 &&
     "coroutine should have exactly one @llvm.coro.alloc");
   assert(CoroEndFinal.size() == 1 &&
@@ -199,7 +148,6 @@ void llvm::CoroutineShape::buildFrom(Function &F) {
 }
 
 void llvm::initializeCoroutines(PassRegistry &registry) {
-  initializeCoroInlinePass(registry);
   initializeCoroOutlinePass(registry);
   initializeCoroEarlyPass(registry);
   initializeCoroElidePass(registry);
@@ -207,7 +155,8 @@ void llvm::initializeCoroutines(PassRegistry &registry) {
   initializeCoroSplitPass(registry);
 }
 
-CoroInitInst* CoroCommon::findCoroInit(Function* F, Phase P, bool Match) {
+#if 0
+CoroBeginInst* CoroCommon::findCoroBegin(Function* F, Phase P, bool Match) {
   if (!F->hasFnAttribute(Attribute::Coroutine))
     return nullptr;
 
@@ -225,6 +174,7 @@ CoroInitInst* CoroCommon::findCoroInit(Function* F, Phase P, bool Match) {
 
   return nullptr;
 }
+#endif
 
 // Move the code below to CoroPasses.cpp / CoroPasses.h
 static bool g_VerifyEach = false;

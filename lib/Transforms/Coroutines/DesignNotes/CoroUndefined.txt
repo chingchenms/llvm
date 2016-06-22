@@ -8,7 +8,7 @@ Hi Mats:
 You are right. After thinking a bit more, reading your reply and
 re-reading llvm blog post on undefined behavior, I realized, duh, 
 that even on systems where NULL access results in a crash we can 
-easily get into bad situation.
+still get into a bad situation.
 
   struct State {
      FnPtr Fn;
@@ -22,7 +22,8 @@ easily get into bad situation.
 Since, calling Go() when the state machine has reached the "Done"
 state is undefined, it is perfectly legal to replace an indirect 
 call with direct call to its target. Thus, if the user end up 
-calling Go() in a done state, it won't crash, but, will do something bad.
+calling Go() in a done state, it won't crash, but, invoke SomeFunction()
+which may do some bad things since we are no longer in a valid state.
 
 >> Certainly in a debug build, I'd add an assert for `fn != nullptr` 
 >> in the `Go` function. Possibly even actively prevent it from getting through
@@ -30,7 +31,7 @@ calling Go() in a done state, it won't crash, but, will do something bad.
 >> instructions anyway.
 
 I am thinking that I will probably let the frontend/library writer to worry 
-about it, inserting the checks as needed. Moreover, fn != nullptr won't help 
+about inserting the checks as needed. Moreover, fn != nullptr won't help 
 in the general case as the memory for the state machine might have been freed 
 and reused, so it will need some kind of flow control guard + memory sanitizer 
 if safety is desired.

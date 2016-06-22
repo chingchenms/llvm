@@ -20,10 +20,7 @@
 #ifndef LLVM_LIB_TRANSFORMS_COROUTINES_COROINSTR_H
 #define LLVM_LIB_TRANSFORMS_COROUTINES_COROINSTR_H
 
-#include "CoroMeta.h"
-
 #include <llvm/IR/IntrinsicInst.h>
-#include <llvm/ADT/StringSwitch.h>
 
 // Metadata tuple in CoroInitInstr starts with a string identifying 
 // the pass that produces the metadata. It can hold one of these values:
@@ -32,11 +29,9 @@ namespace llvm {
 
   using CoroAllocInst = IntrinsicInst;
   using CoroSizeInst = IntrinsicInst;
-  using CoroBeginInst = IntrinsicInst;
   using CoroFreeInst = IntrinsicInst;
 
   using CoroSaveInst = IntrinsicInst;
-  using CoroSizeInst = IntrinsicInst;
 
   /// This represents the llvm.coro.end instruction.
   class LLVM_LIBRARY_VISIBILITY CoroSuspendInst : public IntrinsicInst {
@@ -52,22 +47,6 @@ namespace llvm {
     // Methods to support type inquiry through isa, cast, and dyn_cast:
     static inline bool classof(const IntrinsicInst *I) {
       return I->getIntrinsicID() == Intrinsic::coro_suspend;
-    }
-    static inline bool classof(const Value *V) {
-      return isa<IntrinsicInst>(V) && classof(cast<IntrinsicInst>(V));
-    }
-  };
-
-  /// This represents the llvm.coro.end instruction.
-  class LLVM_LIBRARY_VISIBILITY CoroResumeAddrInst : public IntrinsicInst {
-    static const Intrinsic::ID ID = Intrinsic::coro_resume_addr;
-  public:
-    static CoroResumeAddrInst *Create(Value *FramePtr,
-                                      Instruction *InsertBefore);
-
-    // Methods to support type inquiry through isa, cast, and dyn_cast:
-    static inline bool classof(const IntrinsicInst *I) {
-      return I->getIntrinsicID() == ID;
     }
     static inline bool classof(const Value *V) {
       return isa<IntrinsicInst>(V) && classof(cast<IntrinsicInst>(V));
@@ -107,13 +86,9 @@ namespace llvm {
   };
 
   /// This represents the llvm.coro.init instruction.
-  class LLVM_LIBRARY_VISIBILITY CoroInitInst : public IntrinsicInst {
-    enum { kMem, kAlloc, kAlign, kPromise, kMeta };
+  class LLVM_LIBRARY_VISIBILITY CoroBeginInst : public IntrinsicInst {
+    enum { kMem, kAlloc, kAlign, kPromise, kInfo };
   public:
-
-    /// Provides a helpful Coroutine Metadata manipulation wrapper
-    CoroMeta meta() { return{ this }; }
-    CoroMeta meta() const { return {const_cast<CoroInitInst *>(this)}; }
 
     CoroAllocInst *getAlloc() const {
       return dyn_cast<CoroAllocInst>(getArgOperand(kAlloc));
@@ -124,10 +99,24 @@ namespace llvm {
     ConstantInt *getAlignment() const {
       return cast<ConstantInt>(getArgOperand(kAlign));
     }
+    void setAlignment(unsigned Align) {
+      auto * C = ConstantInt::get(Type::getInt32Ty(getContext()), Align);
+      setArgOperand(kAlign, C);
+    }
 
-    bool isUntouched() const { return meta().getPhase() == Phase::Fresh; }
-    bool isPostSplit() const { return meta().getPhase() >= Phase::PostSplit; }
-    bool isPreSplit() const { return !isPostSplit(); }
+    // fresh - i8* null
+    // outined - {Init, Return, Susp1, Susp2, ...}
+    // postsplit - [resume, destroy, cleanup]
+    Value* getInfo() const {
+      return getArgOperand(kInfo)->stripPointerCasts();
+    }
+    void setInfo(Value* C) {
+      setArgOperand(kInfo, C);
+    }
+
+    //bool isUntouched() const { return meta().getPhase() == Phase::Fresh; }
+    //bool isPostSplit() const { return meta().getPhase() >= Phase::PostSplit; }
+    bool isPreSplit() const { return true; } // FIXME:
 
     // Methods for support type inquiry through isa, cast, and dyn_cast:
     static inline bool classof(const IntrinsicInst *I) {
