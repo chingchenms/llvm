@@ -65,7 +65,6 @@ static bool replaceEmulatedIntrinsicsWithRealOnes(Module& M) {
   auto BytePtrTy = PointerType::get(IntegerType::get(C, 8), 0);
   auto Zero = ConstantInt::get(IntegerType::get(C, 32), 0);
   auto Null = ConstantPointerNull::get(BytePtrTy);
-  auto MetaVal = MetadataAsValue::get(C, MDString::get(C, ""));
 
   CallInst* SavedIntrinsic = nullptr;
   CoroutineShape CoroShape;
@@ -79,8 +78,7 @@ static bool replaceEmulatedIntrinsicsWithRealOnes(Module& M) {
         if (auto F = CI->getCalledFunction()) {
           const auto id = StringSwitch<Intrinsic::ID>(F->getName())
             .Case("llvm_coro_alloc", Intrinsic::coro_alloc)
-            .Case("llvm_coro_init", Intrinsic::coro_init)
-            .Case("llvm_coro_begin", Intrinsic::coro_begin)
+            .Case("llvm_coro_begin", Intrinsic::coro_start)
             .Case("llvm_coro_save", Intrinsic::coro_save)
             .Case("llvm_coro_suspend", Intrinsic::coro_suspend)
             .Case("llvm_coro_free", Intrinsic::coro_free)
@@ -101,9 +99,6 @@ static bool replaceEmulatedIntrinsicsWithRealOnes(Module& M) {
             Args.push_back(SavedIntrinsic);
             Args.push_back(CI->getArgOperand(1));
             break;
-          case Intrinsic::coro_begin:
-            Args.push_back(Null);
-            break;
           case Intrinsic::coro_end:
             Args.push_back(Null);
             Args.push_back(CI->getArgOperand(0));
@@ -111,13 +106,13 @@ static bool replaceEmulatedIntrinsicsWithRealOnes(Module& M) {
           case Intrinsic::coro_free:
             Args.push_back(CI->getArgOperand(0));
             break;
-          case Intrinsic::coro_init:
+          case Intrinsic::coro_begin:
             hasCoroInit = true;
             Args.push_back(CI->getArgOperand(0));
             Args.push_back(CI->getArgOperand(1));
-            Args.push_back(Zero);
             Args.push_back(CI->getArgOperand(2));
-            Args.push_back(MetaVal);
+            Args.push_back(CI->getArgOperand(3));
+            Args.push_back(CI->getArgOperand(4));
             break;
           }
 
@@ -164,7 +159,7 @@ struct CoroEarly : public FunctionPass {
     if (!F.hasFnAttribute(Attribute::Coroutine))
       return false;
 
-    //Shape.buildFrom(F);
+    Shape.buildFrom(F);
 
     //Shape.CoroInit.back()->meta().update({
     //  {Phase::NotReadyForSplit, F.getContext()},

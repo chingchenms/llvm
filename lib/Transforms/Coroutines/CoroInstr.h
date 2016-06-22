@@ -25,6 +25,9 @@
 // Metadata tuple in CoroInitInstr starts with a string identifying 
 // the pass that produces the metadata. It can hold one of these values:
 
+#define coro_begin coro_start
+#define coro_init coro_unused_please_remove
+
 namespace llvm {
 
   using CoroAllocInst = IntrinsicInst;
@@ -120,7 +123,7 @@ namespace llvm {
 
     // Methods for support type inquiry through isa, cast, and dyn_cast:
     static inline bool classof(const IntrinsicInst *I) {
-      return I->getIntrinsicID() == Intrinsic::coro_init;
+      return I->getIntrinsicID() == Intrinsic::coro_begin;
     }
     static inline bool classof(const Value *V) {
       return isa<IntrinsicInst>(V) && classof(cast<IntrinsicInst>(V));

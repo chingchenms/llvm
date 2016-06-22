@@ -1,0 +1,63 @@
+Thoughts after discussion with Chandler, Hal and Richard.
+
+* How to outline without CodeExtractor? 
+
+  Run analysis similar to CodeExtractor
+  Outline using cloning. Make them fastcc.
+  Return values using insertvalue, extractvalue
+
+* three-way or two-way coro.suspend?
+  A: Two-way, there will be a branch from coro.init or coro.begin to make sure
+     that return block is not discarded by SimplifyCFG in case we have an
+     endless loop in the coroutine with suspend point inside
+  A: Why not three way? It makes coroutine frame building harder. We don't want
+
+* do we need coro-init?
+  A: no
+
+* no need to distinguish between final and normal coro.end
+
+* no more coro.meta. Instead:
+
+  CoroOutline creates constant {init-part, return-part, susp1, susp2, ...}
+  CoroSplit create constant {type*, resume, destroy, cleanup}
+    Though type is not strictly necessary as. Possibly array constants
+
+@f.outlined = private unnamed_addr constant {...} {init, ret, fptr, ...}
+@f.split =  private unnamed_addr constant [] [resume, destroy, cleanup]
+
+   if not-array => pre-split
+
+   use Align field to distinguish between NotReady for split and 
+
+* can we inline parts after we calculated coroutine frame?
+  P: Make analysis simpler, need some way to represent outlined save points
+  Idea: Two level outlining?
+  Even better idea. Move out coro.save and coro.suspend before reinlining
+
+* CGSCC interaction:
+  - Chandler said that it is OK to create functions in the same SCC during
+    runSCC
+  - Hal said that it is not OK to carry information about subfunctions in the
+    metadata.
+  - Richard confirmed that we do need to outline parts of the coroutine for
+    protection against code motion.
+  - Chandler suggested make RefreshSCC to recognize suspend points and pretend
+    that they are devirtualizations points (or something better)
+
+
+    do {
+      DEBUG(if (Iteration)
+              dbgs() << "  SCCPASSMGR: Re-visiting SCC, iteration #"
+                     << Iteration << '\n');
+      DevirtualizedCall = false;
+      Changed |= RunAllPassesOnSCC(CurSCC, CG, DevirtualizedCall);
+    } while (Iteration++ < MaxIterations && DevirtualizedCall);
+
+Not interested yet in fixing a design bug in llvm.
+
+CoroSplit:
+  1st pass. Remove no-inline from Outliners (NotReadyForSplit)
+  2nd pass. Split the coroutine, remove Coroutine attribute (ReadyForSplit)
+
+May not need CoroElide pass with the new model
