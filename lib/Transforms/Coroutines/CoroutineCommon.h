@@ -52,6 +52,7 @@ struct LLVM_LIBRARY_VISIBILITY CoroutineShape {
 
   void dump();
   CoroutineShape() = default;
+  explicit CoroutineShape(Function &F) { buildFrom(F); }
   void buildFrom(Function &F);
 
 private:
@@ -72,7 +73,11 @@ template <class F> void CoroutineShape::reflect(F&& f) {
   f(Return, "Return");
 }
 
+class CallGraph;
+class CallGraphSCC;
+
 void buildCoroutineFrame(Function& F, CoroutineShape& Shape);
+void outlineCoroutineParts(Function& F, CallGraph &CG, CallGraphSCC &SCC);
 
 void initializeCoroEarlyPass(PassRegistry &Registry);
 void initializeCoroOutlinePass(PassRegistry &Registry);

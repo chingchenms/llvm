@@ -122,7 +122,7 @@ void llvm::CoroutineShape::buildFrom(Function &F) {
         break;
       case Intrinsic::coro_begin: {
         auto CB = cast<CoroBeginInst>(II);
-        if (CB->isPreSplit())
+        if (CB->getInfo().isPreSplit())
           CoroBegin.push_back(CB);
         break;
       }
@@ -148,7 +148,7 @@ void llvm::CoroutineShape::buildFrom(Function &F) {
 }
 
 void llvm::initializeCoroutines(PassRegistry &registry) {
-  initializeCoroOutlinePass(registry);
+//  initializeCoroOutlinePass(registry);
   initializeCoroEarlyPass(registry);
   initializeCoroElidePass(registry);
   initializeCoroCleanupPass(registry);
@@ -205,7 +205,7 @@ static void addCoroutineEarlyPasses(const PassManagerBuilder &Builder,
 
 static void addCoroutineModuleEarlyPasses(const PassManagerBuilder &Builder,
                                           PassManagerBase &PM) {
-  addPass(PM, createCoroOutlinePass());
+  // addPass(PM, createCoroOutlinePass());
   // addPass(PM, createCoroSplitPass());
   // addPass(PM, createCoroLatePass());
 }

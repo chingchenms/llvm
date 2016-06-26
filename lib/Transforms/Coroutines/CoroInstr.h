@@ -111,52 +111,38 @@ namespace llvm {
     // fresh - i8* null
     // outined - {Init, Return, Susp1, Susp2, ...}
     // postsplit - [resume, destroy, cleanup]
-    Value* getInfo() const {
+    Value* getRawInfo() const {
       return getArgOperand(kInfo)->stripPointerCasts();
     }
     void setInfo(Value* C) {
       setArgOperand(kInfo, C);
     }
 
-    bool isUnprocessed() const { 
-      auto V = getInfo();
-      return isa<ConstantPointerNull>(V); 
-    }
-    bool isReadyForSplit() const {
-      if (isUnprocessed())
-        return false;
-      auto V = getInfo();V;
-      return true;
-    }
+    struct Info {
+      ConstantStruct* OutlinedParts = nullptr;
+      ConstantArray* Resumers = nullptr;
 
-    ConstantStruct* getOutlinedParts() const {
-      auto GV = cast<GlobalVariable>(getInfo());
-      assert(GV->isConstant() && GV->hasDefinitiveInitializer());
-      auto init = GV->getInitializer();
-      return cast<ConstantStruct>(init);
-    }
+      bool needToOutline() const {
+        return (Resumers == nullptr) && (OutlinedParts == nullptr);
+      }
+      bool needToSplit() const { return OutlinedParts != nullptr; }
+      bool postSplit() const { return Resumers != nullptr; }
+      bool isPreSplit() const { return !postSplit(); }
+    };
 
-    ConstantArray* getResumers() const {
-      auto GV = cast<GlobalVariable>(getInfo());
-      assert(GV->isConstant() && GV->hasDefinitiveInitializer());
-      auto init = GV->getInitializer();
-      return cast<ConstantArray>(init);
-    }
-
-    bool isPostSplit() const {
-      auto GV = dyn_cast<GlobalVariable>(getInfo());
+    Info getInfo() const {
+      Info Result;
+      auto GV = dyn_cast<GlobalVariable>(getRawInfo());
       if (!GV)
-        return false;
+        return Result;
 
       assert(GV->isConstant() && GV->hasDefinitiveInitializer());
-      auto init = GV->getInitializer();
-      bool isArray = isa<ConstantArray>(init);
-      return isArray;
-    }
+      if ((Result.OutlinedParts = dyn_cast<ConstantStruct>(GV)))
+        return Result;
 
-    //bool isUntouched() const { return meta().getPhase() == Phase::Fresh; }
-    //bool isPostSplit() const { return meta().getPhase() >= Phase::PostSplit; }
-    bool isPreSplit() const { return true; } // FIXME:
+      Result.Resumers = cast<ConstantArray>(GV);
+      return Result;
+    }
 
     // Methods for support type inquiry through isa, cast, and dyn_cast:
     static inline bool classof(const IntrinsicInst *I) {
