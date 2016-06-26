@@ -66,4 +66,8 @@ CoroSplit:
   1st pass. Remove no-inline from Outliners (NotReadyForSplit)
   2nd pass. Split the coroutine, remove Coroutine attribute (ReadyForSplit)
 
-May not need CoroElide pass with the new model
+* May not need CoroElide pass with the new model
+
+  No, we need to. CoroElide needs to run after normal optimizations are done
+
+  static Constant *ConstantArray::get(ArrayType *T, ArrayRef<Constant*> V);
