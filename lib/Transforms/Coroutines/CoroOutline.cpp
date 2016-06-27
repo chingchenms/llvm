@@ -54,19 +54,35 @@ static std::pair<Instruction*,Instruction*> getRetCode(CoroutineShape& S) {
   return {&RetStartBB->front(), RetEndBB->getTerminator()};
 }
 
+static void UpdateCGN(CallGraph &CG, CallGraphNode *Node) {
+  Function *F = Node->getFunction();
+
+  // Look for calls by this function.
+  for (Instruction &I : instructions(F))
+    if (CallSite CS = CallSite(cast<Value>(&I))) {
+      const Function *Callee = CS.getCalledFunction();
+      if (!Callee || !Intrinsic::isLeaf(Callee->getIntrinsicID()))
+        // Indirect calls of intrinsics are not allowed so no need to check.
+        // We can be more precise here by using TargetArg returned by
+        // Intrinsic::isLeaf.
+        Node->addCalledFunction(CS, CG.getCallsExternalNode());
+      else if (!Callee->isIntrinsic())
+        Node->addCalledFunction(CS, CG.getOrInsertFunction(Callee));
+    }
+}
+
 static void updateCallGraph(Function &Caller, ArrayRef<Function *> Funcs,
                             CallGraph &CG, CallGraphSCC &SCC) {
-  CallGraphNode *CGN = CG[&Caller];
+  auto CallerNode = CG[&Caller];
+  CallerNode->removeAllCalledFunctions();
+  UpdateCGN(CG, CallerNode);
 
-  std::vector<CallGraphNode*> Nodes(SCC.begin(), SCC.end());
+  SmallVector<CallGraphNode*, 8> Nodes(SCC.begin(), SCC.end());
  
   for (Function* F : Funcs) {
     CallGraphNode* Callee = CG.getOrInsertFunction(F);
     Nodes.push_back(Callee);
-    for (auto &I : instructions(*F))
-      if (CallSite CS = CallSite(&I))
-        if (CS.getCalledFunction() == F)
-          CGN->addCalledFunction(CS, Callee);
+    UpdateCGN(CG, Callee);
   }
 
   SCC.initialize(&*Nodes.begin(), &*Nodes.end());
@@ -116,7 +132,7 @@ void llvm::outlineCoroutineParts(Function &F, CallGraph &CG,
   auto BC = ConstantFolder().CreateBitCast(GV, Type::getInt8PtrTy(C));
   S.CoroBegin.back()->setInfo(BC);
 
-  updateCallGraph(F, FuncArrRef, CG, SCC);
+  updateCallGraph(F, Funcs, CG, SCC);
   }
 
 #if 0

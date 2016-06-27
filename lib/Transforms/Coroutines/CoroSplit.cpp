@@ -249,7 +249,6 @@ bool removeNoInline(Function& F, CoroBeginInst& CoroBeg) {
 #endif
 
 static void splitCoroutine(Function& F, CoroBeginInst& CB) {
-
 }
 
 static bool handleCoroutine(Function& F, CallGraph &CG, CallGraphSCC &SCC) {

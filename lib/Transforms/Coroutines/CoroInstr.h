@@ -137,10 +137,11 @@ namespace llvm {
         return Result;
 
       assert(GV->isConstant() && GV->hasDefinitiveInitializer());
-      if ((Result.OutlinedParts = dyn_cast<ConstantStruct>(GV)))
+      Constant* Initializer = GV->getInitializer();
+      if ((Result.OutlinedParts = dyn_cast<ConstantStruct>(Initializer)))
         return Result;
 
-      Result.Resumers = cast<ConstantArray>(GV);
+      Result.Resumers = cast<ConstantArray>(Initializer);
       return Result;
     }
 
