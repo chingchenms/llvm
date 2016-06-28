@@ -228,10 +228,20 @@ void llvm::buildCoroutineFrame(Function &F, CoroutineShape& Shape) {
         ArgsToSpill.push_back(&A);
 
   SmallVector<Instruction*, 4> ValuesToSpill;
-  for (Instruction& I : instructions(F))
+  for (Instruction& I : instructions(F)) {
+    // token returned by CoroSave is an artifact of how we build save/suspend
+    // pairs and should not be part of the Coroutine Frame
+    if (isa<CoroSaveInst>(&I))
+      continue;
+
     for (User* U : I.users())
-      if (Checker.definitionAcrossSuspend(I, U))
+      if (Checker.definitionAcrossSuspend(I, U)) {
+        assert(!I.getType()->isTokenTy() &&
+               "tokens cannot be live across suspends");
         ValuesToSpill.push_back(&I);
+        break; // no need to scan for more users of this instruction
+      }
+  }
 
   DEBUG(dbgs() << "Args to spill:");
   BasicBlock& EntryBB = F.getEntryBlock();
@@ -239,9 +249,9 @@ void llvm::buildCoroutineFrame(Function &F, CoroutineShape& Shape) {
     DEBUG(dbgs() << " " << A->getName());
   DEBUG(dbgs() << "\n");
 
-  DEBUG(dbgs() << "Values to spill:");
+  DEBUG(dbgs() << "Values to spill:\n");
   for (Instruction* I : ValuesToSpill)
-    DEBUG(dbgs() << " "<< I->getName());
+    DEBUG(I->dump());
   DEBUG(dbgs() << "\n");
 
   EntryBB; // Do spills and reloads
