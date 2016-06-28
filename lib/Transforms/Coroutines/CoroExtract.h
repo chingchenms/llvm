@@ -16,7 +16,7 @@
 #ifndef LLVM_TRANSFORMS_COROUTINES_COROEXTRACT_H
 #define LLVM_TRANSFORMS_COROUTINES_COROEXTRACT_H
 
-#include <llvm/ADT/SetVector.h>
+#include <llvm/ADT/Twine.h>
 //#include <llvm/Support/Compiler.h>
 
 namespace llvm {
@@ -25,10 +25,9 @@ namespace llvm {
   class BasicBlock;
 
   struct LLVM_LIBRARY_VISIBILITY CoroPartExtractor {
-    Function *createFunction(BasicBlock *Start, BasicBlock *End);
+    Function *createFunction(BasicBlock *Start, BasicBlock *End, Twine Suffix);
   private:
     void dump();
-    SetVector<BasicBlock *> Blocks;
     void computeRegion(BasicBlock *Start, BasicBlock *End);
   };
 }

@@ -100,7 +100,7 @@ void llvm::outlineCoroutineParts(Function &F, CallGraph &CG,
   auto Outline = [&](StringRef Name, Instruction *From, Instruction *Upto) {
     auto First = splitBlockIfNotFirst(From, Name);
     auto Last = splitBlockIfNotFirst(Upto);
-    auto Fn = Extractor.createFunction(First, Last);
+    auto Fn = Extractor.createFunction(First, Last, Name);
     return Fn;
   };
 
