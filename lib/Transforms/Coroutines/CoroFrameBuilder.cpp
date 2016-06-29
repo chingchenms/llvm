@@ -244,6 +244,14 @@ static void insertSpills(PointerType *FramePtrTy, SpillInfo &Spills,
   Value* CurrentReload = nullptr;
   unsigned Index = 2;
 
+  // we need to keep track of any allocas that need "spilling"
+  // since they will live in the coroutine frame now, all access to them
+  // need to be changed, not just the access across suspend points
+  // we remember allocas and their indices to be handled once we processed
+  // all the spills
+
+  SmallVector<std::pair<AllocaInst*, unsigned>, 4> Allocas;
+
   for (auto const &E : Spills) {
     // if we have not seen the value, generate a spill
     if (CurrentValue != E.def()) {
@@ -252,14 +260,18 @@ static void insertSpills(PointerType *FramePtrTy, SpillInfo &Spills,
       CurrentBlock = nullptr;
       CurrentReload = nullptr;
 
-      Builder.SetInsertPoint(
-          isa<Argument>(CurrentValue)
-              ? FramePtr->getNextNode()
-              : dyn_cast<Instruction>(E.def())->getNextNode());
+      if (auto AI = dyn_cast<AllocaInst>(CurrentValue)) {
+        Allocas.emplace_back(AI, Index);
+      } else {
+        Builder.SetInsertPoint(
+            isa<Argument>(CurrentValue)
+                ? FramePtr->getNextNode()
+                : dyn_cast<Instruction>(E.def())->getNextNode());
 
-      auto G = Builder.CreateConstInBoundsGEP2_32(FrameTy, FramePtr, 0, Index,
-        CurrentValue->getName() + Twine(".spill.addr"));
-      Builder.CreateStore(CurrentValue, G);
+        auto G = Builder.CreateConstInBoundsGEP2_32(FrameTy, FramePtr, 0, Index,
+          CurrentValue->getName() + Twine(".spill.addr"));
+        Builder.CreateStore(CurrentValue, G);
+      }
     }
     // if we have not seen this block, generate a reload
     if (CurrentBlock != E.userBlock()) {
@@ -267,13 +279,24 @@ static void insertSpills(PointerType *FramePtrTy, SpillInfo &Spills,
       Builder.SetInsertPoint(CurrentBlock->getFirstNonPHIOrDbgOrLifetime());
       auto G = Builder.CreateConstInBoundsGEP2_32(FrameTy, FramePtr, 0, Index,
         CurrentValue->getName() + Twine(".reload.addr"));
-      CurrentReload =
-          Builder.CreateLoad(G, CurrentValue->getName() + Twine(".reload"));
+      CurrentReload = isa<AllocaInst>(CurrentValue)
+                          ? G
+                          : Builder.CreateLoad(G, CurrentValue->getName() +
+                                                      Twine(".reload"));
     }
     // replace all uses of CurrentValue in the current instruction with reload
     for (Use& U : E.user()->operands())
       if (U.get() == CurrentValue)
         U.set(CurrentReload);
+  }
+
+  Builder.SetInsertPoint(FramePtr->getNextNode());
+  // if we found any allocas, replace all of their remaining uses with Geps
+  for (auto& P : Allocas) {
+    auto G = Builder.CreateConstInBoundsGEP2_32(FrameTy, FramePtr, 0, P.second);
+    G->takeName(P.first);
+    P.first->replaceAllUsesWith(G);
+    P.first->eraseFromParent();
   }
 }
 
@@ -293,7 +316,14 @@ static PointerType* buildFrameType(Function &F, SpillInfo const& Spills) {
     if (CurrentDef == S.def())
       continue;
     CurrentDef = S.def();
-    Types.push_back(CurrentDef->getType());
+
+    Type* Ty = nullptr;
+    if (auto AI = dyn_cast<AllocaInst>(CurrentDef))
+      Ty = AI->getAllocatedType();
+    else
+      Ty = CurrentDef->getType();
+
+    Types.push_back(Ty);
   }
   FrameTy->setBody(Types);
 
