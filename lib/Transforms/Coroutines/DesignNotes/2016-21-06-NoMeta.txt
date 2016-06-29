@@ -12,7 +12,17 @@ Thoughts after discussion with Chandler, Hal and Richard.
   }
 
 * do we need a branch on coro.begin?
-  A: Frame Building need to allow consuming the data from prep block
+  A: Yes, Frame Building need to allow consuming the data from prep block
+* do we really need three-way coro.suspend?
+  A: Don't know yet. For some reason I added it this morning
+  A: Yes we do. It makes split more straightforward
+* where to do outline?
+  A: Not in SCC, since we want to outline suspends first before any
+     inlining, so that we can distinguish between data local to await_suspend,
+     that do not have to go to coroutine frame and the data that do.
+     The case is an escaped alloca that always was in the coroutine, must be
+     part of the coroutine frame. An escaped alloca in await_suspend is 
+     programmer bug and should not be part of the coroutine frame.
 
 * three-way or two-way coro.suspend?
   A: Two-way, there will be a branch from coro.init or coro.begin to make sure
