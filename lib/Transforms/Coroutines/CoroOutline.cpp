@@ -59,9 +59,19 @@ static std::pair<Instruction*, Instruction*> getFreePart(CoroutineShape& S) {
 }
 #endif
 static std::pair<Instruction*,Instruction*> getRetCode(CoroutineShape& S) {
-  auto EndBB = S.CoroEndFinal.back()->getParent();
-  auto RetStartBB =
-      EndBB->splitBasicBlock(S.CoroEndFinal.back()->getNextNode(), "RetBB");
+  auto NextNode = S.CoroEndFinal.back()->getNextNode();
+  BasicBlock* EndBB = nullptr;
+  if(NextNode->isTerminator()) {
+    auto NextBB = NextNode->getParent()->getSingleSuccessor();
+    assert(NextBB);
+    NextNode = NextBB->getFirstNonPHI();
+    EndBB = NextBB;
+  }
+  else {
+    EndBB = NextNode->getParent()->splitBasicBlock(NextNode, "RetBB");
+  }
+
+  auto RetStartBB = EndBB;
 
   auto RetEndBB = RetStartBB;
   while (BasicBlock* Next = RetEndBB->getSingleSuccessor()) {

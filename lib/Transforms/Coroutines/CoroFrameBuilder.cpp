@@ -122,7 +122,8 @@ void SuspendCrossingInfo::dump() {
   dbgs() << "\n";
 }
 
-SuspendCrossingInfo::SuspendCrossingInfo(Function& F, CoroutineShape& Shape) : Mapping(F) {
+SuspendCrossingInfo::SuspendCrossingInfo(Function &F, CoroutineShape &Shape)
+    : Mapping(F) {
   const size_t N = Mapping.size();
   Block.resize(N);
 
@@ -133,6 +134,12 @@ SuspendCrossingInfo::SuspendCrossingInfo(Function& F, CoroutineShape& Shape) : M
     B.Kills.resize(N);
     B.Consumes.set(I);
   }
+
+  // create a bitset to quickly check for coro-ends
+  BitVector CoroEnds(N);
+  CoroEnds.set(Mapping.blockToIndex(Shape.CoroEndFinal.back()->getParent()));
+  for (auto CE: Shape.CoroEndUnwind)
+    CoroEnds.set(Mapping.blockToIndex(CE->getParent()));
 
   // Mark all suspend blocks and indicate that kill everything they consume
   for (CoroSuspendInst* CSI : Shape.CoroSuspend) {
@@ -156,11 +163,12 @@ SuspendCrossingInfo::SuspendCrossingInfo(Function& F, CoroutineShape& Shape) : M
       auto& B = Block[I];
       for (BasicBlock* SI : successors(B)) {
 
+        auto SuccNo = Mapping.blockToIndex(SI);
+
         // Do not propagate beyond Coro.End
-        if (SI == Shape.CoroEndFinal.back()->getParent())
+        if (CoroEnds[SuccNo])
           continue;
 
-        auto SuccNo = Mapping.blockToIndex(SI);
         auto& S = Block[SuccNo];
         auto SavedCons = S.Consumes;
         auto SavedKills = S.Kills;
@@ -214,6 +222,8 @@ void llvm::buildCoroutineFrame(Function &F, CoroutineShape& Shape) {
 
   // put and CoroEnd into their own blocks
   splitAround(Shape.CoroEndFinal.back(), "CoroEnd");
+  for (auto CE: Shape.CoroEndUnwind)
+    splitAround(CE, "CoroUnwinds");
 
 #if 0 // not sure about that
   //// 2 make coro.begin a fork, jumping to ret block

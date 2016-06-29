@@ -11,6 +11,8 @@ Thoughts after discussion with Chandler, Hal and Richard.
     return ConstantExpr::getExtractValue(Agg, IdxList);
   }
 
+* do we need a branch on coro.begin?
+  A: Frame Building need to allow consuming the data from prep block
 
 * three-way or two-way coro.suspend?
   A: Two-way, there will be a branch from coro.init or coro.begin to make sure
@@ -77,10 +79,10 @@ CoroSplit:
 
 Args to spill:
 Values to spill:
-  %call8.loc = alloca i8, align 1 -- OK -- need better extract
+  %call8.loc = alloca i8, align 1 -- NO -- need better extract
   %call6 = call i32 @compute() #4 -- OK
-  %2 = bitcast i32* %temp to i8*
-  %3 = call token @llvm.coro.save() #4
+  %2 = bitcast i32* %temp to i8* -- need to look to the source for rematerialize
+  %3 = call token @llvm.coro.save() #4-- absolutely not
 
 ; Function Attrs: coroutine nounwind
 define i8* @f() #0 {
