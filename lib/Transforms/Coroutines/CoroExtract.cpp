@@ -94,7 +94,7 @@ void replaceAllUsesInside(Value *Old, Value *New,
     Use &U = *UI;
     ++UI;
     auto *Usr = dyn_cast<Instruction>(U.getUser());
-    if (Usr && Blocks.count(Usr->getParent()))
+    if (Usr && Blocks.count(Usr->getParent()) == 0)
       continue;
     U.set(New);
   }
@@ -111,7 +111,7 @@ void replaceAllUsesOutside(Value *Old, Value *New,
     Use &U = *UI;
     ++UI;
     auto *Usr = dyn_cast<Instruction>(U.getUser());
-    if (Usr && !Blocks.count(Usr->getParent()))
+    if (Usr && Blocks.count(Usr->getParent()) != 0)
       continue;
     U.set(New);
   }
@@ -220,7 +220,10 @@ Function *llvm::CoroPartExtractor::createFunction(BasicBlock *Start,
     Function::arg_iterator AI = NewF->arg_begin();
     for (Value* V : R.Inputs) {
       Argument& Arg = *AI++;
-      Arg.setName(V->getName());
+      if (V->hasName())
+        Arg.setName(V->getName());
+      else
+        Arg.setName("arg");
       replaceAllUsesInside(V, &Arg, R.Blocks);
     }
   }
