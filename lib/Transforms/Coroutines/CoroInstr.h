@@ -26,16 +26,25 @@
 // Metadata tuple in CoroInitInstr starts with a string identifying 
 // the pass that produces the metadata. It can hold one of these values:
 
-#define coro_begin coro_start
-#define coro_init coro_unused_please_remove
-
 namespace llvm {
 
   using CoroAllocInst = IntrinsicInst;
   using CoroSizeInst = IntrinsicInst;
-  using CoroFreeInst = IntrinsicInst;
 
   using CoroSaveInst = IntrinsicInst;
+
+  /// This represents the llvm.coro.end instruction.
+  class LLVM_LIBRARY_VISIBILITY CoroFreeInst : public IntrinsicInst {
+    enum { kFrame };
+  public:
+    // Methods to support type inquiry through isa, cast, and dyn_cast:
+    static inline bool classof(const IntrinsicInst *I) {
+      return I->getIntrinsicID() == Intrinsic::coro_free;
+    }
+    static inline bool classof(const Value *V) {
+      return isa<IntrinsicInst>(V) && classof(cast<IntrinsicInst>(V));
+    }
+  };
 
   /// This represents the llvm.coro.end instruction.
   class LLVM_LIBRARY_VISIBILITY CoroSuspendInst : public IntrinsicInst {
@@ -73,12 +82,16 @@ namespace llvm {
 
   /// This represents the llvm.coro.end instruction.
   class LLVM_LIBRARY_VISIBILITY CoroEndInst : public IntrinsicInst {
-    enum { kFrame, kFallthrough };
+    enum { kFrame, kUnwind };
   public:
-    bool isFallthrough() const {
-      return cast<Constant>(getArgOperand(kFallthrough))->isOneValue(); 
+    bool isFallthrough() const { return !isUnwind(); }
+    bool isUnwind() const {
+      return cast<Constant>(getArgOperand(kUnwind))->isOneValue();
     }
-    static CoroEndInst *Create(Instruction *InsertBefore, Value *Addr);
+    void setUnwind(bool Value);
+    Value *getFrameArg() const { return getArgOperand(kFrame); }
+    static CoroEndInst *Create(Instruction *InsertBefore,
+                               Value *FreeAddr = nullptr);
 
     // Methods to support type inquiry through isa, cast, and dyn_cast:
     static inline bool classof(const IntrinsicInst *I) {

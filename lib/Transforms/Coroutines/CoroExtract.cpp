@@ -117,6 +117,36 @@ void replaceAllUsesOutside(Value *Old, Value *New,
   }
 }
 
+static Type *computeReturnType(LLVMContext &C, Instruction* InsertPt,
+                               SmallPtrSetImpl<Value *> const &Outputs) {
+  auto Size = Outputs.size();
+  if (Size == 0) {
+    ReturnInst::Create(C, nullptr, InsertPt);
+    return Type::getVoidTy(C);
+  }
+  if (Size == 1) {
+    Value * V = *Outputs.begin();
+    ReturnInst::Create(C, V, InsertPt);
+    return V->getType();
+  }
+
+  SmallVector<Type*, 8> ElementTypes;
+  ElementTypes.reserve(Size);
+  for (Value* V : Outputs)
+    ElementTypes.push_back(V->getType());
+  auto RetType = StructType::get(C, ElementTypes);
+
+  IRBuilder<> Builder(InsertPt);
+  Value* Val = UndefValue::get(RetType);
+
+  unsigned Index = 0;
+  for (Value* V : Outputs)
+    Val = Builder.CreateInsertValue(Val, V, Index++);
+  
+  Builder.CreateRet(Val);
+  return RetType;
+}
+
 // TODO: 
 //   1) special case one ret value case
 //   2) remove extra entry exit blocks
@@ -126,10 +156,6 @@ Function *llvm::CoroPartExtractor::createFunction(BasicBlock *Start,
 
   auto PreStart = Start->getSinglePredecessor();
   auto PreEnd = End->getSinglePredecessor();
-  //if (!PreEnd) {
-  //  Instruction* I = End->getFirstNonPHIOrDbgOrLifetime();
-  //  End = End->
-  //}
 
   assert(PreStart != nullptr && PreEnd != nullptr &&
          "region start and end should have single predecessors");
@@ -138,9 +164,13 @@ Function *llvm::CoroPartExtractor::createFunction(BasicBlock *Start,
   Module& M = *F.getParent();
   LLVMContext& C = F.getContext();
 
+#if 0
   auto OldEntryBB = &F.getEntryBlock();
   auto EntryBB = BasicBlock::Create(C, "EntryBB", &F, OldEntryBB);
   BranchInst::Create(Start, EntryBB);
+#else
+  Start->moveBefore(&F.getEntryBlock());
+#endif
 
   auto OldExitBB = End;
   auto ExitBB = BasicBlock::Create(C, "ExitBB", &F);
@@ -166,27 +196,7 @@ Function *llvm::CoroPartExtractor::createFunction(BasicBlock *Start,
   //EntryBB->eraseFromParent();
 
   // compute outputs
-  Type* RetType;
-  if (auto Size = R.Outputs.size()) {
-    SmallVector<Type*, 8> ElementTypes;
-    ElementTypes.reserve(Size);
-    for (Value* V : R.Outputs)
-      ElementTypes.push_back(V->getType());
-    RetType = StructType::get(C, ElementTypes);
-
-    IRBuilder<> Builder(PreEnd->getTerminator());
-    Value* Val = UndefValue::get(RetType);
-
-    unsigned Index = 0;
-    for (Value* V : R.Outputs) {
-      Val = Builder.CreateInsertValue(Val, V, Index++);
-    }
-    Builder.CreateRet(Val);
-  }
-  else {
-    RetType = Type::getVoidTy(C);
-    ReturnInst::Create(C, nullptr, PreEnd->getTerminator());
-  }
+  Type* RetType = computeReturnType(C, PreEnd->getTerminator(), R.Outputs);
   PreEnd->getTerminator()->eraseFromParent();
 
   // Create a new function type...
@@ -207,14 +217,19 @@ Function *llvm::CoroPartExtractor::createFunction(BasicBlock *Start,
   IRBuilder<> Builder(PreStart->getTerminator());
   auto ReturnedValue = Builder.CreateCall(NewF, ArgValues, "");
 
-  if (!R.Outputs.empty()) {
-    unsigned Index = 0;
-    for (Value* V : R.Outputs) {
-      auto Val =
-          Builder.CreateExtractValue(ReturnedValue, Index++, V->getName());
-      replaceAllUsesOutside(V, Val, R.Blocks);
+  if (auto Size = R.Outputs.size()) {
+    if (Size == 1)
+      replaceAllUsesOutside(*R.Outputs.begin(), ReturnedValue, R.Blocks);
+    else {
+      unsigned Index = 0;
+      for (Value* V : R.Outputs) {
+        auto Val = Size == 1 ? ReturnedValue :
+            Builder.CreateExtractValue(ReturnedValue, Index++, V->getName());
+        replaceAllUsesOutside(V, Val, R.Blocks);
+      }
     }
   }
+
   if (auto Size = R.Inputs.size()) {
     assert(Size == NewF->getArgumentList().size());
     Function::arg_iterator AI = NewF->arg_begin();
@@ -230,6 +245,7 @@ Function *llvm::CoroPartExtractor::createFunction(BasicBlock *Start,
 
   Builder.CreateBr(End);
   PreStart->getTerminator()->eraseFromParent();
+  ExitBB->eraseFromParent();
 
   return NewF;
 }

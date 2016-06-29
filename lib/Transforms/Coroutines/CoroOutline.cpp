@@ -40,13 +40,29 @@ static bool contains(pred_range range, BasicBlock* BB) {
   return false;
 }
 
+#if 0
+static std::pair<Instruction*, Instruction*> getFreePart(CoroutineShape& S) {
+  CoroEndInst* Free = S.CoroEndFinal.back();
+  CoroEndInst* End = S.CoroEndFinal.back();
+  BasicBlock* EndBB = End->getParent();
+  auto Phi = dyn_cast<PHINode>(End->getFrameArg());
+  if (!Phi)
+
+  auto RetStartBB =
+    EndBB->splitBasicBlock(S.CoroEndFinal.back()->getNextNode(), "RetBB");
+
+  auto RetEndBB = RetStartBB;
+  while (BasicBlock* Next = RetEndBB->getSingleSuccessor()) {
+    RetEndBB = Next;
+  }
+  return{ &RetStartBB->front(), RetEndBB->getTerminator() };
+}
+#endif
 static std::pair<Instruction*,Instruction*> getRetCode(CoroutineShape& S) {
-  auto RetStartBB = S.CoroEndFinal.back()->getParent()->getSingleSuccessor();
-  assert(RetStartBB && "Expecting single successor after coro.end(final)");
-  auto CoroBegBB = S.CoroBegin.back()->getParent();
-  assert(contains(predecessors(RetStartBB), CoroBegBB) &&
-         "expecting coro.end(final) flow into the same block as if-false "
-         "branch from coro.begin");
+  auto EndBB = S.CoroEndFinal.back()->getParent();
+  auto RetStartBB =
+      EndBB->splitBasicBlock(S.CoroEndFinal.back()->getNextNode(), "RetBB");
+
   auto RetEndBB = RetStartBB;
   while (BasicBlock* Next = RetEndBB->getSingleSuccessor()) {
     RetEndBB = Next;
@@ -99,7 +115,7 @@ void llvm::outlineCoroutineParts(Function &F, CallGraph &CG,
   CoroPartExtractor Extractor;
   auto Outline = [&](StringRef Name, Instruction *From, Instruction *Upto) {
     auto First = splitBlockIfNotFirst(From, Name);
-    auto Last = splitBlockIfNotFirst(Upto);
+    auto Last = splitBlockIfNotFirst(Upto, "End" + Name);
     auto Fn = Extractor.createFunction(First, Last, Name);
     return Fn;
   };
@@ -107,11 +123,20 @@ void llvm::outlineCoroutineParts(Function &F, CallGraph &CG,
   // Outline the parts and create a metadata tuple, so that CoroSplit
   // pass can quickly figure out what they are.
 
-  auto RC = getRetCode(S);
   SmallVector<Function *, 8> Funcs{
-      Outline(".AllocPart", S.CoroAlloc.back(), S.CoroBegin.back()),
-      Outline(".FreePart", S.CoroFree.back(), S.CoroEndFinal.back()),
-      Outline(".RetPart", RC.first, RC.second)};
+    Outline(".AllocPart", S.CoroAlloc.back(), S.CoroBegin.back()) };
+
+  for (CoroEndInst *CE : S.CoroEndUnwind) {
+    //auto RC = getFreePart(S, CE);
+    auto Start = cast<CoroFreeInst>(CE->getFrameArg());
+    auto End = CE->getNextNode();
+    Funcs.push_back(Outline(".FreePart", Start, End));
+  }
+
+  {
+    auto RC = getRetCode(S);
+    Funcs.push_back(Outline(".RetPart", RC.first, RC.second));
+  }
 
   // Outline suspend points.
   for (CoroSuspendInst *SI : S.CoroSuspend) {

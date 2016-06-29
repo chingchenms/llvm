@@ -607,24 +607,27 @@ def int_experimental_coro_done : Intrinsic<[llvm_i1_ty], [llvm_ptr_ty], [IntrRea
 def int_experimental_coro_promise : Intrinsic<[llvm_anyptr_ty], [llvm_ptr_ty], [IntrReadMem]>;
 def int_experimental_coro_from_promise : Intrinsic<[llvm_ptr_ty], [llvm_anyptr_ty], [IntrReadMem]>;
 
-def int_coro_size : Intrinsic<[llvm_anyint_ty], [llvm_ptr_ty], [IntrNoMem]>;
-def int_coro_fork : Intrinsic<[llvm_i1_ty], [llvm_ptr_ty], []>;
-
 def int_coro_alloc : Intrinsic<[llvm_ptr_ty], [], []>;
-def int_coro_init : Intrinsic<[llvm_ptr_ty],
-                                           [llvm_ptr_ty, llvm_ptr_ty, llvm_i32_ty,
-                                            llvm_ptr_ty, llvm_metadata_ty], []>;
-def int_coro_save : Intrinsic<[llvm_token_ty], [], []>;
-def int_coro_start : Intrinsic<[llvm_ptr_ty], 
+def int_coro_begin : Intrinsic<[llvm_ptr_ty], 
                                            [llvm_ptr_ty, llvm_ptr_ty, llvm_i32_ty, 
                                             llvm_ptr_ty, llvm_ptr_ty], []>;
-def int_coro_free : Intrinsic<[llvm_ptr_ty], [llvm_ptr_ty], []>;
 def int_coro_end : Intrinsic<[], [llvm_ptr_ty, llvm_i1_ty], []>;
+def int_coro_free : Intrinsic<[llvm_ptr_ty], [llvm_ptr_ty], []>;
 
-def int_coro_begin : Intrinsic<[llvm_i1_ty], [llvm_ptr_ty], []>;
-def int_coro_return : Intrinsic<[llvm_i1_ty], [llvm_ptr_ty], []>;
-def int_coro_suspend : Intrinsic<[llvm_i8_ty], [llvm_token_ty, llvm_i1_ty], []>;
-def int_coro_first : Intrinsic<[llvm_i1_ty], [llvm_i8_ty], []>;
+def int_coro_frame : Intrinsic<[llvm_ptr_ty], [], []>;
+def int_coro_size : Intrinsic<[llvm_anyint_ty], [llvm_ptr_ty], [IntrNoMem]>;
+
+def int_coro_save : Intrinsic<[llvm_token_ty], [llvm_i1_ty], []>;
+def int_coro_suspend : Intrinsic<[llvm_i8_ty], [llvm_token_ty], []>;
+def int_coro_suspend_point : Intrinsic<[llvm_token_ty], [llvm_i1_ty], []>;
+def int_coro_resume_point : Intrinsic<[llvm_i1_ty], [llvm_token_ty], []>;
+
+def int_coro_resume : Intrinsic<[], [llvm_ptr_ty], [Throws]>;
+def int_coro_destroy : Intrinsic<[], [llvm_ptr_ty], [Throws]>;
+def int_coro_done : Intrinsic<[llvm_i1_ty], [llvm_ptr_ty], [IntrReadMem]>;
+def int_coro_data : Intrinsic<[llvm_anyptr_ty], [llvm_ptr_ty], [IntrReadMem]>;
+def int_coro_from_data : Intrinsic<[llvm_ptr_ty], [llvm_anyptr_ty], [IntrReadMem]>;
+
 def int_coro_resume_addr : Intrinsic<[llvm_ptr_ty], [llvm_ptr_ty], [IntrReadMem]>;
 def int_coro_destroy_addr : Intrinsic<[llvm_ptr_ty], [llvm_ptr_ty], [IntrReadMem]>;
 def int_coro_subfn_addr : Intrinsic<[llvm_ptr_ty], [llvm_ptr_ty, llvm_i8_ty], [IntrReadMem]>;

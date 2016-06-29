@@ -25,12 +25,22 @@ CoroFrameInst* CoroFrameInst::Create(Instruction* InsertBefore) {
   return cast<CoroFrameInst>(Call);
 }
 
+void llvm::CoroEndInst::setUnwind(bool Value) {
+  LLVMContext& C = getContext();
+  auto BoolTy = Type::getInt1Ty(C);
+  auto Constant = ConstantInt::get(BoolTy, Value);
+  setArgOperand(kUnwind, Constant);
+}
+
 CoroEndInst *llvm::CoroEndInst::Create(Instruction *InsertBefore, Value *Addr) {
   auto BB = InsertBefore->getParent();
   auto M = BB->getParent()->getParent();
   LLVMContext& C = M->getContext();
   auto BoolTy = Type::getInt1Ty(C);
   auto Fn = Intrinsic::getDeclaration(M, Intrinsic::coro_end);
+  if (Addr == nullptr) {
+    Addr = ConstantPointerNull::get(Type::getInt8PtrTy(C));
+  }
   auto Call = CallInst::Create(Fn, { Addr, ConstantInt::get(BoolTy, 0) }, "",
     InsertBefore);
   return cast<CoroEndInst>(Call);

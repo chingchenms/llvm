@@ -22,6 +22,7 @@
 #include "llvm/ADT/TinyPtrVector.h"
 #include "llvm/ADT/StringSwitch.h"
 #include "llvm/IR/InstIterator.h"
+#include "llvm/IR/IRBuilder.h"
 #include <llvm/Transforms/Utils/BasicBlockUtils.h>
 
 using namespace llvm;
@@ -59,6 +60,70 @@ static void addBranchToCoroEnd(CoroutineShape &S, Function &F) {
 }
 #endif
 
+static void finalizeCoroutine(Function& F) {
+  CoroutineShape CoroShape(F);
+  F.addFnAttr(Attribute::Coroutine);
+
+  auto SuspendCount = CoroShape.CoroSuspend.size();
+  if (SuspendCount == 0)
+    return;
+
+  CoroEndInst* End = CoroShape.CoroEndFinal.back();
+  BasicBlock* EndBB = End->getParent();
+  if (&EndBB->front() != End) {
+    EndBB = EndBB->splitBasicBlock(End, "CoroEnd");
+  }
+
+  IRBuilder<> Builder(End);
+
+  // add a branch for coro_suspend to EndBB
+  // this is done since, we cannot represent suspend jump when emulating
+  // intrinsics with function call in coroutine unaware frontend
+  for (CoroSuspendInst* S : CoroShape.CoroSuspend) {
+    auto ResumeBB =
+      S->getParent()->splitBasicBlock(S->getNextNode(), "ResumeBB");
+    Builder.SetInsertPoint(S->getNextNode());
+    auto Cond = Builder.CreateICmpSLT(S, Builder.getInt8(0));
+    Builder.CreateCondBr(Cond, EndBB, ResumeBB);
+    Builder.GetInsertPoint()->eraseFromParent();
+  }
+
+#if 0
+  auto SuspendCount = CoroShape.CoroSuspend.size();
+  if (SuspendCount == 0)
+    return;
+
+  CoroEndInst* End = CoroShape.CoroEndFinal.back();
+  BasicBlock* EndBB = End->getParent();
+  if (&EndBB->front() != End) {
+    EndBB = EndBB->splitBasicBlock(End, "CoroEnd");
+  }
+
+  IRBuilder<> Builder(End);
+
+  Value* FrameArg = End->getFrameArg();
+  PHINode* Phi = Builder.CreatePHI(FrameArg->getType(), 1 + SuspendCount);
+  for (BasicBlock *BB : predecessors(EndBB))
+    Phi->addIncoming(FrameArg, BB);
+  End->setArgOperand(0, Phi);
+
+  Value* Undef = UndefValue::get(FrameArg->getType());
+
+  // add a branch for coro_suspend to EndBB
+  // this is done since, we cannot represent suspend jump when emulating
+  // intrinsics with function call in coroutine unaware frontend
+  for (CoroSuspendInst* S : CoroShape.CoroSuspend) {
+    auto ResumeBB =
+        S->getParent()->splitBasicBlock(S->getNextNode(), "ResumeBB");
+    Builder.SetInsertPoint(S->getNextNode());
+    auto Cond = Builder.CreateICmpSLT(S, Builder.getInt8(0));
+    Builder.CreateCondBr(Cond, EndBB, ResumeBB);
+    Builder.GetInsertPoint()->eraseFromParent();
+    Phi->addIncoming(Undef, S->getParent());
+  }
+#endif
+}
+
 static bool replaceEmulatedIntrinsicsWithRealOnes(Module& M) {
   bool changed = true;
   SmallVector<Value*, 8> Args;
@@ -68,7 +133,6 @@ static bool replaceEmulatedIntrinsicsWithRealOnes(Module& M) {
   auto Null = ConstantPointerNull::get(BytePtrTy);
 
   CallInst* SavedIntrinsic = nullptr;
-  CoroutineShape CoroShape;
 
   for (Function& F : M) {
     bool hasCoroSuspend = false;
@@ -79,7 +143,7 @@ static bool replaceEmulatedIntrinsicsWithRealOnes(Module& M) {
         if (auto F = CI->getCalledFunction()) {
           const auto id = StringSwitch<Intrinsic::ID>(F->getName())
             .Case("llvm_coro_alloc", Intrinsic::coro_alloc)
-            .Case("llvm_coro_begin", Intrinsic::coro_start)
+            .Case("llvm_coro_begin", Intrinsic::coro_begin)
             .Case("llvm_coro_save", Intrinsic::coro_save)
             .Case("llvm_coro_suspend", Intrinsic::coro_suspend)
             .Case("llvm_coro_free", Intrinsic::coro_free)
@@ -98,12 +162,12 @@ static bool replaceEmulatedIntrinsicsWithRealOnes(Module& M) {
             hasCoroSuspend = true;
             assert(SavedIntrinsic && "coro_suspend expects saved intrinsic");
             Args.push_back(SavedIntrinsic);
-            Args.push_back(CI->getArgOperand(1));
             break;
           case Intrinsic::coro_end:
-            Args.push_back(Null);
             Args.push_back(CI->getArgOperand(0));
+            Args.push_back(CI->getArgOperand(1));
             break;
+          case Intrinsic::coro_save:
           case Intrinsic::coro_free:
             Args.push_back(CI->getArgOperand(0));
             break;
@@ -138,7 +202,7 @@ static bool replaceEmulatedIntrinsicsWithRealOnes(Module& M) {
       }
     }
     if (hasCoroInit)
-      F.addFnAttr(Attribute::Coroutine);
+      finalizeCoroutine(F);
   }
   return changed;
 }
