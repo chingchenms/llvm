@@ -213,19 +213,91 @@ static void splitAround(Instruction *I, const Twine &Name) {
   splitBlockIfNotFirst(I->getNextNode(), "After" + Name);
 }
 
-static void updateUses(IRBuilder<> &Builder, Value *V, Value *FramePtr,
-  unsigned Index) {
+struct Spill : std::pair<Value*, Instruction*> {
+  using base = std::pair<Value*, Instruction*>;
 
-  Type* FrameTy = cast<PointerType>(FramePtr->getType())->getElementType();
+  Spill(Value* Def, User* U) : base(Def, cast<Instruction>(U)) {}
 
-  for (Use& U: V->uses()) {
-    auto I = cast<Instruction>(U.getUser());
-    Builder.SetInsertPoint(I);
+  Value* def() const { return first; }
+  Instruction* user() const { return second; }
+  BasicBlock* userBlock() const { return second->getParent(); }
 
-    auto Gep = Builder.CreateConstInBoundsGEP2_32(FrameTy, FramePtr, 0, Index);
-    auto LoadedValue = Builder.CreateLoad(Gep, V->getName() + Twine(".reload"));
-    U.set(LoadedValue);
+  std::pair<Value *, BasicBlock *> getKey() const {
+    return{ def(), userBlock() };
   }
+
+  bool operator<(Spill const &rhs) const { return getKey() < rhs.getKey(); }
+};
+
+using SpillInfo = SmallVector<Spill, 8>;
+
+static void insertSpills(PointerType *FramePtrTy, SpillInfo &Spills,
+                         CoroutineShape &Shape) {
+  auto CB = Shape.CoroBegin.back();
+  IRBuilder<> Builder(CB->getNextNode());
+  Instruction *FramePtr =
+      cast<Instruction>(Builder.CreateBitCast(CB, FramePtrTy, "vFrame"));
+  Type* FrameTy = FramePtrTy->getElementType();
+
+  Value* CurrentValue = nullptr;
+  BasicBlock* CurrentBlock = nullptr;
+  Value* CurrentReload = nullptr;
+  unsigned Index = 2;
+
+  for (auto const &E : Spills) {
+    // if we have not seen the value, generate a spill
+    if (CurrentValue != E.def()) {
+      ++Index;
+      CurrentValue = E.def();
+      CurrentBlock = nullptr;
+      CurrentReload = nullptr;
+
+      Builder.SetInsertPoint(
+          isa<Argument>(CurrentValue)
+              ? FramePtr->getNextNode()
+              : dyn_cast<Instruction>(E.def())->getNextNode());
+
+      auto G = Builder.CreateConstInBoundsGEP2_32(FrameTy, FramePtr, 0, Index,
+        CurrentValue->getName() + Twine(".spill.addr"));
+      Builder.CreateStore(CurrentValue, G);
+    }
+    // if we have not seen this block, generate a reload
+    if (CurrentBlock != E.userBlock()) {
+      CurrentBlock = E.userBlock();
+      Builder.SetInsertPoint(CurrentBlock->getFirstNonPHIOrDbgOrLifetime());
+      auto G = Builder.CreateConstInBoundsGEP2_32(FrameTy, FramePtr, 0, Index,
+        CurrentValue->getName() + Twine(".reload.addr"));
+      CurrentReload =
+          Builder.CreateLoad(G, CurrentValue->getName() + Twine(".reload"));
+    }
+    // replace all uses of CurrentValue in the current instruction with reload
+    for (Use& U : E.user()->operands())
+      if (U.get() == CurrentValue)
+        U.set(CurrentReload);
+  }
+}
+
+static PointerType* buildFrameType(Function &F, SpillInfo const& Spills) {
+  LLVMContext& C = F.getContext();
+  SmallString<32> Name(F.getName()); Name.append(".Frame");
+  StructType* FrameTy = StructType::create(C, Name);
+  auto FramePtrTy = FrameTy->getPointerTo();
+  auto FnTy = FunctionType::get(Type::getVoidTy(C), FramePtrTy,
+                                /*IsVarArgs=*/false);
+  auto FnPtrTy = FnTy->getPointerTo();
+
+  SmallVector<Type*, 8> Types{ FnPtrTy, FnPtrTy, Type::getInt8PtrTy(C) };
+  Value* CurrentDef = nullptr;
+
+  for (auto const& S: Spills) {
+    if (CurrentDef == S.def())
+      continue;
+    CurrentDef = S.def();
+    Types.push_back(CurrentDef->getType());
+  }
+  FrameTy->setBody(Types);
+
+  return FramePtrTy;
 }
 
 void llvm::buildCoroutineFrame(Function &F, CoroutineShape& Shape) {
@@ -243,14 +315,12 @@ void llvm::buildCoroutineFrame(Function &F, CoroutineShape& Shape) {
 
   SuspendCrossingInfo Checker(F, Shape);
 
-  SmallVector<Argument*, 4> ArgsToSpill;
+  SpillInfo Spills;
   for (Argument& A : F.getArgumentList())
     for (User* U : A.users())
       if (Checker.definitionAcrossSuspend(A, U))
-        ArgsToSpill.push_back(&A);
+        Spills.emplace_back(&A, U);
 
-  // TODO: probably need to segregate into Values and Allocas
-  SmallVector<Instruction*, 4> ValuesToSpill;
   for (Instruction& I : instructions(F)) {
     // token returned by CoroSave is an artifact of how we build save/suspend
     // pairs and should not be part of the Coroutine Frame
@@ -258,64 +328,13 @@ void llvm::buildCoroutineFrame(Function &F, CoroutineShape& Shape) {
       continue;
 
     for (User* U : I.users())
-      if (Checker.definitionAcrossSuspend(I, U)) {
-        assert(!I.getType()->isTokenTy() &&
-               "tokens cannot be live across suspends");
-        ValuesToSpill.push_back(&I);
-        break; // no need to scan for more users of this instruction
-      }
+      if (Checker.definitionAcrossSuspend(I, U))
+        Spills.emplace_back(&I, U);
   }
 
-  DEBUG(dbgs() << "Args to spill:");
-  BasicBlock& EntryBB = F.getEntryBlock();
-  for (Argument* A : ArgsToSpill)
-    DEBUG(dbgs() << " " << A->getName());
-  DEBUG(dbgs() << "\n");
+  std::sort(Spills.begin(), Spills.end());
 
-  DEBUG(dbgs() << "Values to spill:\n");
-  for (Instruction* I : ValuesToSpill)
-    DEBUG(I->dump());
-  DEBUG(dbgs() << "\n");
-
-  LLVMContext& C = F.getContext();
-  SmallString<32> Name(F.getName()); Name.append(".Frame");
-  StructType* FrameTy = StructType::create(C, Name);
-  auto FramePtrTy = FrameTy->getPointerTo();
-  auto FnTy = FunctionType::get(Type::getVoidTy(C), {FrameTy->getPointerTo()},
-                    /*IsVarArgs=*/false);
-  auto FnPtrTy = FnTy->getPointerTo();
-
-  SmallVector<Type*, 8> Types{ FnPtrTy, FnPtrTy, Type::getInt8PtrTy(C) };
-  Types.reserve(3 + ArgsToSpill.size() + ValuesToSpill.size());
-  for (Argument *A : ArgsToSpill)
-    Types.push_back(A->getType());
-  for (Instruction *I : ValuesToSpill)
-    Types.push_back(I->getType());
-
-  FrameTy->setBody(Types);
-
-  IRBuilder<> Builder(Shape.CoroBegin.back()->getNextNode());
-  auto FramePtr = Builder.CreateBitCast(Shape.CoroBegin.back(), FramePtrTy);
-
-  Value* Zero = Builder.getInt32(0);
-  unsigned Index = 3;
-  for (Argument* A : ArgsToSpill) {
-    auto Gep = Builder.CreateConstInBoundsGEP2_32(FrameTy, FramePtr, 0, Index);
-    Builder.CreateStore(A, Gep);
-    updateUses(Builder, A, FramePtr, Index);
-    ++Index;
-  }
-  for (Instruction* I : ValuesToSpill) {
-    Builder.SetInsertPoint(I->getNextNode());
-    auto Gep = Builder.CreateConstInBoundsGEP2_32(FrameTy, FramePtr, 0, Index);
-    Builder.CreateStore(I, Gep);
-    updateUses(Builder, I, FramePtr, Index);
-    ++Index;
-  }
-
-
-  //StructType::create()
-  //Builder.createstr
-  //doSpills()
-  //EntryBB; // Do spills and reloads
+  PointerType* FramePtrTy = buildFrameType(F, Spills);
+  
+  insertSpills(FramePtrTy, Spills, Shape);
 }
