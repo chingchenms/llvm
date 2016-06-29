@@ -47,8 +47,10 @@ BasicBlock *CoroCommon::splitBlockIfNotFirst(Instruction *I,
                                              const Twine &Name) {
   auto BB = I->getParent();
   if (&*BB->begin() == I) {
-    BB->setName(Name);
-    return BB;
+    if (BB->getSinglePredecessor()) {
+      BB->setName(Name);
+      return BB;
+    }
   }
   return BB->splitBasicBlock(I, Name);
 }
@@ -177,7 +179,7 @@ CoroBeginInst* CoroCommon::findCoroBegin(Function* F, Phase P, bool Match) {
 #endif
 
 // Move the code below to CoroPasses.cpp / CoroPasses.h
-static bool g_VerifyEach = false;
+static bool g_VerifyEach = true;
 
 static inline void addPass(legacy::PassManagerBase &PM, Pass *P) {
   // Add the pass to the pass manager...
