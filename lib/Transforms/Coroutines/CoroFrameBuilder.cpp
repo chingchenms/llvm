@@ -27,6 +27,7 @@
 #include <llvm/ADT/SmallVector.h>
 #include <llvm/IR/Function.h>
 #include <llvm/IR/InstIterator.h>
+#include <llvm/IR/IRBuilder.h>
 #include <llvm/Support/Debug.h>
 #include <llvm/Support/circular_raw_ostream.h>
 #include <llvm/Transforms/Utils/BasicBlockUtils.h>
@@ -212,6 +213,21 @@ static void splitAround(Instruction *I, const Twine &Name) {
   splitBlockIfNotFirst(I->getNextNode(), "After" + Name);
 }
 
+static void updateUses(IRBuilder<> &Builder, Value *V, Value *FramePtr,
+  unsigned Index) {
+
+  Type* FrameTy = cast<PointerType>(FramePtr->getType())->getElementType();
+
+  for (Use& U: V->uses()) {
+    auto I = cast<Instruction>(U.getUser());
+    Builder.SetInsertPoint(I);
+
+    auto Gep = Builder.CreateConstInBoundsGEP2_32(FrameTy, FramePtr, 0, Index);
+    auto LoadedValue = Builder.CreateLoad(Gep, V->getName() + Twine(".reload"));
+    U.set(LoadedValue);
+  }
+}
+
 void llvm::buildCoroutineFrame(Function &F, CoroutineShape& Shape) {
   DEBUG(dbgs() << "entering buildCoroutineFrame\n");
 
@@ -225,10 +241,6 @@ void llvm::buildCoroutineFrame(Function &F, CoroutineShape& Shape) {
   for (auto CE: Shape.CoroEndUnwind)
     splitAround(CE, "CoroUnwinds");
 
-#if 0 // not sure about that
-  //// 2 make coro.begin a fork, jumping to ret block
-  //// 3 Split on end(final), so that return block can never enter
-#endif
   SuspendCrossingInfo Checker(F, Shape);
 
   SmallVector<Argument*, 4> ArgsToSpill;
@@ -237,6 +249,7 @@ void llvm::buildCoroutineFrame(Function &F, CoroutineShape& Shape) {
       if (Checker.definitionAcrossSuspend(A, U))
         ArgsToSpill.push_back(&A);
 
+  // TODO: probably need to segregate into Values and Allocas
   SmallVector<Instruction*, 4> ValuesToSpill;
   for (Instruction& I : instructions(F)) {
     // token returned by CoroSave is an artifact of how we build save/suspend
@@ -264,5 +277,45 @@ void llvm::buildCoroutineFrame(Function &F, CoroutineShape& Shape) {
     DEBUG(I->dump());
   DEBUG(dbgs() << "\n");
 
-  EntryBB; // Do spills and reloads
+  LLVMContext& C = F.getContext();
+  SmallString<32> Name(F.getName()); Name.append(".Frame");
+  StructType* FrameTy = StructType::create(C, Name);
+  auto FramePtrTy = FrameTy->getPointerTo();
+  auto FnTy = FunctionType::get(Type::getVoidTy(C), {FrameTy->getPointerTo()},
+                    /*IsVarArgs=*/false);
+  auto FnPtrTy = FnTy->getPointerTo();
+
+  SmallVector<Type*, 8> Types{ FnPtrTy, FnPtrTy, Type::getInt8PtrTy(C) };
+  Types.reserve(3 + ArgsToSpill.size() + ValuesToSpill.size());
+  for (Argument *A : ArgsToSpill)
+    Types.push_back(A->getType());
+  for (Instruction *I : ValuesToSpill)
+    Types.push_back(I->getType());
+
+  FrameTy->setBody(Types);
+
+  IRBuilder<> Builder(Shape.CoroBegin.back()->getNextNode());
+  auto FramePtr = Builder.CreateBitCast(Shape.CoroBegin.back(), FramePtrTy);
+
+  Value* Zero = Builder.getInt32(0);
+  unsigned Index = 3;
+  for (Argument* A : ArgsToSpill) {
+    auto Gep = Builder.CreateConstInBoundsGEP2_32(FrameTy, FramePtr, 0, Index);
+    Builder.CreateStore(A, Gep);
+    updateUses(Builder, A, FramePtr, Index);
+    ++Index;
+  }
+  for (Instruction* I : ValuesToSpill) {
+    Builder.SetInsertPoint(I->getNextNode());
+    auto Gep = Builder.CreateConstInBoundsGEP2_32(FrameTy, FramePtr, 0, Index);
+    Builder.CreateStore(I, Gep);
+    updateUses(Builder, I, FramePtr, Index);
+    ++Index;
+  }
+
+
+  //StructType::create()
+  //Builder.createstr
+  //doSpills()
+  //EntryBB; // Do spills and reloads
 }
