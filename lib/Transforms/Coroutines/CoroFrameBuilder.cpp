@@ -231,13 +231,14 @@ struct Spill : std::pair<Value*, Instruction*> {
 
 using SpillInfo = SmallVector<Spill, 8>;
 
-static void insertSpills(SpillInfo &Spills,
-                         CoroutineShape &Shape) {
+static Value* insertSpills(SpillInfo &Spills,
+                         CoroutineShape const &Shape) {
   auto CB = Shape.CoroBegin.back();
   IRBuilder<> Builder(CB->getNextNode());
+  PointerType* FramePtrTy = Shape.FrameTy->getPointerTo();
   Instruction *FramePtr =
-      cast<Instruction>(Builder.CreateBitCast(CB, Shape.FramePtrTy, "vFrame"));
-  Type* FrameTy = Shape.FramePtrTy->getElementType();
+      cast<Instruction>(Builder.CreateBitCast(CB, FramePtrTy, "FramePtr"));
+  Type* FrameTy = FramePtrTy->getElementType();
 
   Value* CurrentValue = nullptr;
   BasicBlock* CurrentBlock = nullptr;
@@ -298,9 +299,10 @@ static void insertSpills(SpillInfo &Spills,
     P.first->replaceAllUsesWith(G);
     P.first->eraseFromParent();
   }
+  return FramePtr;
 }
 
-static PointerType* buildFrameType(Function &F, SpillInfo const& Spills) {
+static StructType* buildFrameType(Function &F, SpillInfo const& Spills) {
   LLVMContext& C = F.getContext();
   SmallString<32> Name(F.getName()); Name.append(".Frame");
   StructType* FrameTy = StructType::create(C, Name);
@@ -327,7 +329,7 @@ static PointerType* buildFrameType(Function &F, SpillInfo const& Spills) {
   }
   FrameTy->setBody(Types);
 
-  return FramePtrTy;
+  return FrameTy;
 }
 
 void llvm::buildCoroutineFrame(Function &F, CoroutineShape& Shape) {
@@ -364,7 +366,6 @@ void llvm::buildCoroutineFrame(Function &F, CoroutineShape& Shape) {
 
   std::sort(Spills.begin(), Spills.end());
 
-  Shape.FramePtrTy = buildFrameType(F, Spills);
-  
-  insertSpills(Spills, Shape);
+  Shape.FrameTy = buildFrameType(F, Spills);  
+  Shape.FramePtr = insertSpills(Spills, Shape);
 }

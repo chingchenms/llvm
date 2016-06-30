@@ -38,9 +38,9 @@ BasicBlock* createResumeEntryBlock(Function& F, CoroutineShape& Shape) {
   assert(&SuspendDestBB->front() == Shape.CoroEndFinal.back());
 
   IRBuilder<> Builder(NewEntry);
-  auto vFramePtr = CoroFrameInst::Create(Builder);
-  auto FramePtr = Builder.CreateBitCast(vFramePtr, Shape.FramePtrTy);
-  auto FrameTy = Shape.FramePtrTy->getElementType();
+//  auto vFramePtr = CoroFrameInst::Create(Builder);
+  auto FramePtr = Shape.FramePtr;
+  auto FrameTy = Shape.FrameTy;
   auto GepIndex =
       Builder.CreateConstInBoundsGEP2_32(FrameTy, FramePtr, 0, 2, "index.addr");
   auto Index =
@@ -117,7 +117,7 @@ static Function *createClone(Function &F, Twine Suffix, CoroutineShape &Shape,
   BasicBlock *ResumeEntry, int8_t index) {
 
   Module* M = F.getParent();
-  auto FrameTy = cast<StructType>(Shape.FramePtrTy->getElementType());
+  auto FrameTy = Shape.FrameTy;
   auto FnPtrTy = cast<PointerType>(FrameTy->getElementType(0));
   auto FnTy = cast<FunctionType>(FnPtrTy->getElementType());
 
@@ -127,12 +127,18 @@ static Function *createClone(Function &F, Twine Suffix, CoroutineShape &Shape,
   SmallVector<ReturnInst*, 4> Returns;
 
   ValueToValueMapTy VMap;
+
   // replace all args with undefs
   for (Argument& A : F.getArgumentList())
     VMap[&A] = UndefValue::get(A.getType());
 
   CloneFunctionInto(NewF, &F, VMap, true, Returns);
 
+  // remap frame pointer
+  Argument* NewFramePtr = &NewF->getArgumentList().front();
+  Value* OldFramePtr = cast<Value>(VMap[Shape.FramePtr]);
+  NewFramePtr->takeName(OldFramePtr);
+  OldFramePtr->replaceAllUsesWith(NewFramePtr);
 
   auto Entry = cast<BasicBlock>(VMap[ResumeEntry]);
   Entry->moveBefore(&NewF->getEntryBlock());
@@ -149,7 +155,13 @@ static Function *createClone(Function &F, Twine Suffix, CoroutineShape &Shape,
 
 static void SimplifyCFG(Function& F) {
   llvm::legacy::FunctionPassManager FPM(F.getParent());
+
   FPM.add(createCFGSimplificationPass());
+  //FPM.add(createSROAPass());
+  FPM.add(createEarlyCSEPass());
+  FPM.add(createInstructionCombiningPass());
+  FPM.add(createCFGSimplificationPass());
+
   FPM.doInitialization();
   FPM.run(F);
   FPM.doFinalization();

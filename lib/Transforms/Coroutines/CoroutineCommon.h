@@ -48,7 +48,8 @@ struct LLVM_LIBRARY_VISIBILITY CoroutineShape {
 
   TinyPtrVector<ReturnInst*> Return;
 
-  PointerType* FramePtrTy;
+  StructType* FrameTy;
+  Value* FramePtr;
 
   template <class F> void reflect(F&& f);
 
@@ -73,6 +74,9 @@ template <class F> void CoroutineShape::reflect(F&& f) {
   f(CoroSuspend, "CoroSuspend");
 
   f(Return, "Return");
+
+  //f(FrameTy, "FrameTy");
+  //f(FramePtr, "FramePtr");
 }
 
 class CallGraph;
