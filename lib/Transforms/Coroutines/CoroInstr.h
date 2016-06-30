@@ -76,7 +76,7 @@ namespace llvm {
 
     // Methods to support type inquiry through isa, cast, and dyn_cast:
     static inline bool classof(const IntrinsicInst *I) {
-      return I->getIntrinsicID() == Intrinsic::experimental_coro_frame;
+      return I->getIntrinsicID() == Intrinsic::coro_frame;
     }
     static inline bool classof(const Value *V) {
       return isa<IntrinsicInst>(V) && classof(cast<IntrinsicInst>(V));

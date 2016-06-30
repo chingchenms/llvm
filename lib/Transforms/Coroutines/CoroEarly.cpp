@@ -141,22 +141,30 @@ static bool replaceEmulatedIntrinsicsWithRealOnes(Module& M) {
       Instruction& I = *it++;
       if (auto CI = dyn_cast<CallInst>(&I)) {
         if (auto F = CI->getCalledFunction()) {
-          const auto id = StringSwitch<Intrinsic::ID>(F->getName())
+          const auto ID = StringSwitch<Intrinsic::ID>(F->getName())
             .Case("llvm_coro_alloc", Intrinsic::coro_alloc)
             .Case("llvm_coro_begin", Intrinsic::coro_begin)
             .Case("llvm_coro_save", Intrinsic::coro_save)
             .Case("llvm_coro_suspend", Intrinsic::coro_suspend)
             .Case("llvm_coro_free", Intrinsic::coro_free)
+            .Case("llvm_coro_size", Intrinsic::coro_size)
+            .Case("llvm_coro_frame", Intrinsic::coro_frame)
             .Case("llvm_coro_end", Intrinsic::coro_end)
             .Default(Intrinsic::not_intrinsic);
 
-          Function *Fn = Intrinsic::getDeclaration(&M, id);
+          Function *Fn =
+              ID == Intrinsic::coro_size
+                  ? Intrinsic::getDeclaration(&M, ID, F->getReturnType())
+                  : Intrinsic::getDeclaration(&M, ID);
           Args.clear();
 //          dbgs() << "Looking at >>>>  "; CI->dump();
-          switch (id) {
+          switch (ID) {
           case Intrinsic::not_intrinsic:
             continue;
           default:
+            break;
+          case Intrinsic::coro_size:
+            Args.push_back(Null);
             break;
           case Intrinsic::coro_suspend:
             hasCoroSuspend = true;
@@ -182,14 +190,14 @@ static bool replaceEmulatedIntrinsicsWithRealOnes(Module& M) {
           }
 
           auto IntrinCall = CallInst::Create(Fn, Args, "");
-          if (id == Intrinsic::coro_save) {
+          if (ID == Intrinsic::coro_save) {
             IntrinCall->insertBefore(CI);
             BasicBlock::iterator BI(CI);
             ReplaceInstWithValue(CI->getParent()->getInstList(), BI, Null);
             SavedIntrinsic = IntrinCall;
             continue;
           }
-          else if (id == Intrinsic::coro_suspend) {
+          else if (ID == Intrinsic::coro_suspend) {
             ReplaceInstWithInst(CI, IntrinCall);
             SavedIntrinsic = nullptr;
           }

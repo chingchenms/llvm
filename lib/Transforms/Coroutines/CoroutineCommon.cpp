@@ -153,6 +153,9 @@ void llvm::CoroutineShape::buildFrom(Function &F) {
       case Intrinsic::coro_size:
         CoroSize.push_back(cast<CoroSizeInst>(II));
         break;
+      case Intrinsic::coro_frame:
+        CoroFrame.push_back(cast<CoroFrameInst>(II));
+        break;
       case Intrinsic::coro_alloc:
         CoroAlloc.push_back(cast<CoroAllocInst>(II));
         break;
@@ -262,6 +265,11 @@ static void addCoroutineSCCPasses(const PassManagerBuilder &Builder,
   }
 }
 
+static void addCoroutineOptimizerLastPasses(const PassManagerBuilder &Builder,
+  PassManagerBase &PM) {
+  addPass(PM, createCoroCleanupPass());
+}
+
 void llvm::addCoroutinePassesToExtensionPoints(PassManagerBuilder &Builder,
                                                bool VerifyEach) {
   g_VerifyEach = VerifyEach;
@@ -274,5 +282,6 @@ void llvm::addCoroutinePassesToExtensionPoints(PassManagerBuilder &Builder,
     addCoroutineSCCPasses);
   Builder.addExtension(PassManagerBuilder::EP_ScalarOptimizerLate,
     addCoroutineScalarOptimizerPasses);
-  // TODO: run CoroCleanup at EP_OptimizerLast
+  Builder.addExtension(PassManagerBuilder::EP_OptimizerLast,
+    addCoroutineOptimizerLastPasses);
 }

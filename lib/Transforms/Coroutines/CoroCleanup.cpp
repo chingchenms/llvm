@@ -17,6 +17,7 @@
 #include "llvm/ADT/Statistic.h"
 #include "llvm/IR/Module.h"
 #include "llvm/Pass.h"
+#include <llvm/IR/InstIterator.h>
 #include "llvm/Support/Debug.h"
 #include "llvm/Transforms/Coroutines.h"
 
@@ -24,10 +25,37 @@ using namespace llvm;
 
 #define DEBUG_TYPE "coro-cleanup"
 
-STATISTIC(CoroInitCounter, "Number of @llvm.coro.init replaced");
-STATISTIC(CoroResumeCounter, "Number of @llvm.coro.resume replaced");
-STATISTIC(CoroDestroyCounter, "Number of @llvm.coro.destroy replaced");
-STATISTIC(CoroDeleteCounter, "Number of @llvm.coro.delete replaced");
+//STATISTIC(CoroBeginCounter, "Number of @llvm.coro.begin replaced");
+//STATISTIC(CoroResumeCounter, "Number of @llvm.coro.resume replaced");
+//STATISTIC(CoroDestroyCounter, "Number of @llvm.coro.destroy replaced");
+//STATISTIC(CoroDeleteCounter, "Number of @llvm.coro.delete replaced");
+
+static bool lowerRemainingCoroIntrinsics(Function& F) {
+  bool changed = false;
+  for (auto IB = inst_begin(F), IE = inst_end(F); IB != IE;) {
+    IntrinsicInst* II = dyn_cast<IntrinsicInst>(&*IB++);
+    if (!II)
+      continue;
+    Value* ReplacementValue = nullptr;
+    if (auto CB = dyn_cast<CoroBeginInst>(II))
+      ReplacementValue = CB->getMem();
+    else if (auto CF = dyn_cast<CoroFreeInst>(II))
+      ReplacementValue = CF->getArgOperand(0);
+    else if (auto CA = dyn_cast<CoroAllocInst>(II))
+      ReplacementValue =
+          ConstantPointerNull::get(cast<PointerType>(II->getType()));
+    else if (auto CE = dyn_cast<CoroEndInst>(II))
+      ReplacementValue = nullptr;
+    else
+      continue;
+
+    if (ReplacementValue)
+      II->replaceAllUsesWith(ReplacementValue);
+    II->eraseFromParent();
+    changed = true;
+  }
+  return changed;
+}
 
 namespace {
 struct CoroCleanup : FunctionPass {
@@ -35,13 +63,8 @@ struct CoroCleanup : FunctionPass {
 
   CoroCleanup() : FunctionPass(ID) {}
 
-  bool doInitialization(Module &M) override {
-    return false;
-  }
-
   bool runOnFunction(Function &F) override {
-    DEBUG(dbgs() << "CoroCleanup is looking at " << F.getName() << "\n");
-    return false;
+    return lowerRemainingCoroIntrinsics(F);
   }
 };
 }

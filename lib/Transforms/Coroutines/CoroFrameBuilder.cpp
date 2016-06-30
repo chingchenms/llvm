@@ -33,7 +33,7 @@
 #include <llvm/Transforms/Utils/BasicBlockUtils.h>
 #include "llvm/IR/CFG.h"
 
-#define DEBUG_TYPE "coro-cfb"
+#define DEBUG_TYPE "coro-frame"
 
 using namespace llvm;
 using namespace llvm::CoroCommon;
@@ -203,7 +203,7 @@ SuspendCrossingInfo::SuspendCrossingInfo(Function &F, CoroutineShape &Shape)
       }
     }
   } while (Changed);
-  dump();
+  DEBUG(dump());
 }
 
 // Split above and below a particular instruction so that it

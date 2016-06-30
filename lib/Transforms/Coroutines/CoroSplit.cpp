@@ -78,11 +78,11 @@ BasicBlock* createResumeEntryBlock(Function& F, CoroutineShape& Shape) {
   Builder.SetInsertPoint(UnreachBB);
   Builder.CreateUnreachable();
 
-  return NewEntry;
+return NewEntry;
 }
 
 static void replaceWith(ArrayRef<Instruction *> Instrs, Value *NewValue,
-                        ValueToValueMapTy *VMap = nullptr) {
+  ValueToValueMapTy *VMap = nullptr) {
   for (Instruction* I : Instrs) {
     if (VMap) I = cast<Instruction>((*VMap)[I]);
     I->replaceAllUsesWith(NewValue);
@@ -92,7 +92,7 @@ static void replaceWith(ArrayRef<Instruction *> Instrs, Value *NewValue,
 
 template <typename T>
 static void replaceWith(T &C, Value *NewValue,
-                        ValueToValueMapTy *VMap = nullptr) {
+  ValueToValueMapTy *VMap = nullptr) {
   Instruction* TestB = *C.begin();
   Instruction* TestE = *C.begin();
   TestB; TestE;
@@ -142,7 +142,17 @@ static Function *createClone(Function &F, Twine Suffix, CoroutineShape &Shape,
 
   auto Entry = cast<BasicBlock>(VMap[ResumeEntry]);
   Entry->moveBefore(&NewF->getEntryBlock());
-  IRBuilder<> Builder(F.getContext());
+
+  IRBuilder<> Builder(&Entry->front());
+  auto NewVFrame = Builder.CreateBitCast(
+      NewFramePtr, Type::getInt8PtrTy(Builder.getContext()), "vFrame");
+  Value* OldVFrame = cast<Value>(VMap[Shape.CoroBegin.back()]);
+  OldVFrame->replaceAllUsesWith(NewVFrame);
+
+
+  // remap vFrame
+
+
 
   auto NewValue = Builder.getInt8(FnIndex);
   replaceWith(Shape.CoroSuspend, NewValue, &VMap);
@@ -152,7 +162,7 @@ static Function *createClone(Function &F, Twine Suffix, CoroutineShape &Shape,
 
   Builder.SetInsertPoint(Shape.FramePtr->getNextNode());
   auto G = Builder.CreateConstInBoundsGEP2_32(Shape.FrameTy, Shape.FramePtr, 0,
-                                               FnIndex, "fn.addr");
+    FnIndex, "fn.addr");
   Builder.CreateStore(NewF, G);
   NewF->setCallingConv(CallingConv::Fast);
 
@@ -174,9 +184,62 @@ static void SimplifyCFG(Function& F) {
   FPM.doFinalization();
 }
 
+template <typename T>
+ArrayRef<Instruction*> toArrayRef(T const& Container) {
+  using ElementType = typename T::value_type;
+  Instruction* Test = (ElementType)0;
+  Test;
+  ArrayRef<ElementType> AR(Container);
+  return reinterpret_cast<ArrayRef<Instruction*>&>(AR);
+}
+
+void replaceAndRemove(ArrayRef<Instruction*> Instructions, Value* NewValue) {
+  for (Instruction* I : Instructions) {
+    I->replaceAllUsesWith(NewValue);
+    I->eraseFromParent();
+  }
+}
+
+static void replaceFrameSize(CoroutineShape& Shape) {
+  if (Shape.CoroSize.empty())
+    return;
+
+  auto SizeIntrin = Shape.CoroSize.back();
+  Module* M = SizeIntrin->getModule();
+  const DataLayout &DL = M->getDataLayout();
+  auto Size = DL.getTypeAllocSize(Shape.FrameTy);
+  auto SizeConstant = ConstantInt::get(SizeIntrin->getType(), Size);
+
+  replaceAndRemove(toArrayRef(Shape.CoroSize), SizeConstant);
+}
+
+static void updateCoroInfo(Function& F, CoroutineShape &Shape,
+                           std::initializer_list<Function *> Fns) {
+
+  SmallVector<Constant*, 4> Args(Fns.begin(), Fns.end());
+  assert(Args.size() > 0);
+  Function* Part = *Fns.begin();
+  Module* M = Part->getParent();
+  auto ArrTy = ArrayType::get(Part->getType(), Args.size());
+
+  auto ConstVal = ConstantArray::get(ArrTy, Args);
+  auto GV = new GlobalVariable(*M, ConstVal->getType(), /*isConstant=*/true,
+    GlobalVariable::PrivateLinkage, ConstVal,
+    F.getName() + Twine(".parts"));
+
+  // Update coro.begin instruction to refer to this constant
+  LLVMContext &C = F.getContext();
+  auto BC = ConstantFolder().CreateBitCast(GV, Type::getInt8PtrTy(C));
+  Shape.CoroBegin.back()->setInfo(BC);
+}
+
 static void splitCoroutine(Function &F, CallGraph &CG, CallGraphSCC &SCC) {
   CoroutineShape Shape(F);
+
   buildCoroutineFrame(F, Shape);
+  replaceFrameSize(Shape);
+  replaceAndRemove(toArrayRef(Shape.CoroFrame), Shape.CoroBegin.back());
+
   auto ResumeEntry = createResumeEntryBlock(F, Shape);
   auto ResumeClone = createClone(F, ".Resume", Shape, ResumeEntry, 0);
   auto DestroyClone = createClone(F, ".Destroy", Shape, ResumeEntry, 1);
@@ -186,6 +249,11 @@ static void splitCoroutine(Function &F, CallGraph &CG, CallGraphSCC &SCC) {
   SimplifyCFG(F);
   SimplifyCFG(*ResumeClone);
   SimplifyCFG(*DestroyClone);
+
+  // TODO: create Cleanup
+
+  updateCoroInfo(F, Shape, { ResumeClone, DestroyClone });
+
   CoroCommon::updateCallGraph(F, { ResumeClone, DestroyClone }, CG, SCC);
 }
 
