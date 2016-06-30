@@ -66,13 +66,18 @@ struct SuspendCrossingInfo {
   struct BlockData {
     BitVector Consumes;
     BitVector Kills;
-    bool Suspend;
+    bool Suspend = false;
+    bool End = false;
   };
   SmallVector<BlockData, SmallVectorThreshold> Block;
 
   auto successors(BlockData const& BD) {
     BasicBlock* BB = Mapping.indexToBlock(&BD - &Block[0]);
     return llvm::successors(BB);
+  }
+
+  BlockData &getBlockData(BasicBlock *BB) {
+    return Block[Mapping.blockToIndex(BB)];
   }
 
   void dump();
@@ -102,7 +107,6 @@ struct SuspendCrossingInfo {
     BasicBlock* UseBB = cast<Instruction>(U)->getParent();
     return hasPathCrossingSuspendPoint(DefBB, UseBB);
   }
-
 };
 
 void SuspendCrossingInfo::dump(StringRef Label, BitVector const& BV) {
@@ -136,17 +140,17 @@ SuspendCrossingInfo::SuspendCrossingInfo(Function &F, CoroutineShape &Shape)
     B.Consumes.set(I);
   }
 
-  // create a bitset to quickly check for coro-ends
-  BitVector CoroEnds(N);
-  CoroEnds.set(Mapping.blockToIndex(Shape.CoroEndFinal.back()->getParent()));
+  // Mark all CoroEnd Blocks
+  for (auto CE : Shape.CoroEndFinal)
+    getBlockData(CE->getParent()).End = true;
   for (auto CE: Shape.CoroEndUnwind)
-    CoroEnds.set(Mapping.blockToIndex(CE->getParent()));
+    getBlockData(CE->getParent()).End = true;
 
   // Mark all suspend blocks and indicate that kill everything they consume
   for (CoroSuspendInst* CSI : Shape.CoroSuspend) {
     CoroSaveInst* const CoroSave = CSI->getCoroSave();
     BasicBlock* const CoroSaveBB = CoroSave->getParent();
-    auto &B = Block[Mapping.blockToIndex(CoroSaveBB)];
+    auto &B = getBlockData(CoroSaveBB);
     B.Suspend = true;
     B.Kills |= B.Consumes;
   }
@@ -166,10 +170,6 @@ SuspendCrossingInfo::SuspendCrossingInfo(Function &F, CoroutineShape &Shape)
 
         auto SuccNo = Mapping.blockToIndex(SI);
 
-        // Do not propagate beyond Coro.End
-        if (CoroEnds[SuccNo])
-          continue;
-
         auto& S = Block[SuccNo];
         auto SavedCons = S.Consumes;
         auto SavedKills = S.Kills;
@@ -182,6 +182,9 @@ SuspendCrossingInfo::SuspendCrossingInfo(Function &F, CoroutineShape &Shape)
         }
         if (S.Suspend) {
           S.Kills |= S.Consumes;
+        }
+        else if (S.End) {
+          S.Kills.reset();
         }
         else {
           S.Kills.reset(SuccNo);
