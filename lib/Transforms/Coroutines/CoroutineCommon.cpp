@@ -164,6 +164,8 @@ void llvm::CoroutineShape::buildFrom(Function &F) {
         break;
       case Intrinsic::coro_begin: {
         auto CB = cast<CoroBeginInst>(II);
+//        CB->addAttribute(0, Attribute::NonNull);
+//        CB->addAttribute(0, Attribute::NoAlias);
         if (CB->getInfo().isPreSplit())
           CoroBegin.push_back(CB);
         break;

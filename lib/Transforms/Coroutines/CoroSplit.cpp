@@ -123,6 +123,8 @@ static Function *createClone(Function &F, Twine Suffix, CoroutineShape &Shape,
 
   Function *NewF = Function::Create(
     FnTy, GlobalValue::LinkageTypes::InternalLinkage, F.getName() + Suffix, M);
+  NewF->addAttribute(1, Attribute::NonNull);
+  NewF->addAttribute(1, Attribute::NoAlias);
 
   SmallVector<ReturnInst*, 4> Returns;
 
