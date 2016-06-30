@@ -48,6 +48,8 @@ struct LLVM_LIBRARY_VISIBILITY CoroutineShape {
 
   TinyPtrVector<ReturnInst*> Return;
 
+  PointerType* FramePtrTy;
+
   template <class F> void reflect(F&& f);
 
   void dump();

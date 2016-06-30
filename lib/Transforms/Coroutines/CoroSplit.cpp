@@ -248,9 +248,132 @@ bool removeNoInline(Function& F, CoroBeginInst& CoroBeg) {
 }
 #endif
 
-static void splitCoroutine(Function& F, CoroBeginInst& CB) {
+BasicBlock* createResumeEntryBlock(Function& F, CoroutineShape& Shape) {
+  LLVMContext& C = F.getContext();
+  auto NewEntry = BasicBlock::Create(C, "resume.entry", &F);
+  auto UnreachBB = BasicBlock::Create(C, "UnreachBB", &F);
+
+  IRBuilder<> Builder(NewEntry);
+  auto vFramePtr = CoroFrameInst::Create(Builder);
+  auto FramePtr = Builder.CreateBitCast(vFramePtr, Shape.FramePtrTy);
+  auto FrameTy = Shape.FramePtrTy->getElementType();
+  auto GepIndex =
+      Builder.CreateConstInBoundsGEP2_32(FrameTy, FramePtr, 0, 2, "index.addr");
+  auto Index =
+    Builder.CreateLoad(GepIndex, "index");
+  auto Switch =
+      Builder.CreateSwitch(Index, UnreachBB, Shape.CoroSuspend.size());
+
+  uint8_t SuspendIndex = -1;
+  for (auto S: Shape.CoroSuspend) {
+    ++SuspendIndex;
+    ConstantInt* IndexVal = Builder.getInt8(SuspendIndex);
+
+    // replace CoroSave with a store to Index
+    auto Save = S->getCoroSave();
+    Builder.SetInsertPoint(Save);
+    auto GepIndex =
+      Builder.CreateConstInBoundsGEP2_32(FrameTy, FramePtr, 0, 2, "index.addr");
+    Builder.CreateStore(IndexVal, GepIndex);
+    Save->replaceAllUsesWith(ConstantTokenNone::get(C));
+    Save->eraseFromParent();
+
+    // make sure that CoroSuspend is at the beginning of the block
+    // and add a branch to it from a switch
+
+    auto SuspendBB = S->getParent();
+    if (&SuspendBB->front() != S) {
+      SuspendBB = SuspendBB->splitBasicBlock(S);
+    }
+    SuspendBB->setName("resume." + Twine::utohexstr(SuspendIndex));
+    Switch->addCase(IndexVal, SuspendBB);
+  }
+
+  Builder.SetInsertPoint(UnreachBB);
+  Builder.CreateUnreachable();
+
+  return NewEntry;
+}
+
+static void replaceWith(ArrayRef<Instruction *> Instrs, Value *NewValue,
+                        ValueToValueMapTy *VMap = nullptr) {
+  for (Instruction* I : Instrs) {
+    if (VMap) I = cast<Instruction>((*VMap)[I]);
+    I->replaceAllUsesWith(NewValue);
+    I->eraseFromParent();
+  }
+}
+
+template <typename T>
+static void replaceWith(T &C, Value *NewValue,
+                        ValueToValueMapTy *VMap = nullptr) {
+  Instruction* TestB = *C.begin();
+  Instruction* TestE = *C.begin();
+  TestB; TestE;
+  Instruction** B = reinterpret_cast<Instruction**>(C.begin());
+  Instruction** E = reinterpret_cast<Instruction**>(C.end());
+  ArrayRef<Instruction*> Ar(B, E);
+  replaceWith(Ar, NewValue, VMap);
+}
+
+void replaceCoroEnd(ArrayRef<CoroEndInst*> Ends, ValueToValueMapTy& VMap) {
+  for (auto E : Ends) {
+    auto NewE = cast<CoroEndInst>(VMap[E]);
+    LLVMContext& C = NewE->getContext();
+    auto Ret = ReturnInst::Create(C, nullptr, NewE);
+    auto BB = NewE->getParent();
+    BB->splitBasicBlock(NewE);
+    Ret->getNextNode()->eraseFromParent();
+  }
+}
+
+static Function *createClone(Function &F, Twine Suffix, CoroutineShape &Shape,
+  BasicBlock *ResumeEntry, int8_t index) {
+
+  Module* M = F.getParent();
+  auto FrameTy = cast<StructType>(Shape.FramePtrTy->getElementType());
+  auto FnPtrTy = cast<PointerType>(FrameTy->getElementType(0));
+  auto FnTy = cast<FunctionType>(FnPtrTy->getElementType());
+
+  Function *NewF = Function::Create(
+    FnTy, GlobalValue::LinkageTypes::InternalLinkage, F.getName() + Suffix, M);
+
+  SmallVector<ReturnInst*, 4> Returns;
+
+  ValueToValueMapTy VMap;
+  // replace all args with undefs
+  for (Argument& A : F.getArgumentList())
+    VMap[&A] = UndefValue::get(A.getType());
+
+  CloneFunctionInto(NewF, &F, VMap, true, Returns);
+
+
+  auto Entry = cast<BasicBlock>(VMap[ResumeEntry]);
+  Entry->moveBefore(&NewF->getEntryBlock());
+  IRBuilder<> Builder(F.getContext());
+
+  auto NewValue = Builder.getInt8(index);
+  replaceWith(Shape.CoroSuspend, NewValue, &VMap);
+
+  replaceCoroEnd(Shape.CoroEndFinal, VMap);
+  replaceCoroEnd(Shape.CoroEndUnwind, VMap);
+
+  //for (auto S : Shape.CoroEndFinal) {
+  //  auto NewS = cast<Instruction>(VMap[S]);
+  //  NewS->replaceAllUsesWith(NewValue);
+  //  NewS->eraseFromParent();
+  //}
+
+
+  return &F;
+}
+
+static void splitCoroutine(Function &F, CoroBeginInst &CB) {
   CoroutineShape Shape(F);
   buildCoroutineFrame(F, Shape);
+  auto ResumeEntry = createResumeEntryBlock(F, Shape);
+  auto ResumeClone = createClone(F, ".Resume", Shape, ResumeEntry, 0);
+  auto DestroyClone = createClone(F, ".Destroy", Shape, ResumeEntry, 1);
 }
 
 static bool handleCoroutine(Function& F, CallGraph &CG, CallGraphSCC &SCC) {

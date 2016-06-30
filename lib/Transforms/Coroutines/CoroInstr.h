@@ -21,6 +21,7 @@
 #define LLVM_LIB_TRANSFORMS_COROUTINES_COROINSTR_H
 
 #include <llvm/IR/IntrinsicInst.h>
+#include <llvm/IR/IRBuilder.h>
 #include <llvm/IR/GlobalVariable.h> // TODO: move to .cpp
 
 // Metadata tuple in CoroInitInstr starts with a string identifying 
@@ -69,7 +70,9 @@ namespace llvm {
   /// This represents the llvm.coro.end instruction.
   class LLVM_LIBRARY_VISIBILITY CoroFrameInst : public IntrinsicInst {
   public:
-    static CoroFrameInst* Create(Instruction* InsertBefore);
+    static CoroFrameInst* Create(IRBuilder<>& Builder);
+//    static CoroFrameInst* Create(Instruction* InsertBefore);
+//    static CoroFrameInst* Create(BasicBlock* InsertAfter);
 
     // Methods to support type inquiry through isa, cast, and dyn_cast:
     static inline bool classof(const IntrinsicInst *I) {
