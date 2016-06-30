@@ -59,7 +59,7 @@ static std::pair<Instruction*, Instruction*> getFreePart(CoroutineShape& S) {
 }
 #endif
 static std::pair<Instruction*,Instruction*> getRetCode(CoroutineShape& S) {
-  auto NextNode = S.CoroEndFinal.back()->getNextNode();
+  auto NextNode = S.CoroReturn.back()->getNextNode();
   BasicBlock* EndBB = nullptr;
   if(NextNode->isTerminator()) {
     auto NextBB = NextNode->getParent()->getSingleSuccessor();
@@ -102,7 +102,7 @@ void llvm::outlineCoroutineParts(Function &F, CallGraph &CG,
   SmallVector<Function *, 8> Funcs{
     Outline(".AllocPart", S.CoroAlloc.back(), S.CoroBegin.back()) };
 
-  for (CoroEndInst *CE : S.CoroEndUnwind) {
+  for (CoroEndInst *CE : S.CoroEnd) {
     //auto RC = getFreePart(S, CE);
     auto Start = cast<CoroFreeInst>(CE->getFrameArg());
     auto End = CE->getNextNode();

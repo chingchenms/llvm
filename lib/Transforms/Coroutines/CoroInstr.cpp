@@ -18,55 +18,11 @@
 
 using namespace llvm;
 
-CoroFrameInst * llvm::CoroFrameInst::Create(IRBuilder<>& Builder)
-{
-  Module* M = Builder.GetInsertBlock()->getModule();
-  auto Fn = Intrinsic::getDeclaration(M, Intrinsic::experimental_coro_frame);
-  auto Call = Builder.CreateCall(Fn);
-  return cast<CoroFrameInst>(Call);
-}
-
-#if 0
-CoroFrameInst* CoroFrameInst::Create(Instruction* InsertBefore) {
-  auto M = InsertBefore->getModule();
-  auto Fn = Intrinsic::getDeclaration(M, Intrinsic::experimental_coro_frame);
-  auto Call = CallInst::Create(Fn, "", InsertBefore);
-  return cast<CoroFrameInst>(Call);
-}
-
-CoroFrameInst *llvm::CoroFrameInst::Create(BasicBlock *InsertAfter) {
-  auto M = InsertAfter->getModule();
-  auto Fn = Intrinsic::getDeclaration(M, Intrinsic::experimental_coro_frame);
-  auto Call = CallInst::Create(Fn, "", InsertAfter);
-  return cast<CoroFrameInst>(Call);
-}
-#endif
-
-void llvm::CoroEndInst::setUnwind(bool Value) {
-  LLVMContext& C = getContext();
-  auto BoolTy = Type::getInt1Ty(C);
-  auto Constant = ConstantInt::get(BoolTy, Value);
-  setArgOperand(kUnwind, Constant);
-}
-
-CoroEndInst *llvm::CoroEndInst::Create(Instruction *InsertBefore, Value *Addr) {
-  auto BB = InsertBefore->getParent();
-  auto M = BB->getParent()->getParent();
-  LLVMContext& C = M->getContext();
-  auto BoolTy = Type::getInt1Ty(C);
-  auto Fn = Intrinsic::getDeclaration(M, Intrinsic::coro_end);
-  if (Addr == nullptr) {
-    Addr = ConstantPointerNull::get(Type::getInt8PtrTy(C));
-  }
-  auto Call = CallInst::Create(Fn, { Addr, ConstantInt::get(BoolTy, 0) }, "",
-    InsertBefore);
-  return cast<CoroEndInst>(Call);
-}
-
-//CoroResumeAddrInst *CoroResumeAddrInst::Create(Value *FramePtr,
-//                                               Instruction *InsertBefore) {
-//  auto Fn = Intrinsic::getDeclaration(InsertBefore->getModule(), ID);
-//  auto Call = CallInst::Create(Fn, {FramePtr}, "", InsertBefore);
-//  return cast<CoroResumeAddrInst>(Call);
+//CoroFrameInst * llvm::CoroFrameInst::Create(IRBuilder<>& Builder)
+//{
+//  Module* M = Builder.GetInsertBlock()->getModule();
+//  auto Fn = Intrinsic::getDeclaration(M, Intrinsic::experimental_coro_frame);
+//  auto Call = Builder.CreateCall(Fn);
+//  return cast<CoroFrameInst>(Call);
 //}
 

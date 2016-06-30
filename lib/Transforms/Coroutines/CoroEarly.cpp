@@ -68,7 +68,7 @@ static void finalizeCoroutine(Function& F) {
   if (SuspendCount == 0)
     return;
 
-  CoroEndInst* End = CoroShape.CoroEndFinal.back();
+  CoroReturnInst* End = CoroShape.CoroReturn.back();
   BasicBlock* EndBB = End->getParent();
   if (&EndBB->front() != End) {
     EndBB = EndBB->splitBasicBlock(End, "CoroEnd");
@@ -150,6 +150,7 @@ static bool replaceEmulatedIntrinsicsWithRealOnes(Module& M) {
             .Case("llvm_coro_size", Intrinsic::coro_size)
             .Case("llvm_coro_frame", Intrinsic::coro_frame)
             .Case("llvm_coro_end", Intrinsic::coro_end)
+            .Case("llvm_coro_return", Intrinsic::coro_return)
             .Default(Intrinsic::not_intrinsic);
 
           Function *Fn =
@@ -163,18 +164,13 @@ static bool replaceEmulatedIntrinsicsWithRealOnes(Module& M) {
             continue;
           default:
             break;
-          case Intrinsic::coro_size:
-            Args.push_back(Null);
-            break;
           case Intrinsic::coro_suspend:
             hasCoroSuspend = true;
             assert(SavedIntrinsic && "coro_suspend expects saved intrinsic");
             Args.push_back(SavedIntrinsic);
             break;
+          case Intrinsic::coro_return:
           case Intrinsic::coro_end:
-            Args.push_back(CI->getArgOperand(0));
-            Args.push_back(CI->getArgOperand(1));
-            break;
           case Intrinsic::coro_save:
           case Intrinsic::coro_free:
             Args.push_back(CI->getArgOperand(0));

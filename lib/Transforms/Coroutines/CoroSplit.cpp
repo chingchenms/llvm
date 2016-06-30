@@ -34,8 +34,8 @@ BasicBlock* createResumeEntryBlock(Function& F, CoroutineShape& Shape) {
   LLVMContext& C = F.getContext();
   auto NewEntry = BasicBlock::Create(C, "resume.entry", &F);
   auto UnreachBB = BasicBlock::Create(C, "UnreachBB", &F);
-  auto SuspendDestBB = Shape.CoroEndFinal.back()->getParent();
-  assert(&SuspendDestBB->front() == Shape.CoroEndFinal.back());
+  auto SuspendDestBB = Shape.CoroReturn.back()->getParent();
+  assert(&SuspendDestBB->front() == Shape.CoroReturn.back());
 
   IRBuilder<> Builder(NewEntry);
 //  auto vFramePtr = CoroFrameInst::Create(Builder);
@@ -102,15 +102,17 @@ static void replaceWith(T &C, Value *NewValue,
   replaceWith(Ar, NewValue, VMap);
 }
 
+void replaceCoroEnd(IntrinsicInst* End, ValueToValueMapTy& VMap) {
+  auto NewE = cast<IntrinsicInst>(VMap[End]);
+  LLVMContext& C = NewE->getContext();
+  auto Ret = ReturnInst::Create(C, nullptr, NewE);
+  auto BB = NewE->getParent();
+  BB->splitBasicBlock(NewE);
+  Ret->getNextNode()->eraseFromParent();
+}
 void replaceCoroEnd(ArrayRef<CoroEndInst*> Ends, ValueToValueMapTy& VMap) {
-  for (auto E : Ends) {
-    auto NewE = cast<CoroEndInst>(VMap[E]);
-    LLVMContext& C = NewE->getContext();
-    auto Ret = ReturnInst::Create(C, nullptr, NewE);
-    auto BB = NewE->getParent();
-    BB->splitBasicBlock(NewE);
-    Ret->getNextNode()->eraseFromParent();
-  }
+  for (auto E : Ends)
+    replaceCoroEnd(E, VMap);
 }
 
 static Function *createClone(Function &F, Twine Suffix, CoroutineShape &Shape,
@@ -159,8 +161,8 @@ static Function *createClone(Function &F, Twine Suffix, CoroutineShape &Shape,
   auto NewValue = Builder.getInt8(FnIndex);
   replaceWith(Shape.CoroSuspend, NewValue, &VMap);
 
-  replaceCoroEnd(Shape.CoroEndFinal, VMap);
-  replaceCoroEnd(Shape.CoroEndUnwind, VMap);
+  replaceCoroEnd(Shape.CoroReturn.back(), VMap);
+  replaceCoroEnd(Shape.CoroEnd, VMap);
 
   Builder.SetInsertPoint(Shape.FramePtr->getNextNode());
   auto G = Builder.CreateConstInBoundsGEP2_32(Shape.FrameTy, Shape.FramePtr, 0,

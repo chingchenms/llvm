@@ -164,8 +164,8 @@ void llvm::CoroutineShape::buildFrom(Function &F) {
         break;
       case Intrinsic::coro_begin: {
         auto CB = cast<CoroBeginInst>(II);
-//        CB->addAttribute(0, Attribute::NonNull);
-//        CB->addAttribute(0, Attribute::NoAlias);
+        CB->addAttribute(0, Attribute::NonNull);
+        CB->addAttribute(0, Attribute::NoAlias);
         if (CB->getInfo().isPreSplit())
           CoroBegin.push_back(CB);
         break;
@@ -173,12 +173,11 @@ void llvm::CoroutineShape::buildFrom(Function &F) {
       case Intrinsic::coro_free:
         CoroFree.push_back(cast<CoroFreeInst>(II));
         break;
+      case Intrinsic::coro_return:
+        CoroReturn.push_back(cast<CoroReturnInst>(II));
+        break;
       case Intrinsic::coro_end:
-        auto CE = cast<CoroEndInst>(II);
-        if (CE->isFallthrough())
-          CoroEndFinal.push_back(CE);
-        else
-          CoroEndUnwind.push_back(CE);
+        CoroEnd.push_back(cast<CoroEndInst>(II));
         break;
       }
     }
@@ -187,7 +186,7 @@ void llvm::CoroutineShape::buildFrom(Function &F) {
     "coroutine should have exactly one defining @llvm.coro.begin");
   assert(CoroAlloc.size() == 1 &&
     "coroutine should have exactly one @llvm.coro.alloc");
-  assert(CoroEndFinal.size() == 1 &&
+  assert(CoroReturn.size() == 1 &&
     "coroutine should have exactly one @llvm.coro.end(falthrough = true)");
 }
 

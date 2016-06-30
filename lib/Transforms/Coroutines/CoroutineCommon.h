@@ -43,8 +43,8 @@ namespace CoroCommon {
 struct LLVM_LIBRARY_VISIBILITY CoroutineShape {
   TinyPtrVector<CoroAllocInst*> CoroAlloc;
   TinyPtrVector<CoroBeginInst*> CoroBegin;
-  TinyPtrVector<CoroEndInst*> CoroEndFinal;
-  TinyPtrVector<CoroEndInst*> CoroEndUnwind;
+  TinyPtrVector<CoroReturnInst*> CoroReturn;
+  TinyPtrVector<CoroEndInst*> CoroEnd;
 
   SmallVector<CoroSizeInst*, 2> CoroSize;
   SmallVector<CoroFreeInst*, 2> CoroFree;
@@ -70,8 +70,8 @@ private:
 template <class F> void CoroutineShape::reflect(F&& f) {
   f(CoroAlloc, "CoroAlloc");
   f(CoroBegin, "CoroBegin");
-  f(CoroEndFinal, "CoroEndFinal");
-  f(CoroEndUnwind, "CoroEndUnwind");
+  f(CoroReturn, "CoroReturn");
+  f(CoroEnd, "CoroEnd");
 
   f(CoroSize, "CoroSize");
   f(CoroFree, "CoroFree");
