@@ -231,7 +231,7 @@ struct Spill : std::pair<Value*, Instruction*> {
 
 using SpillInfo = SmallVector<Spill, 8>;
 
-static Value* insertSpills(SpillInfo &Spills,
+static Instruction* insertSpills(SpillInfo &Spills,
                          CoroutineShape const &Shape) {
   auto CB = Shape.CoroBegin.back();
   IRBuilder<> Builder(CB->getNextNode());

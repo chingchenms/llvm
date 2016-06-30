@@ -114,7 +114,7 @@ void replaceCoroEnd(ArrayRef<CoroEndInst*> Ends, ValueToValueMapTy& VMap) {
 }
 
 static Function *createClone(Function &F, Twine Suffix, CoroutineShape &Shape,
-  BasicBlock *ResumeEntry, int8_t index) {
+  BasicBlock *ResumeEntry, int8_t FnIndex) {
 
   Module* M = F.getParent();
   auto FrameTy = Shape.FrameTy;
@@ -144,11 +144,17 @@ static Function *createClone(Function &F, Twine Suffix, CoroutineShape &Shape,
   Entry->moveBefore(&NewF->getEntryBlock());
   IRBuilder<> Builder(F.getContext());
 
-  auto NewValue = Builder.getInt8(index);
+  auto NewValue = Builder.getInt8(FnIndex);
   replaceWith(Shape.CoroSuspend, NewValue, &VMap);
 
   replaceCoroEnd(Shape.CoroEndFinal, VMap);
   replaceCoroEnd(Shape.CoroEndUnwind, VMap);
+
+  Builder.SetInsertPoint(Shape.FramePtr->getNextNode());
+  auto G = Builder.CreateConstInBoundsGEP2_32(Shape.FrameTy, Shape.FramePtr, 0,
+                                               FnIndex, "fn.addr");
+  Builder.CreateStore(NewF, G);
+  NewF->setCallingConv(CallingConv::Fast);
 
   return NewF;
 }
@@ -156,27 +162,31 @@ static Function *createClone(Function &F, Twine Suffix, CoroutineShape &Shape,
 static void SimplifyCFG(Function& F) {
   llvm::legacy::FunctionPassManager FPM(F.getParent());
 
+  FPM.add(createSCCPPass());
   FPM.add(createCFGSimplificationPass());
   //FPM.add(createSROAPass());
-  FPM.add(createEarlyCSEPass());
-  FPM.add(createInstructionCombiningPass());
-  FPM.add(createCFGSimplificationPass());
+  //FPM.add(createEarlyCSEPass());
+  //FPM.add(createInstructionCombiningPass());
+  //FPM.add(createCFGSimplificationPass());
 
   FPM.doInitialization();
   FPM.run(F);
   FPM.doFinalization();
 }
 
-static void splitCoroutine(Function &F, CoroBeginInst &CB) {
+static void splitCoroutine(Function &F, CallGraph &CG, CallGraphSCC &SCC) {
   CoroutineShape Shape(F);
   buildCoroutineFrame(F, Shape);
   auto ResumeEntry = createResumeEntryBlock(F, Shape);
   auto ResumeClone = createClone(F, ".Resume", Shape, ResumeEntry, 0);
   auto DestroyClone = createClone(F, ".Destroy", Shape, ResumeEntry, 1);
 
+  //  replaceWith(Shape.CoroSuspend, Builder.getInt8(-1));
+
   SimplifyCFG(F);
   SimplifyCFG(*ResumeClone);
   SimplifyCFG(*DestroyClone);
+  CoroCommon::updateCallGraph(F, { ResumeClone, DestroyClone }, CG, SCC);
 }
 
 static bool handleCoroutine(Function& F, CallGraph &CG, CallGraphSCC &SCC) {
@@ -192,7 +202,7 @@ static bool handleCoroutine(Function& F, CallGraph &CG, CallGraphSCC &SCC) {
         return true; // restart needed
       }
 
-      splitCoroutine(F, *CB);
+      splitCoroutine(F, CG, SCC);
       F.removeFnAttr(Attribute::Coroutine); // now coroutine is a normal func
       return false; // restart not needed
     }

@@ -80,40 +80,6 @@ static std::pair<Instruction*,Instruction*> getRetCode(CoroutineShape& S) {
   return {&RetStartBB->front(), RetEndBB->getTerminator()};
 }
 
-static void UpdateCGN(CallGraph &CG, CallGraphNode *Node) {
-  Function *F = Node->getFunction();
-
-  // Look for calls by this function.
-  for (Instruction &I : instructions(F))
-    if (CallSite CS = CallSite(cast<Value>(&I))) {
-      const Function *Callee = CS.getCalledFunction();
-      if (!Callee || !Intrinsic::isLeaf(Callee->getIntrinsicID()))
-        // Indirect calls of intrinsics are not allowed so no need to check.
-        // We can be more precise here by using TargetArg returned by
-        // Intrinsic::isLeaf.
-        Node->addCalledFunction(CS, CG.getCallsExternalNode());
-      else if (!Callee->isIntrinsic())
-        Node->addCalledFunction(CS, CG.getOrInsertFunction(Callee));
-    }
-}
-
-static void updateCallGraph(Function &Caller, ArrayRef<Function *> Funcs,
-                            CallGraph &CG, CallGraphSCC &SCC) {
-  auto CallerNode = CG[&Caller];
-  CallerNode->removeAllCalledFunctions();
-  UpdateCGN(CG, CallerNode);
-
-  SmallVector<CallGraphNode*, 8> Nodes(SCC.begin(), SCC.end());
- 
-  for (Function* F : Funcs) {
-    CallGraphNode* Callee = CG.getOrInsertFunction(F);
-    Nodes.push_back(Callee);
-    UpdateCGN(CG, Callee);
-  }
-
-  SCC.initialize(&*Nodes.begin(), &*Nodes.end());
-}
-
 void llvm::outlineCoroutineParts(Function &F, CallGraph &CG,
                                  CallGraphSCC &SCC) {
   CoroutineShape S(F);

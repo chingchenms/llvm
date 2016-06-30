@@ -15,6 +15,8 @@
 
 #include "CoroutineCommon.h"
 #include "llvm/Transforms/Utils/CodeExtractor.h"
+#include "llvm/Analysis/CallGraph.h"
+#include "llvm/Analysis/CallGraphSCCPass.h"
 #include "llvm/Transforms/IPO/PassManagerBuilder.h"
 #include "llvm/IR/LegacyPassManager.h"
 #include "llvm/Transforms/Coroutines.h"
@@ -54,6 +56,41 @@ BasicBlock *CoroCommon::splitBlockIfNotFirst(Instruction *I,
   }
   return BB->splitBasicBlock(I, Name);
 }
+
+static void UpdateCGN(CallGraph &CG, CallGraphNode *Node) {
+  Function *F = Node->getFunction();
+
+  // Look for calls by this function.
+  for (Instruction &I : instructions(F))
+    if (CallSite CS = CallSite(cast<Value>(&I))) {
+      const Function *Callee = CS.getCalledFunction();
+      if (!Callee || !Intrinsic::isLeaf(Callee->getIntrinsicID()))
+        // Indirect calls of intrinsics are not allowed so no need to check.
+        // We can be more precise here by using TargetArg returned by
+        // Intrinsic::isLeaf.
+        Node->addCalledFunction(CS, CG.getCallsExternalNode());
+      else if (!Callee->isIntrinsic())
+        Node->addCalledFunction(CS, CG.getOrInsertFunction(Callee));
+    }
+}
+
+void CoroCommon::updateCallGraph(Function &Caller, ArrayRef<Function *> Funcs,
+  CallGraph &CG, CallGraphSCC &SCC) {
+  auto CallerNode = CG[&Caller];
+  CallerNode->removeAllCalledFunctions();
+  UpdateCGN(CG, CallerNode);
+
+  SmallVector<CallGraphNode*, 8> Nodes(SCC.begin(), SCC.end());
+
+  for (Function* F : Funcs) {
+    CallGraphNode* Callee = CG.getOrInsertFunction(F);
+    Nodes.push_back(Callee);
+    UpdateCGN(CG, Callee);
+  }
+
+  SCC.initialize(&*Nodes.begin(), &*Nodes.end());
+}
+
 
 void CoroCommon::constantFoldUsers(Constant* Value) {
   SmallPtrSet<Instruction*, 16> WorkList;

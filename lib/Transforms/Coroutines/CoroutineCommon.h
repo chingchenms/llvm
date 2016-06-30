@@ -20,6 +20,7 @@
 #include <llvm/Transforms/Coroutines.h>
 #include <llvm/ADT/SetVector.h>
 #include <llvm/ADT/TinyPtrVector.h>
+#include <llvm/ADT/ArrayRef.h>
 #include <llvm/PassRegistry.h>
 
 namespace llvm {
@@ -27,12 +28,16 @@ namespace llvm {
 class Function;
 class BasicBlock;
 class Constant;
+class CallGraph;
+class CallGraphSCC;
 
 namespace CoroCommon {
   void removeLifetimeIntrinsics(Function &F);
   void constantFoldUsers(Constant* Value);
   BasicBlock *splitBlockIfNotFirst(Instruction *I, const Twine &Name = "");
-};
+  void updateCallGraph(Function &Caller, ArrayRef<Function *> Funcs,
+    CallGraph &CG, CallGraphSCC &SCC);
+}
 
 /// Holds all structural Coroutine Intrinsics for a particular function.
 struct LLVM_LIBRARY_VISIBILITY CoroutineShape {
@@ -49,7 +54,7 @@ struct LLVM_LIBRARY_VISIBILITY CoroutineShape {
   TinyPtrVector<ReturnInst*> Return;
 
   StructType* FrameTy;
-  Value* FramePtr;
+  Instruction* FramePtr;
 
   template <class F> void reflect(F&& f);
 

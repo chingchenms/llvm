@@ -87,89 +87,36 @@ CoroSplit:
 
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Args to spill:
-Values to spill:
-  %call8.loc = alloca i8, align 1 -- NO -- need better extract
-  %call6 = call i32 @compute() #4 -- OK
-  %2 = bitcast i32* %temp to i8* -- need to look to the source for rematerialize
-  %3 = call token @llvm.coro.save() #4-- absolutely not
+~~~~~~~~~~~~~~~~ FE Simple ~~~~~~~~~~~~~~~~
+entry:
+  %0 = coro_alloc
+  %1 = coro_begin(%0)
 
-; Function Attrs: coroutine nounwind
-define i8* @f() #0 {
-  %call8.loc = alloca i8, align 1
-  %call15.loc = alloca i8*, align 4
-  %call3.loc = alloca i8*, align 4
-  %cond.loc = alloca i8*, align 4
-  %call.loc = alloca i8*, align 4
-  %me = alloca %struct.DestroyMe, align 1
-  %temp = alloca i32, align 4
-  %call.i = call i8* @llvm.coro.alloc() #4
-  %tobool.i = icmp eq i8* %call.i, null
-  br i1 %tobool.i, label %cond.false.i, label %f_.AllocPart.exit
+  %tok = coro_save(%1)
+  %ndx = coro_suspend(%tok)
+  switch %ndx, label %cont [i32 1 %cleanup]
+cont:
 
-cond.false.i:                                     ; preds = %0
-  %call1.i = call i32 @llvm_coro_size() #4
-  %call2.i = call i8* @AllocCode(i32 %call1.i) #4
-  br label %f_.AllocPart.exit
+cleanup:
+  %2 = coro_free(%1)
+  %3 = coro_end(%2)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-f_.AllocPart.exit:                                ; preds = %0, %cond.false.i
-  %cond.i = phi i8* [ %call2.i, %cond.false.i ], [ %call.i, %0 ]
-  %call3.i = call i8* @PrepCode(i8* %cond.i) #4
-  store i8* %call.i, i8** %call.loc, align 4
-  store i8* %cond.i, i8** %cond.loc, align 4
-  store i8* %call3.i, i8** %call3.loc, align 4
-  %call.reload = load i8*, i8** %call.loc, align 4
-  %cond.reload = load i8*, i8** %cond.loc, align 4
-  %call3.reload = load i8*, i8** %call3.loc, align 4
-  %call4 = call i8* @llvm.coro.start(i8* %cond.reload, i8* %call.reload, i32 0, i8* null, i8* bitcast ({ void (i8**, i8**, i8**)*, void ()*, void (i8*, %struct.DestroyMe*, i8**)*, void (i8*, i8*)* }* @f.outlined to i8*))
-  %tobool5 = icmp eq i8* %call4, null
-  br i1 %tobool5, label %5, label %1
+With suspend paths spelled out
 
-; <label>:1:                                      ; preds = %f_.AllocPart.exit
-  call void @Whatever(i32 1) #4
-  %call6 = call i32 @compute() #4
-  %2 = bitcast i32* %temp to i8*
-  br label %CoroSave
+~~~~~~~~~~~~~~~~ FE Explicit ~~~~~~~~~~~~~~~~
+entry:
+  %0 = coro_alloc
+  %1 = coro_begin(%0)
 
-CoroSave:                                         ; preds = %1
-  %3 = call token @llvm.coro.save() #4
-  br label %AfterCoroSave
+  %tok = coro_save(%1)
+  %ndx = coro_suspend(%tok)
+  switch %ndx, label %retBB [i32 0 %cont, i32 1 %cleanup]
+cont:
 
-AfterCoroSave:                                    ; preds = %CoroSave
-  call void @Subscribe(i8* null, i8* %2) #4
-  %call8.i = call i8 @llvm.coro.suspend(token %3, i1 false) #4
-  store i8 %call8.i, i8* %call8.loc, align 1
-  %call8.reload = load i8, i8* %call8.loc, align 1
-  %not.cond1 = icmp eq i8 %call8.reload, 0
-  br i1 %not.cond1, label %4, label %cleanup.cont
-
-cleanup.cont:                                     ; preds = %AfterCoroSave
-  call void @handleValue(i32 %call6) #4
-  call void @Whatever(i32 2) #4
-  br label %4
-
-; <label>:4:                                      ; preds = %AfterCoroSave, %cleanup.cont
-  %call10.i = call i8* @llvm.coro.free(i8* null) #4
-  %tobool11.i = icmp eq i8* %call10.i, null
-  br i1 %tobool11.i, label %CoroEnd, label %if.then12.i
-
-if.then12.i:                                      ; preds = %4
-  %call13.i = call i32 @llvm_coro_size() #4
-  call void @FreeCode(i8* nonnull %call10.i, i32 %call13.i) #4
-  br label %CoroEnd
-
-CoroEnd:                                          ; preds = %4, %if.then12.i
-  call void @llvm.coro.end(i8* null, i1 true)
-  br label %AfterCoroEnd
-
-AfterCoroEnd:                                     ; preds = %CoroEnd
-  br label %5
-
-; <label>:5:                                      ; preds = %f_.AllocPart.exit, %AfterCoroEnd
-  %call15.i = call i8* @RetCode(i8* %call3.reload) #4
-  call x86_thiscallcc void @"\01??1DestroyMe@@QAE@XZ"(%struct.DestroyMe* nonnull %me) #4
-  store i8* %call15.i, i8** %call15.loc, align 4
-  %call15.reload = load i8*, i8** %call15.loc, align 4
-  ret i8* %call15.reload
-}
-
+cleanup:
+  %2 = coro_free(%1)
+  %3 = coro_end(%2)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+returnBB:
+  coro_return(%1)
