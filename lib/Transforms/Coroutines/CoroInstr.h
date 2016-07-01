@@ -30,6 +30,25 @@
 namespace llvm {
 
   /// This represents the llvm.coro.free instruction.
+  class LLVM_LIBRARY_VISIBILITY CoroSubFnInst : public IntrinsicInst {
+    enum { kFrame, kIndex };
+  public:
+    Value *getFrame() const { return getArgOperand(kFrame); }
+    int getIndex() const {
+      auto C = cast<ConstantInt>(getArgOperand(kIndex)); 
+      return C->getValue().getSExtValue();
+    }
+
+    // Methods to support type inquiry through isa, cast, and dyn_cast:
+    static inline bool classof(const IntrinsicInst *I) {
+      return I->getIntrinsicID() == Intrinsic::coro_subfn_addr;
+    }
+    static inline bool classof(const Value *V) {
+      return isa<IntrinsicInst>(V) && classof(cast<IntrinsicInst>(V));
+    }
+  };
+
+  /// This represents the llvm.coro.free instruction.
   class LLVM_LIBRARY_VISIBILITY CoroSizeInst : public IntrinsicInst {
   public:
     // Methods to support type inquiry through isa, cast, and dyn_cast:

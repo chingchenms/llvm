@@ -211,6 +211,57 @@ static bool replaceEmulatedIntrinsicsWithRealOnes(Module& M) {
   return changed;
 }
 
+// Keeps data common to all lowering functions.
+struct Lowerer {
+  Module& M;
+  LLVMContext& C;
+  IRBuilder<> Builder;
+  Type* Int8Ty;
+  Type* Int8PtrTy;
+
+  PointerType* AnyResumeFnPtrTy;
+
+  Lowerer(Function &F)
+      : M(*F.getParent()), C(F.getContext()), Builder(C),
+        Int8Ty(Type::getInt8Ty(C)), Int8PtrTy(Int8Ty->getPointerTo()),
+        AnyResumeFnPtrTy(FunctionType::get(Type::getVoidTy(C), Int8PtrTy,
+                                           /*isVarArg=*/false)
+                             ->getPointerTo()) {}
+
+  void replaceCoroPromise(IntrinsicInst *intrin, bool from = false);
+
+};
+
+void Lowerer::replaceCoroPromise(IntrinsicInst *intrin, bool from) {
+  Value *Operand = intrin->getArgOperand(0);
+  auto PromisePtr = cast<PointerType>(
+    from ? Operand->getType() : intrin->getFunctionType()->getReturnType());
+  auto PromiseType = PromisePtr->getElementType();
+
+  // FIXME: this should be queried from FrameBuilding layer, not here
+  auto SampleStruct = StructType::get(C, 
+      {AnyResumeFnPtrTy, AnyResumeFnPtrTy, Int8Ty, PromiseType});
+  const DataLayout &DL = M.getDataLayout();
+  const int64_t Offset = DL.getStructLayout(SampleStruct)->getElementOffset(3);
+
+  Value* Replacement = nullptr;
+
+  Builder.SetInsertPoint(intrin);
+  if (from) {
+    auto BCI = Builder.CreateBitCast(Operand, Int8PtrTy);
+    auto Gep = Builder.CreateConstInBoundsGEP1_32(Int8Ty, BCI, -Offset);
+    Replacement = Gep;
+  }
+  else {
+    auto Gep = Builder.CreateConstInBoundsGEP1_32(Int8Ty, Operand, Offset);
+    auto BCI = Builder.CreateBitCast(Gep, PromisePtr);
+    Replacement = BCI;
+  }
+
+  intrin->replaceAllUsesWith(Replacement);
+  intrin->eraseFromParent();
+}
+
 void lowerResumeOrDestroy(IntrinsicInst* II, unsigned Index) {
   Module *M = II->getModule();
   auto Fn = Intrinsic::getDeclaration(M, Intrinsic::coro_subfn_addr);
@@ -232,6 +283,7 @@ void lowerResumeOrDestroy(IntrinsicInst* II, unsigned Index) {
 
 // TODO: handle invoke coro.resume and coro.destroy
 bool lowerEarlyIntrinsics(Function& F) {
+  Lowerer L(F);
   bool changed = false;
   for (auto IB = inst_begin(F), IE = inst_end(F); IB != IE;)
     if (auto II = dyn_cast<IntrinsicInst>(&*IB++)) {
@@ -243,6 +295,12 @@ bool lowerEarlyIntrinsics(Function& F) {
         break;
       case Intrinsic::coro_destroy:
         lowerResumeOrDestroy(II, 1);
+        break;
+      case Intrinsic::coro_promise:
+        L.replaceCoroPromise(II);
+        break;
+      case Intrinsic::coro_from_promise:
+        L.replaceCoroPromise(II, /*from=*/true);
         break;
       }
       changed = true;

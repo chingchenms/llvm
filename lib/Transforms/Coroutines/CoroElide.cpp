@@ -15,6 +15,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "CoroutineCommon.h"
+#include "CoroInstr.h"
 #include "llvm/Transforms/Coroutines.h"
 
 #include "llvm/ADT/SmallPtrSet.h"
@@ -51,9 +52,8 @@ INITIALIZE_PASS(
 
 Pass *llvm::createCoroElidePass() { return new CoroElide(); }
 
-#if 0
 static void replaceWithConstant(Constant *Value,
-                         SmallVectorImpl<IntrinsicInst*> &Users) {
+                                SmallVectorImpl<CoroSubFnInst *> &Users) {
   if (Users.empty())
     return;
 
@@ -65,7 +65,7 @@ static void replaceWithConstant(Constant *Value,
     Value = ConstantExpr::getBitCast(Value, IntrTy);
   }
 
-  for (IntrinsicInst *I : Users) {
+  for (CoroSubFnInst *I : Users) {
     I->replaceAllUsesWith(Value);
     I->eraseFromParent();
   }
@@ -74,47 +74,43 @@ static void replaceWithConstant(Constant *Value,
   CoroCommon::constantFoldUsers(Value);
 }
 
-static bool replaceIndirectCalls(CoroInitInst *CoroInit) {
-  SmallVector<IntrinsicInst*, 8> ResumeAddr;
-  SmallVector<IntrinsicInst*, 8> DestroyAddr;
+static bool replaceIndirectCalls(CoroBeginInst *CoroBegin) {
+  SmallVector<CoroSubFnInst*, 8> ResumeAddr;
+  SmallVector<CoroSubFnInst*, 8> DestroyAddr;
 
-  for (auto U : CoroInit->users()) {
-    if (auto II = dyn_cast<IntrinsicInst>(U))
-      switch (II->getIntrinsicID()) {
-      default:
-        continue;
-      case Intrinsic::coro_resume_addr:
+  for (auto U : CoroBegin->users())
+    if (auto II = dyn_cast<CoroSubFnInst>(U))
+      if (II->getIndex() == 0)
         ResumeAddr.push_back(II);
-        break;
-      case Intrinsic::coro_destroy_addr:
+      else
         DestroyAddr.push_back(II);
-        break;
-      }
-  }
 
-  CoroInfo Info = CoroInit->meta().getCoroInfo();
+  if (ResumeAddr.empty() && DestroyAddr.empty())
+    return false;
 
-  replaceWithConstant(Info.Resume, ResumeAddr);
-  replaceWithConstant(Info.Destroy, DestroyAddr);
+  ConstantArray* Resumers = CoroBegin->getInfo().Resumers;
 
-  return !ResumeAddr.empty() || !DestroyAddr.empty();
+  auto ResumeAddrConstant = ConstantFolder().CreateExtractValue(Resumers, 0);
+  auto DestroyAddrConstant = ConstantFolder().CreateExtractValue(Resumers, 1);
+
+  replaceWithConstant(ResumeAddrConstant, ResumeAddr);
+  replaceWithConstant(DestroyAddrConstant, DestroyAddr);
+
+  return true;
 }
 
 bool CoroElide::runOnFunction(Function &F) {
-  DEBUG(dbgs() << "CoroElide is looking at " << F.getName() << "\n");
   bool changed = false;
 
   // Collect all coro inits
-  SmallVector<CoroInitInst*, 4> CoroInits;
+  SmallVector<CoroBeginInst*, 4> CoroBegins;
   for (auto& I : instructions(F))
-    if (auto CI = dyn_cast<CoroInitInst>(&I))
-        CoroInits.push_back(CI);
+    if (auto CB = dyn_cast<CoroBeginInst>(&I))
+      if (CB->getInfo().postSplit())
+        CoroBegins.push_back(CB);
 
-  for (auto CI : CoroInits)
-    changed |= replaceIndirectCalls(CI);
+  for (auto CB : CoroBegins)
+    changed |= replaceIndirectCalls(CB);
 
   return changed;
 }
-#endif
-
-bool CoroElide::runOnFunction(Function &F) { return false; }
