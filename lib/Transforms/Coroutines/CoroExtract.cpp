@@ -155,10 +155,21 @@ Function *llvm::CoroPartExtractor::createFunction(BasicBlock *Start,
   BasicBlock *End, Twine Suffix) {
 
   auto PreStart = Start->getSinglePredecessor();
-  auto PreEnd = End->getSinglePredecessor();
 
-  assert(PreStart != nullptr && PreEnd != nullptr &&
-         "region start and end should have single predecessors");
+  // TODO: split here, no need to force that on the caller
+  assert(PreStart != nullptr &&
+         "region start should have single predecessors");
+
+  // If PreStart has multiple successors, we won't be able to insert
+  // a call instruction to ourselves. Instead split this block at the beginning
+  // and make it PreStart
+  if (PreStart->getSingleSuccessor() == 0) {
+    PreStart = Start;
+    Start = Start->splitBasicBlock(&Start->front());
+  }
+  auto PreEnd = End->getSinglePredecessor();
+  assert(PreEnd != nullptr &&
+    "region end should have a single predecessors");
 
   Function &F = *Start->getParent();
   Module& M = *F.getParent();
