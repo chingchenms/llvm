@@ -125,8 +125,13 @@ void CoroCommon::constantFoldUsers(Constant* Value) {
   } while (!WorkList.empty());
 }
 
+// TODO: make function object by hand so that we don't have to special case
+// scalars here and in the dump() function
 void llvm::CoroutineShape::clear() {
   reflect([](auto &Arr, auto*) { Arr.clear(); });
+  PromiseAlloca = nullptr;
+  FrameTy = nullptr;
+  FramePtr = nullptr;
 }
 
 void llvm::CoroutineShape::dump() {

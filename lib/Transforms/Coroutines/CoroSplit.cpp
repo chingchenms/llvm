@@ -148,15 +148,12 @@ static Function *createClone(Function &F, Twine Suffix, CoroutineShape &Shape,
   Entry->moveBefore(&NewF->getEntryBlock());
 
   IRBuilder<> Builder(&Entry->front());
+
+  // remap vFrame
   auto NewVFrame = Builder.CreateBitCast(
       NewFramePtr, Type::getInt8PtrTy(Builder.getContext()), "vFrame");
   Value* OldVFrame = cast<Value>(VMap[Shape.CoroBegin.back()]);
   OldVFrame->replaceAllUsesWith(NewVFrame);
-
-
-  // remap vFrame
-
-
 
   auto NewValue = Builder.getInt8(FnIndex);
   replaceWith(Shape.CoroSuspend, NewValue, &VMap);
@@ -173,14 +170,28 @@ static Function *createClone(Function &F, Twine Suffix, CoroutineShape &Shape,
   return NewF;
 }
 
-static void SimplifyCFG(Function& F) {
+static void preSplitCleanup(Function& F) {
+  llvm::legacy::FunctionPassManager FPM(F.getParent());
+
+  FPM.add(createSCCPPass());
+  FPM.add(createCFGSimplificationPass());
+  FPM.add(createSROAPass());
+  FPM.add(createEarlyCSEPass());
+
+  FPM.doInitialization();
+  FPM.run(F);
+  FPM.doFinalization();
+}
+
+
+static void postSplitCleanup(Function& F) {
   llvm::legacy::FunctionPassManager FPM(F.getParent());
 
   FPM.add(createSCCPPass());
   FPM.add(createCFGSimplificationPass());
   //FPM.add(createSROAPass());
   //FPM.add(createEarlyCSEPass());
-  //FPM.add(createInstructionCombiningPass());
+//  FPM.add(createInstructionCombiningPass());
   //FPM.add(createCFGSimplificationPass());
 
   FPM.doInitialization();
@@ -238,6 +249,8 @@ static void updateCoroInfo(Function& F, CoroutineShape &Shape,
 }
 
 static void splitCoroutine(Function &F, CallGraph &CG, CallGraphSCC &SCC) {
+  preSplitCleanup(F);
+
   CoroutineShape Shape(F);
 
   buildCoroutineFrame(F, Shape);
@@ -250,9 +263,9 @@ static void splitCoroutine(Function &F, CallGraph &CG, CallGraphSCC &SCC) {
 
   //  replaceWith(Shape.CoroSuspend, Builder.getInt8(-1));
 
-  SimplifyCFG(F);
-  SimplifyCFG(*ResumeClone);
-  SimplifyCFG(*DestroyClone);
+  postSplitCleanup(F);
+  postSplitCleanup(*ResumeClone);
+  postSplitCleanup(*DestroyClone);
 
   // TODO: create Cleanup
 

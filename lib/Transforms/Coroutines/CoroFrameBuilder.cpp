@@ -246,7 +246,7 @@ static Instruction* insertSpills(SpillInfo &Spills,
   Value* CurrentValue = nullptr;
   BasicBlock* CurrentBlock = nullptr;
   Value* CurrentReload = nullptr;
-  unsigned Index = 2;
+  unsigned Index = Shape.PromiseAlloca ? 3 : 2;
 
   // we need to keep track of any allocas that need "spilling"
   // since they will live in the coroutine frame now, all access to them
@@ -255,14 +255,16 @@ static Instruction* insertSpills(SpillInfo &Spills,
   // all the spills
 
   SmallVector<std::pair<AllocaInst*, unsigned>, 4> Allocas;
+  if (Shape.PromiseAlloca)
+    Allocas.emplace_back(Shape.PromiseAlloca, 3);
 
   for (auto const &E : Spills) {
     // if we have not seen the value, generate a spill
     if (CurrentValue != E.def()) {
-      ++Index;
       CurrentValue = E.def();
       CurrentBlock = nullptr;
       CurrentReload = nullptr;
+      ++Index;
 
       if (auto AI = dyn_cast<AllocaInst>(CurrentValue)) {
         Allocas.emplace_back(AI, Index);
@@ -281,8 +283,9 @@ static Instruction* insertSpills(SpillInfo &Spills,
     if (CurrentBlock != E.userBlock()) {
       CurrentBlock = E.userBlock();
       Builder.SetInsertPoint(CurrentBlock->getFirstNonPHIOrDbgOrLifetime());
-      auto G = Builder.CreateConstInBoundsGEP2_32(FrameTy, FramePtr, 0, Index,
-        CurrentValue->getName() + Twine(".reload.addr"));
+      auto G = Builder.CreateConstInBoundsGEP2_32(
+          FrameTy, FramePtr, 0, Index,
+          CurrentValue->getName() + Twine(".reload.addr"));
       CurrentReload = isa<AllocaInst>(CurrentValue)
                           ? G
                           : Builder.CreateLoad(G, CurrentValue->getName() +
@@ -305,7 +308,8 @@ static Instruction* insertSpills(SpillInfo &Spills,
   return FramePtr;
 }
 
-static StructType* buildFrameType(Function &F, SpillInfo const& Spills) {
+static StructType *buildFrameType(Function &F, CoroutineShape &Shape,
+                                  SpillInfo const &Spills) {
   LLVMContext& C = F.getContext();
   SmallString<32> Name(F.getName()); Name.append(".Frame");
   StructType* FrameTy = StructType::create(C, Name);
@@ -315,12 +319,18 @@ static StructType* buildFrameType(Function &F, SpillInfo const& Spills) {
   auto FnPtrTy = FnTy->getPointerTo();
 
   SmallVector<Type*, 8> Types{ FnPtrTy, FnPtrTy, Type::getInt8Ty(C) };
+  if (Shape.PromiseAlloca)
+    Types.push_back(Shape.PromiseAlloca->getType()->getElementType());
+
   Value* CurrentDef = nullptr;
 
   for (auto const& S: Spills) {
     if (CurrentDef == S.def())
       continue;
+
     CurrentDef = S.def();
+    if (CurrentDef == Shape.PromiseAlloca)
+      continue;
 
     Type* Ty = nullptr;
     if (auto AI = dyn_cast<AllocaInst>(CurrentDef))
@@ -337,6 +347,11 @@ static StructType* buildFrameType(Function &F, SpillInfo const& Spills) {
 
 void llvm::buildCoroutineFrame(Function &F, CoroutineShape& Shape) {
   DEBUG(dbgs() << "entering buildCoroutineFrame\n");
+
+  Shape.PromiseAlloca = Shape.CoroBegin.back()->getPromise();
+  if (Shape.PromiseAlloca) {
+    Shape.CoroBegin.back()->clearPromise();
+  }
 
   // 1 split all of the blocks on CoroSave
 
@@ -361,6 +376,8 @@ void llvm::buildCoroutineFrame(Function &F, CoroutineShape& Shape) {
     // pairs and should not be part of the Coroutine Frame
     if (isa<CoroSaveInst>(&I))
       continue;
+    if (Shape.PromiseAlloca == &I)
+      continue;
 
     for (User* U : I.users())
       if (Checker.definitionAcrossSuspend(I, U))
@@ -369,6 +386,6 @@ void llvm::buildCoroutineFrame(Function &F, CoroutineShape& Shape) {
 
   std::sort(Spills.begin(), Spills.end());
 
-  Shape.FrameTy = buildFrameType(F, Spills);  
+  Shape.FrameTy = buildFrameType(F, Shape, Spills);  
   Shape.FramePtr = insertSpills(Spills, Shape);
 }

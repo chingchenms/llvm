@@ -62,6 +62,8 @@ static std::pair<Instruction*,Instruction*> getRetCode(CoroutineShape& S) {
   auto NextNode = S.CoroReturn.back()->getNextNode();
   BasicBlock* EndBB = nullptr;
   if(NextNode->isTerminator()) {
+    if (isa<ReturnInst>(NextNode))
+      return{NextNode, NextNode};
     auto NextBB = NextNode->getParent()->getSingleSuccessor();
     assert(NextBB);
     NextNode = NextBB->getFirstNonPHI();
@@ -99,8 +101,8 @@ void llvm::outlineCoroutineParts(Function &F, CallGraph &CG,
   // Outline the parts and create a metadata tuple, so that CoroSplit
   // pass can quickly figure out what they are.
 
-  SmallVector<Function *, 8> Funcs{
-    Outline(".AllocPart", S.CoroAlloc.back(), S.CoroBegin.back()) };
+  SmallVector<Function *, 8> Funcs{Outline(".AllocPart", S.CoroAlloc.back(),
+                                           S.CoroBegin.back()->getNextNode())};
 
   for (CoroEndInst *CE : S.CoroEnd) {
     //auto RC = getFreePart(S, CE);
@@ -111,7 +113,8 @@ void llvm::outlineCoroutineParts(Function &F, CallGraph &CG,
 
   {
     auto RC = getRetCode(S);
-    Funcs.push_back(Outline(".RetPart", RC.first, RC.second));
+    if (RC.first != RC.second)
+      Funcs.push_back(Outline(".RetPart", RC.first, RC.second));
   }
 
   // Outline suspend points.

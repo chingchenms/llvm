@@ -162,6 +162,17 @@ namespace llvm {
 
     Value *getMem() const { return getArgOperand(kMem); }
 
+    AllocaInst *getPromise() const { 
+      Value* Arg = getArgOperand(kPromise);
+      return isa<ConstantPointerNull>(Arg)
+                 ? nullptr
+                 : cast<AllocaInst>(Arg->stripPointerCasts());
+    }
+    void clearPromise() {
+      setArgOperand(kPromise, 
+        ConstantPointerNull::get(Type::getInt8PtrTy(getContext())));
+    }
+
     ConstantInt *getAlignment() const {
       return cast<ConstantInt>(getArgOperand(kAlign));
     }
