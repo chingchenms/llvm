@@ -211,6 +211,45 @@ static bool replaceEmulatedIntrinsicsWithRealOnes(Module& M) {
   return changed;
 }
 
+void lowerResumeOrDestroy(IntrinsicInst* II, unsigned Index) {
+  Module *M = II->getModule();
+  auto Fn = Intrinsic::getDeclaration(M, Intrinsic::coro_subfn_addr);
+  LLVMContext& C = II->getContext();
+  auto IndexVal = ConstantInt::get(Type::getInt8Ty(C), Index);
+
+  SmallVector<Value*, 2> Args{ II->getArgOperand(0), IndexVal };
+  auto Call = CallInst::Create(Fn, Args, "", II);
+
+  auto FTy = FunctionType::get(Type::getVoidTy(C), Type::getInt8PtrTy(C),
+                               /*isVarArg=*/false);
+  auto Bitcast = new BitCastInst(Call, FTy->getPointerTo(), "", II);
+
+  auto Indirect = CallInst::Create(Bitcast, II->getArgOperand(0), "", II);
+  Indirect->setCallingConv(CallingConv::Fast);
+
+  II->eraseFromParent();
+}
+
+// TODO: handle invoke coro.resume and coro.destroy
+bool lowerEarlyIntrinsics(Function& F) {
+  bool changed = false;
+  for (auto IB = inst_begin(F), IE = inst_end(F); IB != IE;)
+    if (auto II = dyn_cast<IntrinsicInst>(&*IB++)) {
+      switch (II->getIntrinsicID()) {
+      default:
+        continue;
+      case Intrinsic::coro_resume:
+        lowerResumeOrDestroy(II, 0);
+        break;
+      case Intrinsic::coro_destroy:
+        lowerResumeOrDestroy(II, 1);
+        break;
+      }
+      changed = true;
+    }
+  return changed;
+}
+
 //===----------------------------------------------------------------------===//
 //                              Top Level Driver
 //===----------------------------------------------------------------------===//
@@ -225,16 +264,13 @@ struct CoroEarly : public FunctionPass {
   }
 
   bool runOnFunction(Function &F) override {
+    bool changed = lowerEarlyIntrinsics(F);
     if (!F.hasFnAttribute(Attribute::Coroutine))
-      return false;
+      return changed;
 
     Shape.buildFrom(F);
 
-    //Shape.CoroInit.back()->meta().update({
-    //  {Phase::NotReadyForSplit, F.getContext()},
-    //  {CoroMeta::Field::Func, &F}
-    //});
-    return true;
+    return changed;
   }
 
   CoroutineShape Shape;
