@@ -56,6 +56,7 @@ struct LLVM_LIBRARY_VISIBILITY CoroutineShape {
   StructType* FrameTy;
   Instruction* FramePtr;
   AllocaInst* PromiseAlloca;
+  BasicBlock* AllocaSpillBlock;
 
   template <class F> void reflect(F&& f);
 

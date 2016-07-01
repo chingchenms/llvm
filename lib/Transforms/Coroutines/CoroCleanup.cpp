@@ -51,7 +51,8 @@ static bool lowerRemainingCoroIntrinsics(Function& F) {
     else
       continue;
 
-    if (ReplacementValue)
+    // TODO: Run ConstantFolding after replacement
+    if (ReplacementValue) 
       II->replaceAllUsesWith(ReplacementValue);
     II->eraseFromParent();
     changed = true;

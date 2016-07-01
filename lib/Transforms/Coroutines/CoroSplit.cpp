@@ -145,7 +145,11 @@ static Function *createClone(Function &F, Twine Suffix, CoroutineShape &Shape,
   OldFramePtr->replaceAllUsesWith(NewFramePtr);
 
   auto Entry = cast<BasicBlock>(VMap[ResumeEntry]);
-  Entry->moveBefore(&NewF->getEntryBlock());
+  auto SpillBB = cast<BasicBlock>(VMap[Shape.AllocaSpillBlock]);
+  SpillBB->moveBefore(&NewF->getEntryBlock());
+  SpillBB->getTerminator()->eraseFromParent();
+  BranchInst::Create(Entry, SpillBB);
+  Entry = SpillBB;
 
   IRBuilder<> Builder(&Entry->front());
 

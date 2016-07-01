@@ -235,7 +235,7 @@ struct Spill : std::pair<Value*, Instruction*> {
 using SpillInfo = SmallVector<Spill, 8>;
 
 static Instruction* insertSpills(SpillInfo &Spills,
-                         CoroutineShape const &Shape) {
+                         CoroutineShape &Shape) {
   auto CB = Shape.CoroBegin.back();
   IRBuilder<> Builder(CB->getNextNode());
   PointerType* FramePtrTy = Shape.FrameTy->getPointerTo();
@@ -296,8 +296,13 @@ static Instruction* insertSpills(SpillInfo &Spills,
       if (U.get() == CurrentValue)
         U.set(CurrentReload);
   }
+  auto FramePtrBB = FramePtr->getParent();
+  Shape.AllocaSpillBlock =
+      FramePtrBB->splitBasicBlock(FramePtr->getNextNode(), "AllocaSpillBB");
+  Shape.AllocaSpillBlock->splitBasicBlock(&Shape.AllocaSpillBlock->front(),
+                                          "PostSpill");
 
-  Builder.SetInsertPoint(FramePtr->getNextNode());
+  Builder.SetInsertPoint(&Shape.AllocaSpillBlock->front());
   // if we found any allocas, replace all of their remaining uses with Geps
   for (auto& P : Allocas) {
     auto G = Builder.CreateConstInBoundsGEP2_32(FrameTy, FramePtr, 0, P.second);

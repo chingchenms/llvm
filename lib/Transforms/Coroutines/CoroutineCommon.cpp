@@ -132,6 +132,7 @@ void llvm::CoroutineShape::clear() {
   PromiseAlloca = nullptr;
   FrameTy = nullptr;
   FramePtr = nullptr;
+  AllocaSpillBlock = nullptr;
 }
 
 void llvm::CoroutineShape::dump() {
