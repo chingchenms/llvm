@@ -230,40 +230,17 @@ static CreateCloneResult createClone(Function &F, Twine Suffix,
   return {NewF, NewVFrame};
 }
 
-static void replaceCoroFree(Value* FramePtr, Value* Replacement) {
-  SmallVector<CoroFreeInst*, 4> CoroFrees;
-  for (User* U : FramePtr->users())
-    if (auto CF = dyn_cast<CoroFreeInst>(U))
-      CoroFrees.push_back(CF);
-
-  for (CoroFreeInst* CF : CoroFrees) {
-    CF->replaceAllUsesWith(Replacement);
-    CF->eraseFromParent();
-  }
-}
-
 static Function *createCleanupClone(Function &F, Twine Suffix,
-                                    CreateCloneResult const &Resume,
                                     CreateCloneResult const &Destroy) {
-  // See if ResumeClone may free the coroutine frame, if so, heap elision
-  // is not possible, so we won't create the cleanupClone.
-
-  for (User* U : Resume.VFrame->users())
-    if (isa<CoroFreeInst>(U))
-      return nullptr;
-
   ValueToValueMapTy VMap;
   Function* CleanupClone = CloneFunction(Destroy.Fn, VMap, true);
-  Resume.Fn->getParent()->getFunctionList().push_back(CleanupClone);
+  Destroy.Fn->getParent()->getFunctionList().push_back(CleanupClone);
   CleanupClone->setName(F.getName() + Suffix);
 
-  replaceCoroFree(Destroy.VFrame, Destroy.VFrame);
+  CoroCommon::replaceCoroFree(Destroy.VFrame, Destroy.VFrame);
 
   auto CleanupVFrame = cast<Value>(VMap[Destroy.VFrame]);
-  auto NullPtr =
-      ConstantPointerNull::get(cast<PointerType>(CleanupVFrame->getType()));
-
-  replaceCoroFree(CleanupVFrame, NullPtr);
+  CoroCommon::replaceCoroFree(CleanupVFrame, nullptr);
   return CleanupClone;
 }
 
@@ -336,7 +313,7 @@ static void splitCoroutine(Function &F, CallGraph &CG, CallGraphSCC &SCC) {
   postSplitCleanup(*DestroyClone.Fn);
 
   auto CleanupClone =
-      createCleanupClone(F, ".Cleanup", ResumeClone, DestroyClone);
+      createCleanupClone(F, ".Cleanup", DestroyClone);
 
   updateCoroInfo(F, Shape, { ResumeClone.Fn, DestroyClone.Fn, CleanupClone });
 

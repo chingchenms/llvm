@@ -37,6 +37,7 @@ namespace CoroCommon {
   BasicBlock *splitBlockIfNotFirst(Instruction *I, const Twine &Name = "");
   void updateCallGraph(Function &Caller, ArrayRef<Function *> Funcs,
     CallGraph &CG, CallGraphSCC &SCC);
+  void replaceCoroFree(Value* FramePtr, Value* Replacement);
 }
 
 /// Holds all structural Coroutine Intrinsics for a particular function.

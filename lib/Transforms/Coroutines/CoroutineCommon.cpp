@@ -30,6 +30,25 @@
 using namespace llvm;
 using namespace llvm::legacy;
 
+void CoroCommon::replaceCoroFree(Value* FramePtr, Value* Replacement) {
+  SmallVector<CoroFreeInst*, 4> CoroFrees;
+  for (User* U : FramePtr->users())
+    if (auto CF = dyn_cast<CoroFreeInst>(U))
+      CoroFrees.push_back(CF);
+
+  if (CoroFrees.empty())
+    return;
+
+  if (nullptr == Replacement)
+    Replacement = ConstantPointerNull::get(
+        cast<PointerType>(CoroFrees.front()->getType()));
+
+  for (CoroFreeInst* CF : CoroFrees) {
+    CF->replaceAllUsesWith(Replacement);
+    CF->eraseFromParent();
+  }
+}
+
 void CoroCommon::removeLifetimeIntrinsics(Function &F) {
   for (auto it = inst_begin(F), end = inst_end(F); it != end;) {
     Instruction& I = *it++;

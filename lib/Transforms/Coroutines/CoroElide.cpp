@@ -74,6 +74,22 @@ static void replaceWithConstant(Constant *Value,
   CoroCommon::constantFoldUsers(Value);
 }
 
+static void elideHeapAllocations(CoroBeginInst *CoroBegin, Function* Resume) {
+  auto ArgType = Resume->getArgumentList().front().getType();
+  auto FrameTy = cast<PointerType>(ArgType)->getElementType();
+
+  auto AllocInst = CoroBegin->getAlloc();
+  IRBuilder<> Builder(AllocInst);
+  auto Frame = Builder.CreateAlloca(FrameTy);
+  auto vFrame = Builder.CreateBitCast(Frame, AllocInst->getType());
+  AllocInst->replaceAllUsesWith(vFrame);
+  AllocInst->eraseFromParent();
+
+  CoroCommon::replaceCoroFree(CoroBegin, nullptr);
+  CoroBegin->replaceAllUsesWith(vFrame);
+  CoroBegin->eraseFromParent();
+}
+
 static bool replaceIndirectCalls(CoroBeginInst *CoroBegin) {
   SmallVector<CoroSubFnInst*, 8> ResumeAddr;
   SmallVector<CoroSubFnInst*, 8> DestroyAddr;
@@ -91,10 +107,12 @@ static bool replaceIndirectCalls(CoroBeginInst *CoroBegin) {
   ConstantArray* Resumers = CoroBegin->getInfo().Resumers;
 
   auto ResumeAddrConstant = ConstantFolder().CreateExtractValue(Resumers, 0);
-  auto DestroyAddrConstant = ConstantFolder().CreateExtractValue(Resumers, 1);
+  auto CleanupAddrConstant = ConstantFolder().CreateExtractValue(Resumers, 2);
 
   replaceWithConstant(ResumeAddrConstant, ResumeAddr);
-  replaceWithConstant(DestroyAddrConstant, DestroyAddr);
+  replaceWithConstant(CleanupAddrConstant, DestroyAddr);
+  if (!DestroyAddr.empty())
+    elideHeapAllocations(CoroBegin, cast<Function>(ResumeAddrConstant));
 
   return true;
 }
