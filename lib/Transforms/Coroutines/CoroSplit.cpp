@@ -293,6 +293,19 @@ static void updateCoroInfo(Function& F, CoroutineShape &Shape,
   Shape.CoroBegin.back()->setInfo(BC);
 }
 
+static void handleNoSuspendCoroutine(CoroBeginInst *CoroBegin, Type *FrameTy) {
+  auto AllocInst = CoroBegin->getAlloc();
+  IRBuilder<> Builder(AllocInst);
+  auto Frame = Builder.CreateAlloca(FrameTy);
+  auto vFrame = Builder.CreateBitCast(Frame, AllocInst->getType());
+  AllocInst->replaceAllUsesWith(vFrame);
+  AllocInst->eraseFromParent();
+
+  CoroCommon::replaceCoroFree(CoroBegin, nullptr);
+  CoroBegin->replaceAllUsesWith(vFrame);
+  CoroBegin->eraseFromParent();
+}
+
 static void splitCoroutine(Function &F, CallGraph &CG, CallGraphSCC &SCC) {
   preSplitCleanup(F);
 
@@ -303,6 +316,15 @@ static void splitCoroutine(Function &F, CallGraph &CG, CallGraphSCC &SCC) {
   buildCoroutineFrame(F, Shape);
   replaceFrameSize(Shape);
   replaceAndRemove(toArrayRef(Shape.CoroFrame), Shape.CoroBegin.back());
+
+  // If there is no suspend points, no split required, just remove
+  // the allocation and deallocation blocks, they are not needed
+  if (Shape.CoroSuspend.empty()) {
+    handleNoSuspendCoroutine(Shape.CoroBegin.back(), Shape.FrameTy);
+    postSplitCleanup(F);
+    CoroCommon::updateCallGraph(F, {}, CG, SCC);
+    return;
+  }
 
   auto ResumeEntry = createResumeEntryBlock(F, Shape);
   auto ResumeClone = createClone(F, ".Resume", Shape, ResumeEntry, 0);
