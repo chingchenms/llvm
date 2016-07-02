@@ -102,17 +102,38 @@ static void replaceWith(T &C, Value *NewValue,
   replaceWith(Ar, NewValue, VMap);
 }
 
-void replaceCoroEnd(IntrinsicInst* End, ValueToValueMapTy& VMap) {
+void replaceCoroReturn(IntrinsicInst* End, ValueToValueMapTy& VMap) {
   auto NewE = cast<IntrinsicInst>(VMap[End]);
   LLVMContext& C = NewE->getContext();
   auto Ret = ReturnInst::Create(C, nullptr, NewE);
+  // remove the rest of the block, by splitting it into an unreachable block
   auto BB = NewE->getParent();
   BB->splitBasicBlock(NewE);
-  Ret->getNextNode()->eraseFromParent();
+  BB->getTerminator()->eraseFromParent();
 }
+
 void replaceCoroEnd(ArrayRef<CoroEndInst*> Ends, ValueToValueMapTy& VMap) {
-  for (auto E : Ends)
-    replaceCoroEnd(E, VMap);
+  for (auto E : Ends) {
+    if (!isa<ConstantPointerNull>(E->getFrameArg()))
+      continue;
+    auto NewE = cast<CoroEndInst>(VMap[E]);
+    auto BB = NewE->getParent();
+    auto FirstNonPhi = BB->getFirstNonPHI();
+    if (auto LP = dyn_cast<LandingPadInst>(FirstNonPhi)) {
+      assert(LP->isCleanup());
+      ResumeInst::Create(LP, NewE);
+    }
+    else if (auto CP = dyn_cast<CleanupPadInst>(FirstNonPhi)) {
+      CleanupReturnInst::Create(CP, nullptr, NewE);
+    }
+    else {
+      llvm_unreachable("coro.end not at the beginning of the EHpad");
+    }
+    // move coro-end and the rest of the instructions to a block that 
+    // will be now unreachable and remove the useless branch
+    BB->splitBasicBlock(NewE);
+    BB->getTerminator()->eraseFromParent();
+  }
 }
 
 static Function *createClone(Function &F, Twine Suffix, CoroutineShape &Shape,
@@ -162,7 +183,7 @@ static Function *createClone(Function &F, Twine Suffix, CoroutineShape &Shape,
   auto NewValue = Builder.getInt8(FnIndex);
   replaceWith(Shape.CoroSuspend, NewValue, &VMap);
 
-  replaceCoroEnd(Shape.CoroReturn.back(), VMap);
+  replaceCoroReturn(Shape.CoroReturn.back(), VMap);
   replaceCoroEnd(Shape.CoroEnd, VMap);
 
   Builder.SetInsertPoint(Shape.FramePtr->getNextNode());
@@ -264,8 +285,6 @@ static void splitCoroutine(Function &F, CallGraph &CG, CallGraphSCC &SCC) {
   auto ResumeEntry = createResumeEntryBlock(F, Shape);
   auto ResumeClone = createClone(F, ".Resume", Shape, ResumeEntry, 0);
   auto DestroyClone = createClone(F, ".Destroy", Shape, ResumeEntry, 1);
-
-  //  replaceWith(Shape.CoroSuspend, Builder.getInt8(-1));
 
   postSplitCleanup(F);
   postSplitCleanup(*ResumeClone);

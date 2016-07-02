@@ -95,6 +95,7 @@ void llvm::outlineCoroutineParts(Function &F, CallGraph &CG,
     auto First = splitBlockIfNotFirst(From, Name);
     auto Last = splitBlockIfNotFirst(Upto, "End" + Name);
     auto Fn = Extractor.createFunction(First, Last, Name);
+    Fn->addFnAttr(Attribute::AlwaysInline);
     return Fn;
   };
 
@@ -105,8 +106,11 @@ void llvm::outlineCoroutineParts(Function &F, CallGraph &CG,
                                            S.CoroBegin.back()->getNextNode())};
 
   for (CoroEndInst *CE : S.CoroEnd) {
-    //auto RC = getFreePart(S, CE);
-    auto Start = cast<CoroFreeInst>(CE->getFrameArg());
+    Value* FrameArg = CE->getFrameArg();
+    if (isa<ConstantPointerNull>(FrameArg))
+      continue;
+
+    auto Start = cast<CoroFreeInst>(FrameArg);
     auto End = CE->getNextNode();
     Funcs.push_back(Outline(".FreePart", Start, End));
   }
