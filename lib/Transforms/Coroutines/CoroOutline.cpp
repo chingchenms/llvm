@@ -110,6 +110,9 @@ void llvm::outlineCoroutineParts(Function &F, CallGraph &CG,
     if (isa<ConstantPointerNull>(FrameArg))
       continue;
 
+    if (isa<UndefValue>(FrameArg))
+      continue;
+
     auto Start = cast<CoroFreeInst>(FrameArg);
     auto End = CE->getNextNode();
     Funcs.push_back(Outline(".FreePart", Start, End));

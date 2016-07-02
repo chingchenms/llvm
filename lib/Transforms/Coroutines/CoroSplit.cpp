@@ -78,7 +78,35 @@ BasicBlock* createResumeEntryBlock(Function& F, CoroutineShape& Shape) {
   Builder.SetInsertPoint(UnreachBB);
   Builder.CreateUnreachable();
 
-return NewEntry;
+  return NewEntry;
+}
+
+static void preSplitCleanup(Function& F) {
+  llvm::legacy::FunctionPassManager FPM(F.getParent());
+
+  FPM.add(createSCCPPass());
+  FPM.add(createCFGSimplificationPass());
+  FPM.add(createSROAPass());
+  FPM.add(createEarlyCSEPass());
+
+  FPM.doInitialization();
+  FPM.run(F);
+  FPM.doFinalization();
+}
+
+static void postSplitCleanup(Function& F) {
+  llvm::legacy::FunctionPassManager FPM(F.getParent());
+
+  FPM.add(createSCCPPass());
+  FPM.add(createCFGSimplificationPass());
+  //FPM.add(createSROAPass());
+  //FPM.add(createEarlyCSEPass());
+  //  FPM.add(createInstructionCombiningPass());
+  //FPM.add(createCFGSimplificationPass());
+
+  FPM.doInitialization();
+  FPM.run(F);
+  FPM.doFinalization();
 }
 
 static void replaceWith(ArrayRef<Instruction *> Instrs, Value *NewValue,
@@ -102,17 +130,18 @@ static void replaceWith(T &C, Value *NewValue,
   replaceWith(Ar, NewValue, VMap);
 }
 
-void replaceCoroReturn(IntrinsicInst* End, ValueToValueMapTy& VMap) {
+static void replaceCoroReturn(IntrinsicInst *End, ValueToValueMapTy &VMap) {
   auto NewE = cast<IntrinsicInst>(VMap[End]);
-  LLVMContext& C = NewE->getContext();
-  auto Ret = ReturnInst::Create(C, nullptr, NewE);
+  ReturnInst::Create(NewE->getContext(), nullptr, NewE);
+
   // remove the rest of the block, by splitting it into an unreachable block
   auto BB = NewE->getParent();
   BB->splitBasicBlock(NewE);
   BB->getTerminator()->eraseFromParent();
 }
 
-void replaceCoroEnd(ArrayRef<CoroEndInst*> Ends, ValueToValueMapTy& VMap) {
+static void replaceCoroEnd(ArrayRef<CoroEndInst *> Ends,
+                           ValueToValueMapTy &VMap) {
   for (auto E : Ends) {
     if (!isa<ConstantPointerNull>(E->getFrameArg()))
       continue;
@@ -136,8 +165,14 @@ void replaceCoroEnd(ArrayRef<CoroEndInst*> Ends, ValueToValueMapTy& VMap) {
   }
 }
 
-static Function *createClone(Function &F, Twine Suffix, CoroutineShape &Shape,
-  BasicBlock *ResumeEntry, int8_t FnIndex) {
+struct CreateCloneResult {
+  Function* const Fn;
+  Value* const VFrame;
+};
+
+static CreateCloneResult createClone(Function &F, Twine Suffix,
+                                     CoroutineShape &Shape,
+                                     BasicBlock *ResumeEntry, int8_t FnIndex) {
 
   Module* M = F.getParent();
   auto FrameTy = Shape.FrameTy;
@@ -192,36 +227,44 @@ static Function *createClone(Function &F, Twine Suffix, CoroutineShape &Shape,
   Builder.CreateStore(NewF, G);
   NewF->setCallingConv(CallingConv::Fast);
 
-  return NewF;
+  return {NewF, NewVFrame};
 }
 
-static void preSplitCleanup(Function& F) {
-  llvm::legacy::FunctionPassManager FPM(F.getParent());
+static void replaceCoroFree(Value* FramePtr, Value* Replacement) {
+  SmallVector<CoroFreeInst*, 4> CoroFrees;
+  for (User* U : FramePtr->users())
+    if (auto CF = dyn_cast<CoroFreeInst>(U))
+      CoroFrees.push_back(CF);
 
-  FPM.add(createSCCPPass());
-  FPM.add(createCFGSimplificationPass());
-  FPM.add(createSROAPass());
-  FPM.add(createEarlyCSEPass());
-
-  FPM.doInitialization();
-  FPM.run(F);
-  FPM.doFinalization();
+  for (CoroFreeInst* CF : CoroFrees) {
+    CF->replaceAllUsesWith(Replacement);
+    CF->eraseFromParent();
+  }
 }
 
+static Function *createCleanupClone(Function &F, Twine Suffix,
+                                    CreateCloneResult const &Resume,
+                                    CreateCloneResult const &Destroy) {
+  // See if ResumeClone may free the coroutine frame, if so, heap elision
+  // is not possible, so we won't create the cleanupClone.
 
-static void postSplitCleanup(Function& F) {
-  llvm::legacy::FunctionPassManager FPM(F.getParent());
+  for (User* U : Resume.VFrame->users())
+    if (isa<CoroFreeInst>(U))
+      return nullptr;
 
-  FPM.add(createSCCPPass());
-  FPM.add(createCFGSimplificationPass());
-  //FPM.add(createSROAPass());
-  //FPM.add(createEarlyCSEPass());
-//  FPM.add(createInstructionCombiningPass());
-  //FPM.add(createCFGSimplificationPass());
+  ValueToValueMapTy VMap;
+  Function* CleanupClone = CloneFunction(Destroy.Fn, VMap, true);
+  Resume.Fn->getParent()->getFunctionList().push_back(CleanupClone);
+  CleanupClone->setName(F.getName() + Suffix);
 
-  FPM.doInitialization();
-  FPM.run(F);
-  FPM.doFinalization();
+  replaceCoroFree(Destroy.VFrame, Destroy.VFrame);
+
+  auto CleanupVFrame = cast<Value>(VMap[Destroy.VFrame]);
+  auto NullPtr =
+      ConstantPointerNull::get(cast<PointerType>(CleanupVFrame->getType()));
+
+  replaceCoroFree(CleanupVFrame, NullPtr);
+  return CleanupClone;
 }
 
 template <typename T>
@@ -276,6 +319,8 @@ static void updateCoroInfo(Function& F, CoroutineShape &Shape,
 static void splitCoroutine(Function &F, CallGraph &CG, CallGraphSCC &SCC) {
   preSplitCleanup(F);
 
+  // After split coroutine will be a normal function
+  F.removeFnAttr(Attribute::Coroutine); 
   CoroutineShape Shape(F);
 
   buildCoroutineFrame(F, Shape);
@@ -287,14 +332,15 @@ static void splitCoroutine(Function &F, CallGraph &CG, CallGraphSCC &SCC) {
   auto DestroyClone = createClone(F, ".Destroy", Shape, ResumeEntry, 1);
 
   postSplitCleanup(F);
-  postSplitCleanup(*ResumeClone);
-  postSplitCleanup(*DestroyClone);
+  postSplitCleanup(*ResumeClone.Fn);
+  postSplitCleanup(*DestroyClone.Fn);
 
-  // TODO: create Cleanup
+  auto CleanupClone =
+      createCleanupClone(F, ".Cleanup", ResumeClone, DestroyClone);
 
-  updateCoroInfo(F, Shape, { ResumeClone, DestroyClone });
+  updateCoroInfo(F, Shape, { ResumeClone.Fn, DestroyClone.Fn, CleanupClone });
 
-  CoroCommon::updateCallGraph(F, { ResumeClone, DestroyClone }, CG, SCC);
+  CoroCommon::updateCallGraph(F, { ResumeClone.Fn, DestroyClone.Fn }, CG, SCC);
 }
 
 static bool handleCoroutine(Function& F, CallGraph &CG, CallGraphSCC &SCC) {
@@ -311,7 +357,6 @@ static bool handleCoroutine(Function& F, CallGraph &CG, CallGraphSCC &SCC) {
       }
 
       splitCoroutine(F, CG, SCC);
-      F.removeFnAttr(Attribute::Coroutine); // now coroutine is a normal func
       return false; // restart not needed
     }
   }
