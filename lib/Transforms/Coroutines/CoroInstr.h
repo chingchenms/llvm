@@ -34,10 +34,10 @@ namespace llvm {
     enum { kFrame, kIndex };
   public:
     Value *getFrame() const { return getArgOperand(kFrame); }
-    int getIndex() const {
-      auto C = cast<ConstantInt>(getArgOperand(kIndex)); 
-      return C->getValue().getSExtValue();
+    ConstantInt* getRawIndex() const {
+      return cast<ConstantInt>(getArgOperand(kIndex));
     }
+    int getIndex() const { return getRawIndex()->getValue().getSExtValue(); }
 
     // Methods to support type inquiry through isa, cast, and dyn_cast:
     static inline bool classof(const IntrinsicInst *I) {

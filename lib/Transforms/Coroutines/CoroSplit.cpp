@@ -306,6 +306,72 @@ static void handleNoSuspendCoroutine(CoroBeginInst *CoroBegin, Type *FrameTy) {
   CoroBegin->eraseFromParent();
 }
 
+// look for a very simple pattern
+//    coro.save
+//    no other calls
+//    resume or destroy call
+//    coro.suspend
+
+static bool simplifySuspendPoint(CoroSuspendInst* Suspend) {
+  auto Save = Suspend->getCoroSave();
+  auto BB = Suspend->getParent();
+  if (BB != Save->getParent())
+    return false;
+
+  CallSite SingleCallSite;
+
+  // check that we have only one CallSite
+  for (Instruction *I = Save->getNextNode(); I != Suspend;
+    I = I->getNextNode()) {
+    if (isa<CoroFrameInst>(I))
+      continue;
+    if (isa<CoroSubFnInst>(I))
+      continue;
+    if (CallSite CS = CallSite(I))
+      if (SingleCallSite)
+        return false;
+      else
+        SingleCallSite = CS;
+  }
+  auto Callee = SingleCallSite.getCalledValue();
+
+  if (isa<Function>(Callee))
+    return false;
+
+  Callee = Callee->stripPointerCasts();
+  auto SubFn = dyn_cast<CoroSubFnInst>(Callee);
+  if (!SubFn)
+    return false;
+
+  Suspend->replaceAllUsesWith(SubFn->getRawIndex());
+  Suspend->eraseFromParent();
+  Save->eraseFromParent();
+
+  SubFn->replaceAllUsesWith(
+      ConstantPointerNull::get(cast<PointerType>(SubFn->getType())));
+  SubFn->eraseFromParent();
+
+  SingleCallSite.getInstruction()->eraseFromParent();
+
+  return true;
+}
+
+static void simplifySuspendPoints(CoroutineShape& Shape) {
+  auto& S = Shape.CoroSuspend;
+  unsigned I = 0, N = S.size();
+  for (;;) {
+    if (simplifySuspendPoint(S[I])) {
+      if (--N == I)
+        break;
+      std::swap(S[I], S[N]);
+      continue;
+    }
+    if (++I == N)
+      break;
+  }
+  S.resize(N);
+}
+
 static void splitCoroutine(Function &F, CallGraph &CG, CallGraphSCC &SCC) {
   preSplitCleanup(F);
 
@@ -313,6 +379,7 @@ static void splitCoroutine(Function &F, CallGraph &CG, CallGraphSCC &SCC) {
   F.removeFnAttr(Attribute::Coroutine); 
   CoroutineShape Shape(F);
 
+  simplifySuspendPoints(Shape);
   buildCoroutineFrame(F, Shape);
   replaceFrameSize(Shape);
   replaceAndRemove(toArrayRef(Shape.CoroFrame), Shape.CoroBegin.back());
