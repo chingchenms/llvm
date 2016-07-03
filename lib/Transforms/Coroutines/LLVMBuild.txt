@@ -20,4 +20,4 @@ type = Library
 name = Coroutines
 parent = Transforms
 library_name = Coroutines
-required_libraries = Analysis Core Support TransformUtils
+required_libraries = Analysis Core IPO Scalar Support TransformUtils

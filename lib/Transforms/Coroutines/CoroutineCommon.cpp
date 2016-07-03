@@ -144,27 +144,43 @@ void CoroCommon::constantFoldUsers(Constant* Value) {
   } while (!WorkList.empty());
 }
 
+struct ClearVisitor {
+  template <typename Container> void operator()(Container &C, StringRef) {
+    C.clear();
+  }
+  template <typename Instr> void operator()(Instr *&I, StringRef) {
+    I = nullptr;
+  }
+};
+
 // TODO: make function object by hand so that we don't have to special case
 // scalars here and in the dump() function
 void llvm::CoroutineShape::clear() {
-  reflect([](auto &Arr, auto*) { Arr.clear(); });
+  reflect(ClearVisitor{});
   PromiseAlloca = nullptr;
   FrameTy = nullptr;
   FramePtr = nullptr;
   AllocaSpillBlock = nullptr;
 }
 
-void llvm::CoroutineShape::dump() {
-  reflect([](auto &Arr, StringRef name) {
-    if (Arr.empty())
+struct DumpVisitor {
+  template <typename Container>
+  void operator()(Container const &C, StringRef Name) {
+    if (C.empty())
       return;
-    dbgs() << name << ":\n";
-    for (auto *Val : Arr) {
+    dbgs() << Name << ":\n";
+    for (auto *Val : C) {
       dbgs() << "    ";
       Val->dump();
     }
-  });
-}
+  }
+  template <typename Instr> void operator()(Instr *I, StringRef Name) {
+    dbgs() << Name << ":";
+    I->dump();
+  }
+};
+
+void llvm::CoroutineShape::dump() { reflect(DumpVisitor{}); }
 
 void llvm::CoroutineShape::buildFrom(Function &F) {
   clear();
@@ -256,7 +272,6 @@ static inline void addPass(legacy::PassManagerBase &PM, Pass *P) {
     PM.add(createVerifierPass());
 }
 
-// TODO: move it to CoroCommon
 static void addCoroutineOpt0Passes(const PassManagerBuilder &Builder,
                                    PassManagerBase &PM) {
   // addPass(PM, createCoroEarlyPass());
@@ -302,6 +317,8 @@ void llvm::addCoroutinePassesToExtensionPoints(PassManagerBuilder &Builder,
 
   Builder.addExtension(PassManagerBuilder::EP_EarlyAsPossible,
     addCoroutineEarlyPasses);
+  Builder.addExtension(PassManagerBuilder::EP_EnabledOnOptLevel0,
+                       addCoroutineOpt0Passes);
   Builder.addExtension(PassManagerBuilder::EP_ModuleOptimizerEarly,
     addCoroutineModuleEarlyPasses);
   Builder.addExtension(PassManagerBuilder::EP_CGSCCOptimizerLate,

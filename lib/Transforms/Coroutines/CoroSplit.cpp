@@ -109,8 +109,17 @@ static void postSplitCleanup(Function& F) {
   FPM.doFinalization();
 }
 
-static void replaceWith(ArrayRef<Instruction *> Instrs, Value *NewValue,
-  ValueToValueMapTy *VMap = nullptr) {
+template <typename T>
+ArrayRef<Instruction *>
+toArrayRef(T const &Container,
+           typename std::enable_if<std::is_convertible<
+               typename T::value_type, Instruction *>::value>::type * = 0) {
+  ArrayRef<typename T::value_type> AR(Container);
+  return reinterpret_cast<ArrayRef<Instruction *> &>(AR);
+}
+
+static void replaceAndRemove(ArrayRef<Instruction *> Instrs, Value *NewValue,
+                             ValueToValueMapTy *VMap = nullptr) {
   for (Instruction* I : Instrs) {
     if (VMap) I = cast<Instruction>((*VMap)[I]);
     I->replaceAllUsesWith(NewValue);
@@ -119,15 +128,9 @@ static void replaceWith(ArrayRef<Instruction *> Instrs, Value *NewValue,
 }
 
 template <typename T>
-static void replaceWith(T &C, Value *NewValue,
-  ValueToValueMapTy *VMap = nullptr) {
-  Instruction* TestB = *C.begin();
-  Instruction* TestE = *C.begin();
-  TestB; TestE;
-  Instruction** B = reinterpret_cast<Instruction**>(C.begin());
-  Instruction** E = reinterpret_cast<Instruction**>(C.end());
-  ArrayRef<Instruction*> Ar(B, E);
-  replaceWith(Ar, NewValue, VMap);
+static void replaceAndRemove(T const &C, Value *NewValue,
+                             ValueToValueMapTy *VMap = nullptr) {
+  replaceAndRemove(toArrayRef(C), NewValue, VMap);
 }
 
 static void replaceCoroReturn(IntrinsicInst *End, ValueToValueMapTy &VMap) {
@@ -216,7 +219,7 @@ static CreateCloneResult createClone(Function &F, Twine Suffix,
   OldVFrame->replaceAllUsesWith(NewVFrame);
 
   auto NewValue = Builder.getInt8(FnIndex);
-  replaceWith(Shape.CoroSuspend, NewValue, &VMap);
+  replaceAndRemove(Shape.CoroSuspend, NewValue, &VMap);
 
   replaceCoroReturn(Shape.CoroReturn.back(), VMap);
   replaceCoroEnd(Shape.CoroEnd, VMap);
@@ -233,7 +236,7 @@ static CreateCloneResult createClone(Function &F, Twine Suffix,
 static Function *createCleanupClone(Function &F, Twine Suffix,
                                     CreateCloneResult const &Destroy) {
   ValueToValueMapTy VMap;
-  Function* CleanupClone = CloneFunction(Destroy.Fn, VMap, true);
+  Function *CleanupClone = CloneFunction(Destroy.Fn, VMap);
   Destroy.Fn->getParent()->getFunctionList().push_back(CleanupClone);
   CleanupClone->setName(F.getName() + Suffix);
 
@@ -242,22 +245,6 @@ static Function *createCleanupClone(Function &F, Twine Suffix,
   auto CleanupVFrame = cast<Value>(VMap[Destroy.VFrame]);
   CoroCommon::replaceCoroFree(CleanupVFrame, nullptr);
   return CleanupClone;
-}
-
-template <typename T>
-ArrayRef<Instruction*> toArrayRef(T const& Container) {
-  using ElementType = typename T::value_type;
-  Instruction* Test = (ElementType)0;
-  Test;
-  ArrayRef<ElementType> AR(Container);
-  return reinterpret_cast<ArrayRef<Instruction*>&>(AR);
-}
-
-void replaceAndRemove(ArrayRef<Instruction*> Instructions, Value* NewValue) {
-  for (Instruction* I : Instructions) {
-    I->replaceAllUsesWith(NewValue);
-    I->eraseFromParent();
-  }
 }
 
 static void replaceFrameSize(CoroutineShape& Shape) {
@@ -327,11 +314,12 @@ static bool simplifySuspendPoint(CoroSuspendInst* Suspend) {
       continue;
     if (isa<CoroSubFnInst>(I))
       continue;
-    if (CallSite CS = CallSite(I))
+    if (CallSite CS = CallSite(I)) {
       if (SingleCallSite)
         return false;
       else
         SingleCallSite = CS;
+    }
   }
   auto Callee = SingleCallSite.getCalledValue();
 
@@ -382,7 +370,7 @@ static void splitCoroutine(Function &F, CallGraph &CG, CallGraphSCC &SCC) {
   simplifySuspendPoints(Shape);
   buildCoroutineFrame(F, Shape);
   replaceFrameSize(Shape);
-  replaceAndRemove(toArrayRef(Shape.CoroFrame), Shape.CoroBegin.back());
+  replaceAndRemove(Shape.CoroFrame, Shape.CoroBegin.back());
 
   // If there is no suspend points, no split required, just remove
   // the allocation and deallocation blocks, they are not needed
@@ -471,7 +459,7 @@ char CoroSplit::ID = 0;
 INITIALIZE_PASS(
     CoroSplit, "coro-split",
     "Split coroutine into a set of functions driving its state machine", false,
-    false);
+    false)
 #else
 INITIALIZE_PASS_BEGIN(
     CoroSplit, "coro-split",

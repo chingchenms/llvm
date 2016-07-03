@@ -33,31 +33,6 @@ using namespace llvm::CoroCommon;
 
 #define DEBUG_TYPE "coro-outline"
 
-static bool contains(pred_range range, BasicBlock* BB) {
-  for (BasicBlock* V : range)
-    if (V == BB)
-      return true;
-  return false;
-}
-
-#if 0
-static std::pair<Instruction*, Instruction*> getFreePart(CoroutineShape& S) {
-  CoroEndInst* Free = S.CoroEndFinal.back();
-  CoroEndInst* End = S.CoroEndFinal.back();
-  BasicBlock* EndBB = End->getParent();
-  auto Phi = dyn_cast<PHINode>(End->getFrameArg());
-  if (!Phi)
-
-  auto RetStartBB =
-    EndBB->splitBasicBlock(S.CoroEndFinal.back()->getNextNode(), "RetBB");
-
-  auto RetEndBB = RetStartBB;
-  while (BasicBlock* Next = RetEndBB->getSingleSuccessor()) {
-    RetEndBB = Next;
-  }
-  return{ &RetStartBB->front(), RetEndBB->getTerminator() };
-}
-#endif
 static std::pair<Instruction*,Instruction*> getRetCode(CoroutineShape& S) {
   auto NextNode = S.CoroReturn.back()->getNextNode();
   BasicBlock* EndBB = nullptr;

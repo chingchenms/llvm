@@ -31,8 +31,6 @@ using namespace llvm;
 
 #define DEBUG_TYPE "coro-elide"
 
-STATISTIC(CoroElideCounter, "Number of coroutine allocation elision performed");
-
 namespace {
 
   // TODO: paste explanation
@@ -46,9 +44,9 @@ namespace {
 
 char CoroElide::ID = 0;
 INITIALIZE_PASS(
-  CoroElide, "coro-elide",
-  "Coroutine frame allocation elision and indirect calls replacement", false,
-  false);
+    CoroElide, "coro-elide",
+    "Coroutine frame allocation elision and indirect calls replacement", false,
+    false)
 
 Pass *llvm::createCoroElidePass() { return new CoroElide(); }
 
@@ -96,10 +94,7 @@ static bool replaceIndirectCalls(CoroBeginInst *CoroBegin) {
 
   for (auto U : CoroBegin->users())
     if (auto II = dyn_cast<CoroSubFnInst>(U))
-      if (II->getIndex() == 0)
-        ResumeAddr.push_back(II);
-      else
-        DestroyAddr.push_back(II);
+      (II->getIndex() == 0 ? ResumeAddr : DestroyAddr).push_back(II);
 
   if (ResumeAddr.empty() && DestroyAddr.empty())
     return false;

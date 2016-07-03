@@ -43,7 +43,7 @@ enum { SmallVectorThreshold = 32 };
 class BlockToIndexMapping {
   SmallVector<BasicBlock*, SmallVectorThreshold> V;
 public:
-  auto size() { return V.size(); }
+  size_t size() const { return V.size(); }
 
   BlockToIndexMapping(Function& F) {
     for (BasicBlock & BB : F)
@@ -71,7 +71,7 @@ struct SuspendCrossingInfo {
   };
   SmallVector<BlockData, SmallVectorThreshold> Block;
 
-  auto successors(BlockData const& BD) {
+  iterator_range<succ_iterator> successors(BlockData const &BD) {
     BasicBlock* BB = Mapping.indexToBlock(&BD - &Block[0]);
     return llvm::successors(BB);
   }

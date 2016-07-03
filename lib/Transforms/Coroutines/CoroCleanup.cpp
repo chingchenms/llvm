@@ -43,10 +43,10 @@ static bool lowerRemainingCoroIntrinsics(Function& F) {
       ReplacementValue = CF->getArgOperand(0);
     else if (auto CA = dyn_cast<CoroAllocInst>(II))
       ReplacementValue =
-          ConstantPointerNull::get(cast<PointerType>(II->getType()));
-    else if (auto CE = dyn_cast<CoroEndInst>(II))
+          ConstantPointerNull::get(cast<PointerType>(CA->getType()));
+    else if (isa<CoroEndInst>(II))
       ;
-    else if (auto CE = dyn_cast<CoroReturnInst>(II))
+    else if (isa<CoroReturnInst>(II))
       ;
     else
       continue;

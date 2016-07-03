@@ -135,7 +135,6 @@ static bool replaceEmulatedIntrinsicsWithRealOnes(Module& M) {
   CallInst* SavedIntrinsic = nullptr;
 
   for (Function& F : M) {
-    bool hasCoroSuspend = false;
     bool hasCoroInit = false;
     for (auto it = inst_begin(F), e = inst_end(F); it != e;) {
       Instruction& I = *it++;
@@ -158,14 +157,12 @@ static bool replaceEmulatedIntrinsicsWithRealOnes(Module& M) {
                   ? Intrinsic::getDeclaration(&M, ID, F->getReturnType())
                   : Intrinsic::getDeclaration(&M, ID);
           Args.clear();
-//          dbgs() << "Looking at >>>>  "; CI->dump();
           switch (ID) {
           case Intrinsic::not_intrinsic:
             continue;
           default:
             break;
           case Intrinsic::coro_suspend:
-            hasCoroSuspend = true;
             assert(SavedIntrinsic && "coro_suspend expects saved intrinsic");
             Args.push_back(SavedIntrinsic);
             break;
@@ -200,7 +197,6 @@ static bool replaceEmulatedIntrinsicsWithRealOnes(Module& M) {
           else {
             ReplaceInstWithInst(CI, IntrinCall);
           }
-  //        dbgs() << "Replaced with >>>>  "; IntrinCall->dump();
           changed = true;
         }
       }
@@ -337,7 +333,7 @@ struct CoroEarly : public FunctionPass {
 
 char CoroEarly::ID = 0;
 INITIALIZE_PASS(
-  CoroEarly, "coro-early",
-  "Coroutine frame allocation elision and indirect calls replacement", false,
-  false);
+    CoroEarly, "coro-early",
+    "Coroutine frame allocation elision and indirect calls replacement", false,
+    false)
 Pass *llvm::createCoroEarlyPass() { return new CoroEarly(); }

@@ -83,8 +83,10 @@ template <class F> void CoroutineShape::reflect(F&& f) {
 
   f(Return, "Return");
 
-  //f(FrameTy, "FrameTy");
-  //f(FramePtr, "FramePtr");
+  f(FrameTy, "FrameTy");
+  f(FramePtr, "FramePtr");
+  f(PromiseAlloca, "PromiseAlloca");
+  f(AllocaSpillBlock, "AllocaSpillBlock");
 }
 
 class CallGraph;
