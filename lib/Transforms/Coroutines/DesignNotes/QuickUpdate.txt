@@ -1,0 +1,56 @@
+Hi Eli, Sanjoy:
+
+Quick update. I took your advice to make control flow explicit and
+extract parts of the coroutine into subfunctions for protection against
+undesirable code motion.
+
+It is working out quite nicely and looks prettier too.
+
+  * all control flow is explicit;
+  * coro.start now marks the point where all initialization is done and 
+    coroutine can be suspended;
+  * coro.suspend is now three way showing all interesting control flow;
+  * things like coro.fork or unreachable after coro.end are no more!
+
+Out of the frontend, IR is structured like this:
+
+Entry:               
+         Allocation Code
+----------- coro.init -----------
+         Initialization Code
+----------- coro.start ----------
+            whatever...
+                |          coro.suspend
+                V           (R) = resume control flow
+           coro.suspend X   (S) = suspend control flow
+          /     |(R)   \(D) (D) = destroy control flow
+         /      V       \
+     (S)/   whatever2   |
+       /        |       |
+      /         V       V
+----- | --- coro.delete ---
+       \   Deallocation Code
+        \____   |
+             |  |       
+             V  V             
+----------- coro.end ----    
+           whatever 4
+           ret Whatever
+
+At EP_EarlyAsPossible, init, delete and return parts are extracted
+to protect against any code movement:
+
+      Entry:               
+              call f.init_part(inputs1, outputs1)
+                ...
+                ... everything between coro.start and coro.delete
+                ... stays put
+      DeleteBB:          
+              f.delete_part(inputs2, outputs2)
+      RetBB:  %result = f.ret_part(inputs3)
+              ret %result
+
+
+Thank you for all your help!
+
+Gor

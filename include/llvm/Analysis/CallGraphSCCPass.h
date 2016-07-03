@@ -60,6 +60,11 @@ public:
   ///
   virtual bool runOnSCC(CallGraphSCC &SCC) = 0;
 
+  /// This methods is invoked by CGManager::RunPassOnSCC after each call
+  /// to RunOnSCC to query the pass if there were any change made that 
+  /// require rerunning pipeline again.
+  virtual bool restartRequested() const { return false; }
+
   /// doFinalization - This method is called after the SCC's of the program has
   /// been processed, allowing the pass to do final cleanup as necessary.
   virtual bool doFinalization(CallGraph &CG) {

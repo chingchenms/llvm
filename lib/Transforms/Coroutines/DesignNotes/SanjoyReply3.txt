@@ -1,0 +1,64 @@
+Hi Sanjoy,
+
+>> I'm not familiar with fiber-type APIs, but I assume fiber_fork is like
+>> setjmp, in that it can "return twice"? 
+
+Yes, user-mode stack switching API are somewhat similar to setjmp. Here are 
+links to a doc page and implementation, just in case you are curious:
+
+http://www.boost.org/doc/libs/1_59_0/libs/context/doc/html/context/context.html
+http://svn.boost.org/svn/boost/trunk/libs/context/src/asm/jump_x86_64_ms_pe_masm.asm
+http://svn.boost.org/svn/boost/trunk/libs/context/src/asm/jump_x86_64_sysv_elf_gas.S
+
+>> If so, I'd urge you to try to not rely on that kind of behavior. LLVM has
+>> unresolved issues around modeling setjmp like behavior
+
+Absolutely! This was just a thought experiment how one could implement the 
+intrinsics in a library. One of the benefits of compiler based coroutines is 
+that they allow to avoid all of that mess. Suspend is just a 'ret void',
+resume is simply a direct (or indirect) call and a coroutine state is tiny
+(assuming you don't use 64K arrays as local variables :-) )
+
+>>    DeleteBB:
+>>        (*%t) = 15 ; // fine, copy of %t on a fiber stack updated
+>>        free(%mem)
+>>        (*%t) = 20 ; // undef: as the fiber memory is freed already
+>>        coro.end(true)
+>>        UNREACHABLE
+>>
+>> Say there was no (*%t) = 20. There is nothing so far that prevents
+>> sinking "(*%t) = 15" from before the free (where it is legal) to after
+>> the free (where it is not).  %t is an unescaped alloca, and LLVM can
+>> move around loads from and stores to these (as a first approximation)
+>> as it pleases.
+
+Good point. During CoroSplit I should sink CoroutineFrame deallocation
+all the way down to coro.end(). 
+
+>> So when you say "some_code_creating_T()" are there restrictions on
+>> what kind of code there could be as part of the creation logic (I've
+>> so far assumed that it can be arbitrary code). 
+
+You are right. It *is* arbitrary code. In my reply to you earlier I had a 
+particular use case in mind, where you should not touch anything in the 
+coroutine frame in the return block, but that is higher level semantics that 
+frontend or library imbues coroutine with, not something that LLVM enforces. 
+
+The case I had in mind was that a frontend generated an asynchronous coroutine 
+without RAII semantics. Once launched it will run driven by asynchronous 
+completions and when it runs to the end it will destroy itself.
+
+Such a coroutine can get suspended, get resumed by a different thread, run to 
+completion and free the coroutine frame **before** the thread that created 
+the coroutine manages to get to its return block. In such a coroutine reading 
+or writing to coroutine frame in return block is undefined behavior. 
+
+On the other hand, if it is a synchronous generator that always starts 
+suspended, then any writes or reads from a coroutine frame are perfectly fine.
+
+Since LLVM does not know what kind of coroutine user is trying to build, it
+should take a conservative approach. LLVM should not introduce writes or reads 
+to a coroutine frame in the return block if they weren't there, but, LLVM 
+should not replace them with `@llvm.traps` and `undef`s either.
+
+Gor

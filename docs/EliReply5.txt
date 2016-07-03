@@ -1,0 +1,155 @@
+
+
+
+
+Hi Eli:
+
+>> Naively, you would expect that it would be legal to hoist the store... 
+>> but that breaks your coroutine semantics because the global could be mutated 
+>> between the first return and the resume.
+ 
+Hmmm... I don't see the problem. I think hoisting the store is perfectly legal 
+transformation with all semantics preserved.
+
+Let's look at your example:
+
+>> block1:
+>>   suspend
+>>   switch (resume, destroy, return)
+>>
+>> resume:
+>>   store zero  to global @g
+>>   doA()
+>>   [...]
+>>
+>> destroy:
+>>   store zero  to global @g
+>>   doB()
+>>   [...]
+>>
+>> return:
+>>   store zero to global @g
+>>   doC
+>>   [...]
+
+As written the behavior is:
+
+  1) when we encounter a suspend during the first pass through the function,
+     store 0 to @g and doC()
+
+  2) when we encounter a suspend after coroutine was resumed
+     ret void
+
+  3) When coroutine is resumed:
+     store 0 to @g and doA()
+
+  4) When coroutine is destroyed:
+     store 0 to @g and doB()
+
+If this is a coroutine that can be resumed asynchronously from a different
+thread there is a data race. For example, if resume happens before 'f' returns,
+doA() can write something useful to @g, and 'f' will clobber it with zero.
+But, this race is already present in the code and is not introduced by LLVM.
+
+Let's hoist the store and see what happens:
+
+>> block1:
+>>   suspend
+>>   store zero  to global @g
+>>   switch (resume, destroy, return)
+>>
+>> resume:
+>>   doA()
+>>   [...]
+>>
+>> destroy:
+>>   doB()
+>>   [...]
+>>
+>> return:
+>>   doC()
+>>   [...]
+
+Now, let's split it up:
+  1. RAUW coro.suspend with -1,0,1 in f, f.resume and f.destroy
+  2. remove coro.suspend in f, replace with ret void in f.resume
+
+void f() {
+  [...]
+  store zero  to global @g
+  doC();  
+  [...]  
+}
+
+void @f.resume() {
+entry:
+  store zero  to global @g
+  doA();  
+  [....]
+}
+
+void @f.destroy() {
+entry:
+  store zero  to global @g
+  doB();  
+  [....]
+}
+
+Behavior looks exactly as before. What am I missing?
+
+Thank you,
+Gor
+
+P.S.
+
+Eli, thank you very much for your input. I struggled with the coro.fork for 
+months and in just a few days here it seems to be getting so much better!
+
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+No OS, no target specific code required. Just a simple rewriting of a function
+during the middle optimizer.
+
+Very briefly:
+
+LLVM coroutines are functions that have one or more `suspend points`_. 
+When a suspend point is reached, the execution of a coroutine is suspended and
+control is returned back to its caller. A suspended coroutine can be resumed 
+to continue execution from the last suspend point or be destroyed. 
+
+Let's say you get coroutine that looks something like this
+
+  void *f(int n) {
+     for(;;) {
+       bar(n++);
+       <suspend> // magic: returns a coroutine handle on first suspend
+     }
+  }
+
+We will split it up into start, resume and destroy functions and will create
+a coroutine frame that will keep value that need to be live across suspension
+points.
+
+  struct f.frame { int n; }
+
+  void* f(int n) {
+    auto s = new f.frame{n};
+    bar(s->n++);
+    return s;
+  }
+
+  void f.resume(f.frame* s) {
+    bar(s->n++);
+  }
+
+  void f.destroy(f.frame* s) {
+    delete s;
+  }
+
+You can read more details in the doc/Coroutines.rst up for review at 
+
+http://reviews.llvm.org/D21170
+
+Cheers
+Gor
+

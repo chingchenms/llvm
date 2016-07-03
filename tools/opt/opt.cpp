@@ -50,6 +50,7 @@
 #include "llvm/Support/TargetSelect.h"
 #include "llvm/Support/ToolOutputFile.h"
 #include "llvm/Target/TargetMachine.h"
+#include "llvm/Transforms/Coroutines.h"
 #include "llvm/Transforms/IPO/PassManagerBuilder.h"
 #include "llvm/Transforms/Utils/Cloning.h"
 #include <algorithm>
@@ -215,6 +216,11 @@ static cl::opt<bool> DiscardValueNames(
     cl::desc("Discard names from Value (other than GlobalValue)."),
     cl::init(false), cl::Hidden);
 
+static cl::opt<bool> Coroutines(
+  "enable-coroutines",
+  cl::desc("Enable Coroutine Passes"),
+  cl::init(true), cl::Hidden);
+
 static inline void addPass(legacy::PassManagerBase &PM, Pass *P) {
   // Add the pass to the pass manager...
   PM.add(P);
@@ -268,6 +274,9 @@ static void AddOptimizationPasses(legacy::PassManagerBase &MPM,
         [&](const PassManagerBuilder &, legacy::PassManagerBase &PM) {
           TM->addEarlyAsPossiblePasses(PM);
         });
+
+  if (Coroutines)
+    addCoroutinePassesToExtensionPoints(Builder, VerifyEach);
 
   Builder.populateFunctionPassManager(FPM);
   Builder.populateModulePassManager(MPM);
@@ -323,6 +332,8 @@ void initializePollyPasses(llvm::PassRegistry &Registry);
 }
 #endif
 
+bool fCoroutines = true;
+
 //===----------------------------------------------------------------------===//
 // main for opt
 //
@@ -343,6 +354,7 @@ int main(int argc, char **argv) {
   // Initialize passes
   PassRegistry &Registry = *PassRegistry::getPassRegistry();
   initializeCore(Registry);
+  initializeCoroutines(Registry);
   initializeScalarOpts(Registry);
   initializeObjCARCOpts(Registry);
   initializeVectorization(Registry);
@@ -364,6 +376,10 @@ int main(int argc, char **argv) {
   initializePreISelIntrinsicLoweringLegacyPassPass(Registry);
   initializeGlobalMergePass(Registry);
   initializeInterleavedAccessPass(Registry);
+
+  if (Coroutines) {
+    initializeCoroutines(Registry);
+  }
 
 #ifdef LINK_POLLY_INTO_TOOLS
   polly::initializePollyPasses(Registry);

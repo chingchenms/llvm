@@ -1,0 +1,81 @@
+Hi Sanjoy:
+
+>> How will you handle (potentially variably sized) alloca instructions
+>> that cannot be elided by promotion to SSA?  E.g.
+>> 
+>>   void cor() {
+>>     int a = 0;
+>>     escape(&a);
+>>     for (;;) yield(a++);
+>>   }
+
+Any escaped allocas go to coroutine frame. It is an important use case with 
+async coroutines:
+
+  task<void> f() {
+    char buf[N];
+    ... fill buff with stuff
+    await async_send(buf); // <suspend-point>
+    ... do more
+  }
+
+Even though an alloca is not mentioned after suspend point, it is still 
+need to  go to the coroutine frame, as async_send will be referencing it 
+while coroutine is suspended (and its stack frame gone).
+
+CoroSplit pass is doing two interesting thing.
+  1) Creates the coroutine frame.
+  2) Chops up the coroutine into pieces
+
+Here is a brief description:
+
+========================
+Coroutine Frame Building
+========================
+
+Coroutine frame building algorithm has two parts: 
+  * Deal with allocas
+  * Deal with virtual registers.
+
+Alloca part
+-----------
+
+  Step 1: Compute the blocks that will end up in resume and destroy
+  Step 2: Classify alloca into three buckets
+    Start Only: Only used in start
+    Resume Only: Only used in resume/destroy
+    Shared: Used in both (or escaped)
+  Step 3: Put all shared values in the coroutine frame, RAUW shared allocas with 
+    GEPs from coroutine frame
+  Step 4: Move all resume only allocas to the new entry block in resume/destroy
+
+  (Future Work)
+
+  Step X-1:
+    insert dbg.values properly
+  Step X: 
+    Utilize lifetime information for shared allocas to decide how to pack them
+    tightly in coroutine frame. At the moment I throw away lifetime intrinsics.
+  Step X+1:
+    Deal with variable allocas. One way to deal with them is to chaining them 
+    to the coroutine frame using the same allocation and deallocation routines 
+    used for coroutine frame itself). Until step X+1, no var.size alloca can
+    go into a coroutine frame. Start only or Resume only allocas don't 
+    cause problems.
+
+Virtual Register part
+---------------------
+
+  Step 1: Precompute block relationship X(B1,B2), when B1 dominates B2 and there
+    is a path from B1 to B2 that crosses a suspend point.
+  Step 2: 
+    Check if a path from a use of value in a resume/destroy block to a 
+    definition crosses a suspend point, ie X(Bd,Bu) == true, where
+      Bu is a block with the use
+      Bd is a block with the definition or an entry block if d is func argument
+  Step 3:
+    Check if we already have value 'd' in the coroutine frame, if so, replace
+    the use with GEP from 
+
+Cheers,
+Gor

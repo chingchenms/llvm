@@ -100,6 +100,12 @@ public:
     /// peephole optimizations similar to the instruction combiner. These passes
     /// will be inserted after each instance of the instruction combiner pass.
     EP_Peephole,
+
+    /// EP_CGSCCOptimizerLate - This extension point allows adding passes that
+    /// perform optimizations at every SCC after all other SCC passes.
+    /// Extensions added at ths point just before function simplification
+    /// functional passes would run.
+    EP_CGSCCOptimizerLate,
   };
 
   /// The Optimization Level - Specify the basic optimization level.
