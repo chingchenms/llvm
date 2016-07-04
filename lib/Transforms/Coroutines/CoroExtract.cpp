@@ -175,23 +175,18 @@ Function *llvm::CoroPartExtractor::createFunction(BasicBlock *Start,
   Module& M = *F.getParent();
   LLVMContext& C = F.getContext();
 
-#if 0
-  auto OldEntryBB = &F.getEntryBlock();
-  auto EntryBB = BasicBlock::Create(C, "EntryBB", &F, OldEntryBB);
-  BranchInst::Create(Start, EntryBB);
-#else
   Start->moveBefore(&F.getEntryBlock());
-#endif
 
-  auto OldExitBB = End;
-  auto ExitBB = BasicBlock::Create(C, "ExitBB", &F);
-  auto RetValue = UndefValue::get(F.getReturnType());
-  ReturnInst::Create(C, RetValue, ExitBB);
-
-  End->replaceAllUsesWith(ExitBB);
+  // make End unreachable while we compute input output
+  SmallVector<BasicBlock*, 4> EndPredecessors(pred_begin(End), pred_end(End));
+  for (auto Pred : EndPredecessors)
+    new UnreachableInst(C, Pred);
 
   // compute inputs
   auto R = findInputsOutputs(F);
+
+  for (auto Pred : EndPredecessors)
+    Pred->getTerminator()->eraseFromParent();
 
   SmallVector<Type*, 8> ArgTypes;
   SmallVector<Value*, 8> ArgValues;
@@ -202,9 +197,6 @@ Function *llvm::CoroPartExtractor::createFunction(BasicBlock *Start,
       ArgValues.push_back(V);
     }
   }
-
-  ExitBB->replaceAllUsesWith(OldExitBB);
-  //EntryBB->eraseFromParent();
 
   // compute outputs
   Type* RetType = computeReturnType(C, PreEnd->getTerminator(), R.Outputs);
@@ -221,9 +213,11 @@ Function *llvm::CoroPartExtractor::createFunction(BasicBlock *Start,
     BB->removeFromParent();
     BB->insertInto(NewF);
   }
-  // make sure that the first block is first
-  R.EntryBlock->removeFromParent();
-  R.EntryBlock->insertInto(NewF, &NewF->getEntryBlock());
+  if (NewF->size() > 1) {
+    // make sure that the first block is first
+    R.EntryBlock->removeFromParent();
+    R.EntryBlock->insertInto(NewF, &NewF->getEntryBlock());
+  }
 
   IRBuilder<> Builder(PreStart->getTerminator());
   auto ReturnedValue = Builder.CreateCall(NewF, ArgValues, "");
@@ -256,7 +250,6 @@ Function *llvm::CoroPartExtractor::createFunction(BasicBlock *Start,
 
   Builder.CreateBr(End);
   PreStart->getTerminator()->eraseFromParent();
-  ExitBB->eraseFromParent();
 
   return NewF;
 }
