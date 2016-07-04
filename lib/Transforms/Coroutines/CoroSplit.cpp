@@ -401,6 +401,19 @@ static void splitCoroutine(Function &F, CallGraph &CG, CallGraphSCC &SCC) {
       F, {ResumeClone.Fn, DestroyClone.Fn, CleanupClone}, CG, SCC);
 }
 
+#define kReadyForSplitStr "coro.ready.for.split"
+
+static bool handleCoroutine(Function& F, CallGraph &CG, CallGraphSCC &SCC) {
+  if (F.hasFnAttribute(kReadyForSplitStr)) {
+    splitCoroutine(F, CG, SCC);
+    return false; // no restart needed
+  }
+
+  F.addFnAttr(kReadyForSplitStr);
+  return true;
+}
+
+#if 0
 static bool handleCoroutine(Function& F, CallGraph &CG, CallGraphSCC &SCC) {
   for (auto& I : instructions(F)) {
     if (auto CB = dyn_cast<CoroBeginInst>(&I)) {
@@ -420,7 +433,7 @@ static bool handleCoroutine(Function& F, CallGraph &CG, CallGraphSCC &SCC) {
   }
   llvm_unreachable("Coroutine without defininig coro.begin");
 }
-
+#endif
 //===----------------------------------------------------------------------===//
 //                              Top Level Driver
 //===----------------------------------------------------------------------===//
