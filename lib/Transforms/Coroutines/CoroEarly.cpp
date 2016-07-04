@@ -225,14 +225,16 @@ struct Lowerer {
                                            /*isVarArg=*/false)
                              ->getPointerTo()) {}
 
-  void replaceCoroPromise(IntrinsicInst *intrin, bool from = false);
+  void replaceCoroPromise(IntrinsicInst *Intrin, bool from = false);
+  void lowerResumeOrDestroy(IntrinsicInst* II, unsigned Index);
+  void lowerCoroDone(IntrinsicInst* II);
 
 };
 
-void Lowerer::replaceCoroPromise(IntrinsicInst *intrin, bool from) {
-  Value *Operand = intrin->getArgOperand(0);
+void Lowerer::replaceCoroPromise(IntrinsicInst *Intrin, bool from) {
+  Value *Operand = Intrin->getArgOperand(0);
   auto PromisePtr = cast<PointerType>(
-    from ? Operand->getType() : intrin->getFunctionType()->getReturnType());
+    from ? Operand->getType() : Intrin->getFunctionType()->getReturnType());
   auto PromiseType = PromisePtr->getElementType();
 
   // FIXME: this should be queried from FrameBuilding layer, not here
@@ -243,7 +245,7 @@ void Lowerer::replaceCoroPromise(IntrinsicInst *intrin, bool from) {
 
   Value* Replacement = nullptr;
 
-  Builder.SetInsertPoint(intrin);
+  Builder.SetInsertPoint(Intrin);
   if (from) {
     auto BCI = Builder.CreateBitCast(Operand, Int8PtrTy);
     auto Gep = Builder.CreateConstInBoundsGEP1_32(Int8Ty, BCI, -Offset);
@@ -255,15 +257,13 @@ void Lowerer::replaceCoroPromise(IntrinsicInst *intrin, bool from) {
     Replacement = BCI;
   }
 
-  intrin->replaceAllUsesWith(Replacement);
-  intrin->eraseFromParent();
+  Intrin->replaceAllUsesWith(Replacement);
+  Intrin->eraseFromParent();
 }
 
-void lowerResumeOrDestroy(IntrinsicInst* II, unsigned Index) {
-  Module *M = II->getModule();
-  auto Fn = Intrinsic::getDeclaration(M, Intrinsic::coro_subfn_addr);
-  LLVMContext& C = II->getContext();
+void Lowerer::lowerResumeOrDestroy(IntrinsicInst* II, unsigned Index) {
   auto IndexVal = ConstantInt::get(Type::getInt8Ty(C), Index);
+  auto Fn = Intrinsic::getDeclaration(&M, Intrinsic::coro_subfn_addr);
 
   SmallVector<Value*, 2> Args{ II->getArgOperand(0), IndexVal };
   auto Call = CallInst::Create(Fn, Args, "", II);
@@ -278,6 +278,24 @@ void lowerResumeOrDestroy(IntrinsicInst* II, unsigned Index) {
   II->eraseFromParent();
 }
 
+void Lowerer::lowerCoroDone(IntrinsicInst* II) {
+  Value *Operand = II->getArgOperand(0);
+
+// FIXME: this should be queried from FrameBuilding layer, not here
+  auto FrameTy = StructType::get(C, 
+      {AnyResumeFnPtrTy, AnyResumeFnPtrTy, Int8Ty});
+  PointerType* FramePtrTy = FrameTy->getPointerTo();
+
+  Builder.SetInsertPoint(II);
+  auto BCI = Builder.CreateBitCast(Operand, FramePtrTy);
+  auto Gep = Builder.CreateConstInBoundsGEP2_32(FrameTy, BCI, 0, 2);
+  auto Load = Builder.CreateLoad(Gep);
+  auto Cond = Builder.CreateICmpEQ(Load, ConstantInt::get(Int8Ty, 0));
+
+  II->replaceAllUsesWith(Cond);
+  II->eraseFromParent();
+}
+
 // TODO: handle invoke coro.resume and coro.destroy
 bool lowerEarlyIntrinsics(Function& F) {
   Lowerer L(F);
@@ -288,10 +306,13 @@ bool lowerEarlyIntrinsics(Function& F) {
       default:
         continue;
       case Intrinsic::coro_resume:
-        lowerResumeOrDestroy(II, 0);
+        L.lowerResumeOrDestroy(II, 0);
         break;
       case Intrinsic::coro_destroy:
-        lowerResumeOrDestroy(II, 1);
+        L.lowerResumeOrDestroy(II, 1);
+        break;
+      case Intrinsic::coro_done:
+        L.lowerCoroDone(II);
         break;
       case Intrinsic::coro_promise:
         L.replaceCoroPromise(II);
