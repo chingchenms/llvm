@@ -152,10 +152,6 @@ static bool replaceEmulatedIntrinsicsWithRealOnes(Module& M) {
             .Case("llvm_coro_return", Intrinsic::coro_return)
             .Default(Intrinsic::not_intrinsic);
 
-          Function *Fn =
-              ID == Intrinsic::coro_size
-                  ? Intrinsic::getDeclaration(&M, ID, F->getReturnType())
-                  : Intrinsic::getDeclaration(&M, ID);
           Args.clear();
           switch (ID) {
           case Intrinsic::not_intrinsic:
@@ -181,6 +177,11 @@ static bool replaceEmulatedIntrinsicsWithRealOnes(Module& M) {
             Args.push_back(CI->getArgOperand(4));
             break;
           }
+
+          Function *Fn =
+              ID == Intrinsic::coro_size
+                  ? Intrinsic::getDeclaration(&M, ID, F->getReturnType())
+                  : Intrinsic::getDeclaration(&M, ID);
 
           auto IntrinCall = CallInst::Create(Fn, Args, "");
           if (ID == Intrinsic::coro_save) {

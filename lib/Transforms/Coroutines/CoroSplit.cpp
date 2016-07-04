@@ -237,7 +237,6 @@ static Function *createCleanupClone(Function &F, Twine Suffix,
                                     CreateCloneResult const &Destroy) {
   ValueToValueMapTy VMap;
   Function *CleanupClone = CloneFunction(Destroy.Fn, VMap);
-  Destroy.Fn->getParent()->getFunctionList().push_back(CleanupClone);
   CleanupClone->setName(F.getName() + Suffix);
 
   CoroCommon::replaceCoroFree(Destroy.VFrame, Destroy.VFrame);
@@ -321,6 +320,10 @@ static bool simplifySuspendPoint(CoroSuspendInst* Suspend) {
         SingleCallSite = CS;
     }
   }
+  auto CallInstr = SingleCallSite.getInstruction();
+  if (!CallInstr)
+    return false;
+
   auto Callee = SingleCallSite.getCalledValue();
 
   if (isa<Function>(Callee))
@@ -339,7 +342,7 @@ static bool simplifySuspendPoint(CoroSuspendInst* Suspend) {
       ConstantPointerNull::get(cast<PointerType>(SubFn->getType())));
   SubFn->eraseFromParent();
 
-  SingleCallSite.getInstruction()->eraseFromParent();
+  CallInstr->eraseFromParent();
 
   return true;
 }
@@ -394,7 +397,8 @@ static void splitCoroutine(Function &F, CallGraph &CG, CallGraphSCC &SCC) {
 
   updateCoroInfo(F, Shape, { ResumeClone.Fn, DestroyClone.Fn, CleanupClone });
 
-  CoroCommon::updateCallGraph(F, { ResumeClone.Fn, DestroyClone.Fn }, CG, SCC);
+  CoroCommon::updateCallGraph(
+      F, {ResumeClone.Fn, DestroyClone.Fn, CleanupClone}, CG, SCC);
 }
 
 static bool handleCoroutine(Function& F, CallGraph &CG, CallGraphSCC &SCC) {
