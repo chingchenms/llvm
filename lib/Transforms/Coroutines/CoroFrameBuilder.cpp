@@ -262,6 +262,7 @@ static Instruction* insertSpills(SpillInfo &Spills,
       CurrentValue = E.def();
       CurrentBlock = nullptr;
       CurrentReload = nullptr;
+
       ++Index;
 
       if (auto AI = dyn_cast<AllocaInst>(CurrentValue)) {
@@ -348,6 +349,45 @@ static StructType *buildFrameType(Function &F, CoroutineShape &Shape,
   return FrameTy;
 }
 
+static bool materializable(Instruction& V) {
+  return isa<BitCastInst>(&V)
+    || isa<GetElementPtrInst>(&V)
+    ;
+}
+
+static void rewriteMaterializableInstructions(IRBuilder<> &IRB,
+                                              SpillInfo const &Spills) {
+  BasicBlock* CurrentBlock = nullptr;
+  Instruction* CurrentMaterialization = nullptr;
+  Instruction* CurrentDef = nullptr;
+
+  for (auto const &E : Spills) {
+    if (CurrentDef != E.def()) {
+      CurrentDef = cast<Instruction>(E.def());
+      CurrentBlock = nullptr;
+      CurrentMaterialization = nullptr;
+    }
+
+    // if we have not seen this block, materialize the value
+    if (CurrentBlock != E.userBlock()) {
+      CurrentBlock = E.userBlock();
+      IRB.SetInsertPoint(CurrentBlock->getFirstNonPHIOrDbgOrLifetime());
+      auto ClonedInst = cast<Instruction>(CurrentDef)->clone();
+      if (CurrentMaterialization)
+        ClonedInst->setName(CurrentMaterialization->getName());
+      else {
+        ClonedInst->takeName(CurrentDef);
+      }
+      ClonedInst->insertBefore(E.user());
+      CurrentMaterialization = ClonedInst;
+    }
+    // replace all uses of CurrentValue in the current instruction with reload
+    for (Use& U : E.user()->operands())
+      if (U.get() == CurrentDef)
+        U.set(CurrentMaterialization);
+  }
+}
+
 void llvm::buildCoroutineFrame(Function &F, CoroutineShape& Shape) {
   DEBUG(dbgs() << "entering buildCoroutineFrame\n");
 
@@ -356,17 +396,31 @@ void llvm::buildCoroutineFrame(Function &F, CoroutineShape& Shape) {
     Shape.CoroBegin.back()->clearPromise();
   }
 
-  // 1 split all of the blocks on CoroSave
-
+  // Split all of the blocks on CoroSave.
   for (CoroSuspendInst* CSI : Shape.CoroSuspend)
     splitAround(CSI->getCoroSave(), "CoroSave");
 
-  // put  CoroReturn into their own blocks
+  // Put CoroReturns into their own blocks.
   splitAround(Shape.CoroReturn.back(), "CoroReturn");
 
   SuspendCrossingInfo Checker(F, Shape);
 
   SpillInfo Spills;
+
+  // See if there are materializable instructions across suspend points.
+  for (Instruction& I : instructions(F))
+    if (materializable(I))
+      for (User* U : I.users())
+        if (Checker.definitionAcrossSuspend(I, U))
+          Spills.emplace_back(&I, U);
+
+  IRBuilder<> Builder(F.getContext());
+
+  // Rewrite materializable instructions to be materialized at the use point.
+  std::sort(Spills.begin(), Spills.end());
+  rewriteMaterializableInstructions(Builder, Spills);
+  Spills.clear();
+
   for (Argument& A : F.getArgumentList())
     for (User* U : A.users())
       if (Checker.definitionAcrossSuspend(A, U))
@@ -381,8 +435,11 @@ void llvm::buildCoroutineFrame(Function &F, CoroutineShape& Shape) {
       continue;
 
     for (User* U : I.users())
-      if (Checker.definitionAcrossSuspend(I, U))
+      if (Checker.definitionAcrossSuspend(I, U)) {
+        assert(!materializable(I) &&
+               "rewriteMaterializable did not do its job");
         Spills.emplace_back(&I, U);
+      }
   }
 
   std::sort(Spills.begin(), Spills.end());
