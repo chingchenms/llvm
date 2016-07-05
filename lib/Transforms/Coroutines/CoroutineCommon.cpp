@@ -184,6 +184,7 @@ void llvm::CoroutineShape::dump() { reflect(DumpVisitor{}); }
 
 void llvm::CoroutineShape::buildFrom(Function &F) {
   clear();
+  int FinalSuspendIndex = -1;
   for (Instruction& I : instructions(F)) {
     if (auto RI = dyn_cast<ReturnInst>(&I))
       Return.push_back(RI);
@@ -202,6 +203,11 @@ void llvm::CoroutineShape::buildFrom(Function &F) {
         break;
       case Intrinsic::coro_suspend:
         CoroSuspend.push_back(cast<CoroSuspendInst>(II));
+        if (CoroSuspend.back()->getCoroSave()->isFinal()) {
+          assert(FinalSuspendIndex == -1 &&
+                 "Only one suspend point can be marked as final");
+          FinalSuspendIndex = CoroSuspend.size() - 1;
+        }
         break;
       case Intrinsic::coro_begin: {
         auto CB = cast<CoroBeginInst>(II);
@@ -229,6 +235,10 @@ void llvm::CoroutineShape::buildFrom(Function &F) {
     "coroutine should have exactly one @llvm.coro.alloc");
   assert(CoroReturn.size() == 1 &&
     "coroutine should have exactly one @llvm.coro.end(falthrough = true)");
+
+  // Swap final suspend to be the first suspend point.
+  if (FinalSuspendIndex != -1)
+    std::swap(CoroSuspend[0], CoroSuspend[FinalSuspendIndex]);
 }
 
 void llvm::initializeCoroutines(PassRegistry &registry) {
@@ -239,31 +249,9 @@ void llvm::initializeCoroutines(PassRegistry &registry) {
   initializeCoroSplitPass(registry);
 }
 
-#if 0
-CoroBeginInst* CoroCommon::findCoroBegin(Function* F, Phase P, bool Match) {
-  if (!F->hasFnAttribute(Attribute::Coroutine))
-    return nullptr;
-
-  for (Instruction& I : instructions(*F))
-    if (auto CI = dyn_cast<CoroInitInst>(&I)) {
-      auto Phase = CI->meta().getPhase();
-      if (Match) {
-        if (Phase == P)
-          return CI;
-        continue;
-      }
-      if (Phase != P)
-        return CI;
-    }
-
-  return nullptr;
-}
-#endif
-
-// Move the code below to CoroPasses.cpp / CoroPasses.h
 static bool g_VerifyEach = true;
 
-static inline void addPass(legacy::PassManagerBase &PM, Pass *P) {
+static void addPass(legacy::PassManagerBase &PM, Pass *P) {
   // Add the pass to the pass manager...
   PM.add(P);
 
