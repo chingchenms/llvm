@@ -357,6 +357,8 @@ static bool simplifySuspendPoint(CoroSuspendInst* Suspend) {
 static void simplifySuspendPoints(CoroutineShape& Shape) {
   auto& S = Shape.CoroSuspend;
   unsigned I = 0, N = S.size();
+  if (N == 0)
+    return;
   for (;;) {
     if (simplifySuspendPoint(S[I])) {
       if (--N == I)
