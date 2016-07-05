@@ -18,11 +18,12 @@
 
 using namespace llvm;
 
-//CoroFrameInst * llvm::CoroFrameInst::Create(IRBuilder<>& Builder)
-//{
-//  Module* M = Builder.GetInsertBlock()->getModule();
-//  auto Fn = Intrinsic::getDeclaration(M, Intrinsic::experimental_coro_frame);
-//  auto Call = Builder.CreateCall(Fn);
-//  return cast<CoroFrameInst>(Call);
-//}
+CoroSubFnInst *llvm::CoroSubFnInst::Create(IRBuilder<> &Builder,
+                                           Value *FramePtr, uint8_t Index) {
+  Module* M = Builder.GetInsertBlock()->getModule();
+  auto Fn = Intrinsic::getDeclaration(M, Intrinsic::coro_subfn_addr);
+  SmallVector<Value*, 2> Args{ FramePtr, Builder.getInt8(Index) };
+  auto Call = Builder.CreateCall(Fn, Args);
+  return cast<CoroSubFnInst>(Call);
+}
 

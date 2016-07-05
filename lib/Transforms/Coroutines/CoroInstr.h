@@ -39,6 +39,9 @@ namespace llvm {
     }
     int getIndex() const { return getRawIndex()->getValue().getSExtValue(); }
 
+    static CoroSubFnInst *Create(IRBuilder<> &Builder, Value *FramePtr,
+                                 uint8_t Index);
+
     // Methods to support type inquiry through isa, cast, and dyn_cast:
     static inline bool classof(const IntrinsicInst *I) {
       return I->getIntrinsicID() == Intrinsic::coro_subfn_addr;
@@ -64,6 +67,10 @@ namespace llvm {
   class LLVM_LIBRARY_VISIBILITY CoroSaveInst : public IntrinsicInst {
     enum { kFinal };
   public:
+    bool isFinal() const {
+      return cast<Constant>(getArgOperand(kFinal))->isOneValue();
+    }
+
     // Methods to support type inquiry through isa, cast, and dyn_cast:
     static inline bool classof(const IntrinsicInst *I) {
       return I->getIntrinsicID() == Intrinsic::coro_save;
@@ -114,13 +121,10 @@ namespace llvm {
 
   /// This represents the llvm.coro.end instruction.
   class LLVM_LIBRARY_VISIBILITY CoroSuspendInst : public IntrinsicInst {
-    enum { kSave, kFallthrough };
+    enum { kSave };
   public:
     CoroSaveInst *getCoroSave() const {
       return cast<CoroSaveInst>(getArgOperand(kSave));
-    }
-    bool isFinal() const {
-      return cast<Constant>(getArgOperand(kFallthrough))->isOneValue();
     }
 
     // Methods to support type inquiry through isa, cast, and dyn_cast:
