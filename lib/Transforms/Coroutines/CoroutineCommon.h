@@ -58,6 +58,8 @@ struct LLVM_LIBRARY_VISIBILITY CoroutineShape {
   Instruction* FramePtr;
   AllocaInst* PromiseAlloca;
   BasicBlock* AllocaSpillBlock;
+  SwitchInst* ResumeSwitch;
+  bool HasFinalSuspend;
 
   template <class F> void reflect(F&& f);
 
@@ -70,23 +72,27 @@ private:
   void clear();
 };
 
-template <class F> void CoroutineShape::reflect(F&& f) {
-  f(CoroAlloc, "CoroAlloc");
-  f(CoroBegin, "CoroBegin");
-  f(CoroReturn, "CoroReturn");
-  f(CoroEnd, "CoroEnd");
+template <class F> void CoroutineShape::reflect(F&& Inspect) {
+#define CORO_SHAPE_REFLECT(Field) Inspect(Field, #Field)
+  CORO_SHAPE_REFLECT(CoroAlloc);
+  CORO_SHAPE_REFLECT(CoroBegin);
+  CORO_SHAPE_REFLECT(CoroReturn);
+  CORO_SHAPE_REFLECT(CoroEnd);
 
-  f(CoroSize, "CoroSize");
-  f(CoroFree, "CoroFree");
-  f(CoroFrame, "CoroFrame");
-  f(CoroSuspend, "CoroSuspend");
+  CORO_SHAPE_REFLECT(CoroSize);
+  CORO_SHAPE_REFLECT(CoroFree);
+  CORO_SHAPE_REFLECT(CoroFrame);
+  CORO_SHAPE_REFLECT(CoroSuspend);
 
-  f(Return, "Return");
+  CORO_SHAPE_REFLECT(Return);
 
-  f(FrameTy, "FrameTy");
-  f(FramePtr, "FramePtr");
-  f(PromiseAlloca, "PromiseAlloca");
-  f(AllocaSpillBlock, "AllocaSpillBlock");
+  CORO_SHAPE_REFLECT(FrameTy);
+  CORO_SHAPE_REFLECT(FramePtr);
+  CORO_SHAPE_REFLECT(PromiseAlloca);
+  CORO_SHAPE_REFLECT(AllocaSpillBlock);
+  CORO_SHAPE_REFLECT(HasFinalSuspend);
+  CORO_SHAPE_REFLECT(ResumeSwitch);
+#undef CORO_SHAPE_REFLECT
 }
 
 class CallGraph;

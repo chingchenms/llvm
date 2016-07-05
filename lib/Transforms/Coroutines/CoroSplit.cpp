@@ -30,7 +30,7 @@ using namespace llvm;
 
 #define DEBUG_TYPE "coro-split"
 
-BasicBlock* createResumeEntryBlock(Function& F, CoroutineShape& Shape) {
+static BasicBlock* createResumeEntryBlock(Function& F, CoroutineShape& Shape) {
   LLVMContext& C = F.getContext();
   auto NewEntry = BasicBlock::Create(C, "resume.entry", &F);
   auto UnreachBB = BasicBlock::Create(C, "UnreachBB", &F);
@@ -38,15 +38,14 @@ BasicBlock* createResumeEntryBlock(Function& F, CoroutineShape& Shape) {
   assert(&SuspendDestBB->front() == Shape.CoroReturn.back());
 
   IRBuilder<> Builder(NewEntry);
-//  auto vFramePtr = CoroFrameInst::Create(Builder);
   auto FramePtr = Shape.FramePtr;
   auto FrameTy = Shape.FrameTy;
   auto GepIndex =
       Builder.CreateConstInBoundsGEP2_32(FrameTy, FramePtr, 0, 2, "index.addr");
-  auto Index =
-    Builder.CreateLoad(GepIndex, "index");
+  auto Index = Builder.CreateLoad(GepIndex, "index");
   auto Switch =
       Builder.CreateSwitch(Index, UnreachBB, Shape.CoroSuspend.size());
+  Shape.ResumeSwitch = Switch;
 
   uint8_t SuspendIndex = -1;
   for (auto S: Shape.CoroSuspend) {
@@ -224,6 +223,14 @@ static CreateCloneResult createClone(Function &F, Twine Suffix,
   replaceCoroReturn(Shape.CoroReturn.back(), VMap);
   replaceCoroEnd(Shape.CoroEnd, VMap);
 
+  // In ResumeClone (FnIndex == 0), it is undefined behavior to resume from
+  // final suspend point, thus, we remove its case from the switch.
+  if (Shape.HasFinalSuspend && FnIndex == 0) {
+    auto Sw = cast<SwitchInst>(VMap[Shape.ResumeSwitch]);
+    Sw->removeCase(Sw->case_begin());
+  }
+  
+  // Store the address of this clone in the coroutine frame.
   Builder.SetInsertPoint(Shape.FramePtr->getNextNode());
   auto G = Builder.CreateConstInBoundsGEP2_32(Shape.FrameTy, Shape.FramePtr, 0,
     FnIndex, "fn.addr");

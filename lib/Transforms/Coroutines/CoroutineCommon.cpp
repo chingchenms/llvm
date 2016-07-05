@@ -151,17 +151,12 @@ struct ClearVisitor {
   template <typename Instr> void operator()(Instr *&I, StringRef) {
     I = nullptr;
   }
+  void operator()(bool &Value, StringRef) {
+    Value = false;
+  }
 };
 
-// TODO: make function object by hand so that we don't have to special case
-// scalars here and in the dump() function
-void llvm::CoroutineShape::clear() {
-  reflect(ClearVisitor{});
-  PromiseAlloca = nullptr;
-  FrameTy = nullptr;
-  FramePtr = nullptr;
-  AllocaSpillBlock = nullptr;
-}
+void llvm::CoroutineShape::clear() { reflect(ClearVisitor{}); }
 
 struct DumpVisitor {
   template <typename Container>
@@ -177,6 +172,9 @@ struct DumpVisitor {
   template <typename Instr> void operator()(Instr *I, StringRef Name) {
     dbgs() << Name << ":";
     I->dump();
+  }
+  void operator()(bool Value, StringRef Name) {
+    dbgs() << Name << ":" << (Value ? "true" : "false");
   }
 };
 
@@ -237,8 +235,10 @@ void llvm::CoroutineShape::buildFrom(Function &F) {
     "coroutine should have exactly one @llvm.coro.end(falthrough = true)");
 
   // Swap final suspend to be the first suspend point.
-  if (FinalSuspendIndex != -1)
+  if (FinalSuspendIndex != -1) {
     std::swap(CoroSuspend[0], CoroSuspend[FinalSuspendIndex]);
+    HasFinalSuspend = true;
+  }
 }
 
 void llvm::initializeCoroutines(PassRegistry &registry) {
