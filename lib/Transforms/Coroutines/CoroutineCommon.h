@@ -44,8 +44,7 @@ namespace CoroCommon {
 struct LLVM_LIBRARY_VISIBILITY CoroutineShape {
   TinyPtrVector<CoroAllocInst*> CoroAlloc;
   TinyPtrVector<CoroBeginInst*> CoroBegin;
-  TinyPtrVector<CoroReturnInst*> CoroReturn;
-  TinyPtrVector<CoroEndInst*> CoroEnd;
+  SmallVector<CoroEndInst*, 4> CoroEnd;
 
   SmallVector<CoroSizeInst*, 2> CoroSize;
   SmallVector<CoroFreeInst*, 2> CoroFree;
@@ -58,7 +57,7 @@ struct LLVM_LIBRARY_VISIBILITY CoroutineShape {
   Instruction* FramePtr;
   AllocaInst* PromiseAlloca;
   BasicBlock* AllocaSpillBlock;
-  SwitchInst* ResumeSwitch;
+  SwitchInst* ResumeSwitch;  
   bool HasFinalSuspend;
 
   template <class F> void reflect(F&& f);
@@ -76,7 +75,6 @@ template <class F> void CoroutineShape::reflect(F&& Inspect) {
 #define CORO_SHAPE_REFLECT(Field) Inspect(Field, #Field)
   CORO_SHAPE_REFLECT(CoroAlloc);
   CORO_SHAPE_REFLECT(CoroBegin);
-  CORO_SHAPE_REFLECT(CoroReturn);
   CORO_SHAPE_REFLECT(CoroEnd);
 
   CORO_SHAPE_REFLECT(CoroSize);
@@ -90,8 +88,8 @@ template <class F> void CoroutineShape::reflect(F&& Inspect) {
   CORO_SHAPE_REFLECT(FramePtr);
   CORO_SHAPE_REFLECT(PromiseAlloca);
   CORO_SHAPE_REFLECT(AllocaSpillBlock);
+  CORO_SHAPE_REFLECT(ResumeSwitch);  
   CORO_SHAPE_REFLECT(HasFinalSuspend);
-  CORO_SHAPE_REFLECT(ResumeSwitch);
 #undef CORO_SHAPE_REFLECT
 }
 

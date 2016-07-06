@@ -152,14 +152,12 @@ public:
     case Intrinsic::var_annotation:
     case Intrinsic::experimental_gc_result:
     case Intrinsic::experimental_gc_relocate:
-    case Intrinsic::experimental_coro_init:
-    case Intrinsic::experimental_coro_fork:
-    case Intrinsic::experimental_coro_frame:
-    case Intrinsic::experimental_coro_size:
-    case Intrinsic::experimental_coro_resume_end:
-    case Intrinsic::experimental_coro_elide:
-    case Intrinsic::experimental_coro_delete:
-    case Intrinsic::experimental_coro_suspend:
+    case Intrinsic::coro_alloc:
+    case Intrinsic::coro_begin:
+    case Intrinsic::coro_free:
+    case Intrinsic::coro_end:
+    case Intrinsic::coro_frame:
+    case Intrinsic::coro_size:
       // These intrinsics don't actually represent code after lowering.
       return TTI::TCC_Free;
     }

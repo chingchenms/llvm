@@ -182,7 +182,6 @@ void llvm::CoroutineShape::dump() { reflect(DumpVisitor{}); }
 
 void llvm::CoroutineShape::buildFrom(Function &F) {
   clear();
-  int FinalSuspendIndex = -1;
   for (Instruction& I : instructions(F)) {
     if (auto RI = dyn_cast<ReturnInst>(&I))
       Return.push_back(RI);
@@ -201,10 +200,13 @@ void llvm::CoroutineShape::buildFrom(Function &F) {
         break;
       case Intrinsic::coro_suspend:
         CoroSuspend.push_back(cast<CoroSuspendInst>(II));
-        if (CoroSuspend.back()->getCoroSave()->isFinal()) {
-          assert(FinalSuspendIndex == -1 &&
-                 "Only one suspend point can be marked as final");
-          FinalSuspendIndex = CoroSuspend.size() - 1;
+        if (CoroSuspend.back()->isFinal()) {
+          HasFinalSuspend = true;
+          if (CoroSuspend.size() > 1) {
+            assert(!CoroSuspend.front()->isFinal() &&
+                   "Only one suspend point can be marked as final");
+            std::swap(CoroSuspend.front(), CoroSuspend.back());
+          }
         }
         break;
       case Intrinsic::coro_begin: {
@@ -218,11 +220,15 @@ void llvm::CoroutineShape::buildFrom(Function &F) {
       case Intrinsic::coro_free:
         CoroFree.push_back(cast<CoroFreeInst>(II));
         break;
-      case Intrinsic::coro_return:
-        CoroReturn.push_back(cast<CoroReturnInst>(II));
-        break;
       case Intrinsic::coro_end:
         CoroEnd.push_back(cast<CoroEndInst>(II));
+        if (CoroEnd.back()->isFinal()) {
+          if (CoroEnd.size() > 1) {
+            assert(!CoroEnd.front()->isFinal() &&
+              "Only one suspend point can be marked as final");
+            std::swap(CoroEnd.front(), CoroEnd.back());
+          }
+        }
         break;
       }
     }
@@ -231,14 +237,6 @@ void llvm::CoroutineShape::buildFrom(Function &F) {
     "coroutine should have exactly one defining @llvm.coro.begin");
   assert(CoroAlloc.size() == 1 &&
     "coroutine should have exactly one @llvm.coro.alloc");
-  assert(CoroReturn.size() == 1 &&
-    "coroutine should have exactly one @llvm.coro.end(falthrough = true)");
-
-  // Swap final suspend to be the first suspend point.
-  if (FinalSuspendIndex != -1) {
-    std::swap(CoroSuspend[0], CoroSuspend[FinalSuspendIndex]);
-    HasFinalSuspend = true;
-  }
 }
 
 void llvm::initializeCoroutines(PassRegistry &registry) {

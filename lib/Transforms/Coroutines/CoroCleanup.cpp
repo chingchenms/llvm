@@ -36,7 +36,7 @@ static bool lowerRemainingCoroIntrinsics(Function& F) {
     IntrinsicInst* II = dyn_cast<IntrinsicInst>(&*IB++);
     if (!II)
       continue;
-    Value* ReplacementValue = nullptr;
+    Value *ReplacementValue = nullptr;
     if (auto CB = dyn_cast<CoroBeginInst>(II))
       ReplacementValue = CB->getMem();
     else if (auto CF = dyn_cast<CoroFreeInst>(II))
@@ -45,9 +45,7 @@ static bool lowerRemainingCoroIntrinsics(Function& F) {
       ReplacementValue =
           ConstantPointerNull::get(cast<PointerType>(CA->getType()));
     else if (isa<CoroEndInst>(II))
-      ;
-    else if (isa<CoroReturnInst>(II))
-      ;
+      ReplacementValue = nullptr;
     else
       continue;
 

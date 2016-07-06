@@ -34,7 +34,7 @@ using namespace llvm::CoroCommon;
 #define DEBUG_TYPE "coro-outline"
 
 static std::pair<Instruction*,Instruction*> getRetCode(CoroutineShape& S) {
-  auto NextNode = S.CoroReturn.back()->getNextNode();
+  auto NextNode = S.CoroEnd.front()->getNextNode();
   BasicBlock* EndBB = nullptr;
   if(NextNode->isTerminator()) {
     if (isa<ReturnInst>(NextNode))
@@ -79,7 +79,7 @@ void llvm::outlineCoroutineParts(Function &F, CallGraph &CG,
 
   SmallVector<Function *, 8> Funcs{Outline(".AllocPart", S.CoroAlloc.back(),
                                            S.CoroBegin.back()->getNextNode())};
-
+#if 0 // FIXME: outlining of End Parts
   for (CoroEndInst *CE : S.CoroEnd) {
     Value* FrameArg = CE->getFrameArg();
     if (isa<ConstantPointerNull>(FrameArg))
@@ -92,6 +92,7 @@ void llvm::outlineCoroutineParts(Function &F, CallGraph &CG,
     auto End = CE->getNextNode();
     Funcs.push_back(Outline(".FreePart", Start, End));
   }
+#endif
 
   {
     auto RC = getRetCode(S);

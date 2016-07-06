@@ -34,8 +34,8 @@ static BasicBlock* createResumeEntryBlock(Function& F, CoroutineShape& Shape) {
   LLVMContext& C = F.getContext();
   auto NewEntry = BasicBlock::Create(C, "resume.entry", &F);
   auto UnreachBB = BasicBlock::Create(C, "UnreachBB", &F);
-  auto SuspendDestBB = Shape.CoroReturn.back()->getParent();
-  assert(&SuspendDestBB->front() == Shape.CoroReturn.back());
+  auto SuspendDestBB = Shape.CoroEnd.front()->getParent();
+  assert(&SuspendDestBB->front() == Shape.CoroEnd.front());
 
   IRBuilder<> Builder(NewEntry);
   auto FramePtr = Shape.FramePtr;
@@ -145,7 +145,7 @@ static void replaceCoroReturn(IntrinsicInst *End, ValueToValueMapTy &VMap) {
 static void replaceCoroEnd(ArrayRef<CoroEndInst *> Ends,
                            ValueToValueMapTy &VMap) {
   for (auto E : Ends) {
-    if (!isa<ConstantPointerNull>(E->getFrameArg()))
+    if (E->isFinal())
       continue;
     auto NewE = cast<CoroEndInst>(VMap[E]);
     auto BB = NewE->getParent();
@@ -220,7 +220,7 @@ static CreateCloneResult createClone(Function &F, Twine Suffix,
   auto NewValue = Builder.getInt8(FnIndex);
   replaceAndRemove(Shape.CoroSuspend, NewValue, &VMap);
 
-  replaceCoroReturn(Shape.CoroReturn.back(), VMap);
+  replaceCoroReturn(Shape.CoroEnd.front(), VMap);
   replaceCoroEnd(Shape.CoroEnd, VMap);
 
   // In ResumeClone (FnIndex == 0), it is undefined behavior to resume from

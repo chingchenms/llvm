@@ -93,20 +93,6 @@ namespace llvm {
   };
 
   /// This represents the llvm.coro.free instruction.
-  class LLVM_LIBRARY_VISIBILITY CoroReturnInst : public IntrinsicInst {
-    enum { kEnd };
-  public:
-    Value *getEnd() const { return getArgOperand(kEnd); }
-    // Methods to support type inquiry through isa, cast, and dyn_cast:
-    static inline bool classof(const IntrinsicInst *I) {
-      return I->getIntrinsicID() == Intrinsic::coro_return;
-    }
-    static inline bool classof(const Value *V) {
-      return isa<IntrinsicInst>(V) && classof(cast<IntrinsicInst>(V));
-    }
-  };
-
-  /// This represents the llvm.coro.free instruction.
   class LLVM_LIBRARY_VISIBILITY CoroFreeInst : public IntrinsicInst {
     enum { kFrame };
   public:
@@ -126,6 +112,7 @@ namespace llvm {
     CoroSaveInst *getCoroSave() const {
       return cast<CoroSaveInst>(getArgOperand(kSave));
     }
+    bool isFinal() const { return getCoroSave()->isFinal(); }
 
     // Methods to support type inquiry through isa, cast, and dyn_cast:
     static inline bool classof(const IntrinsicInst *I) {
@@ -139,10 +126,6 @@ namespace llvm {
   /// This represents the llvm.coro.end instruction.
   class LLVM_LIBRARY_VISIBILITY CoroFrameInst : public IntrinsicInst {
   public:
-    static CoroFrameInst* Create(IRBuilder<>& Builder);
-//    static CoroFrameInst* Create(Instruction* InsertBefore);
-//    static CoroFrameInst* Create(BasicBlock* InsertAfter);
-
     // Methods to support type inquiry through isa, cast, and dyn_cast:
     static inline bool classof(const IntrinsicInst *I) {
       return I->getIntrinsicID() == Intrinsic::coro_frame;
@@ -154,16 +137,12 @@ namespace llvm {
 
   /// This represents the llvm.coro.end instruction.
   class LLVM_LIBRARY_VISIBILITY CoroEndInst : public IntrinsicInst {
-    enum { kFrame };//, kUnwind  };
+    enum { kUnwind  };
   public:
-    //bool isFallthrough() const { return !isUnwind(); }
-    //bool isUnwind() const {
-    //  return cast<Constant>(getArgOperand(kUnwind))->isOneValue();
-    //}
-    //void setUnwind(bool Value);
-    Value *getFrameArg() const { return getArgOperand(kFrame); }
-    static CoroEndInst *Create(Instruction *InsertBefore,
-                               Value *FreeAddr = nullptr);
+    bool isFinal() const { return !isUnwind(); }
+    bool isUnwind() const {
+      return cast<Constant>(getArgOperand(kUnwind))->isOneValue();
+    }
 
     // Methods to support type inquiry through isa, cast, and dyn_cast:
     static inline bool classof(const IntrinsicInst *I) {
