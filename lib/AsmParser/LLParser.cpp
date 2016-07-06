@@ -1099,6 +1099,7 @@ bool LLParser::ParseFnAttributeValuePairs(AttrBuilder &B,
     case lltok::kw_sanitize_memory:
       B.addAttribute(Attribute::SanitizeMemory); break;
     case lltok::kw_uwtable: B.addAttribute(Attribute::UWTable); break;
+    case lltok::kw_writeonly: B.addAttribute(Attribute::WriteOnly); break;
 
     // Error handling.
     case lltok::kw_inreg:
@@ -1395,6 +1396,7 @@ bool LLParser::ParseOptionalParamAttrs(AttrBuilder &B) {
     case lltok::kw_sret:            B.addAttribute(Attribute::StructRet); break;
     case lltok::kw_swifterror:      B.addAttribute(Attribute::SwiftError); break;
     case lltok::kw_swiftself:       B.addAttribute(Attribute::SwiftSelf); break;
+    case lltok::kw_writeonly:       B.addAttribute(Attribute::WriteOnly); break;
     case lltok::kw_zeroext:         B.addAttribute(Attribute::ZExt); break;
 
     case lltok::kw_alignstack:

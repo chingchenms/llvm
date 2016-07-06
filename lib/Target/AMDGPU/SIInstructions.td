@@ -782,8 +782,8 @@ defm DS_XOR_B32 : DS_1A1D_NORET <0xb, "ds_xor_b32", VGPR_32>;
 defm DS_MSKOR_B32 : DS_1A2D_NORET <0xc, "ds_mskor_b32", VGPR_32>;
 let mayLoad = 0 in {
 defm DS_WRITE_B32 : DS_1A1D_NORET <0xd, "ds_write_b32", VGPR_32>;
-defm DS_WRITE2_B32 : DS_1A1D_Off8_NORET <0xe, "ds_write2_b32", VGPR_32>;
-defm DS_WRITE2ST64_B32 : DS_1A1D_Off8_NORET <0xf, "ds_write2st64_b32", VGPR_32>;
+defm DS_WRITE2_B32 : DS_1A2D_Off8_NORET <0xe, "ds_write2_b32", VGPR_32>;
+defm DS_WRITE2ST64_B32 : DS_1A2D_Off8_NORET <0xf, "ds_write2st64_b32", VGPR_32>;
 }
 defm DS_CMPST_B32 : DS_1A2D_NORET <0x10, "ds_cmpst_b32", VGPR_32>;
 defm DS_CMPST_F32 : DS_1A2D_NORET <0x11, "ds_cmpst_f32", VGPR_32>;
@@ -855,8 +855,8 @@ defm DS_XOR_B64 : DS_1A1D_NORET <0x4b, "ds_xor_b64", VReg_64>;
 defm DS_MSKOR_B64 : DS_1A2D_NORET <0x4c, "ds_mskor_b64", VReg_64>;
 let mayLoad = 0 in {
 defm DS_WRITE_B64 : DS_1A1D_NORET <0x4d, "ds_write_b64", VReg_64>;
-defm DS_WRITE2_B64 : DS_1A1D_Off8_NORET <0x4E, "ds_write2_b64", VReg_64>;
-defm DS_WRITE2ST64_B64 : DS_1A1D_Off8_NORET <0x4f, "ds_write2st64_b64", VReg_64>;
+defm DS_WRITE2_B64 : DS_1A2D_Off8_NORET <0x4E, "ds_write2_b64", VReg_64>;
+defm DS_WRITE2ST64_B64 : DS_1A2D_Off8_NORET <0x4f, "ds_write2st64_b64", VReg_64>;
 }
 defm DS_CMPST_B64 : DS_1A2D_NORET <0x50, "ds_cmpst_b64", VReg_64>;
 defm DS_CMPST_F64 : DS_1A2D_NORET <0x51, "ds_cmpst_f64", VReg_64>;
@@ -953,16 +953,16 @@ defm BUFFER_STORE_FORMAT_XYZW : MUBUF_Store_Helper <
   mubuf<0x07>, "buffer_store_format_xyzw", VReg_128
 >;
 defm BUFFER_LOAD_UBYTE : MUBUF_Load_Helper <
-  mubuf<0x08, 0x10>, "buffer_load_ubyte", VGPR_32, i32, az_extloadi8_global
+  mubuf<0x08, 0x10>, "buffer_load_ubyte", VGPR_32, i32, mubuf_az_extloadi8
 >;
 defm BUFFER_LOAD_SBYTE : MUBUF_Load_Helper <
-  mubuf<0x09, 0x11>, "buffer_load_sbyte", VGPR_32, i32, sextloadi8_global
+  mubuf<0x09, 0x11>, "buffer_load_sbyte", VGPR_32, i32, mubuf_sextloadi8
 >;
 defm BUFFER_LOAD_USHORT : MUBUF_Load_Helper <
-  mubuf<0x0a, 0x12>, "buffer_load_ushort", VGPR_32, i32, az_extloadi16_global
+  mubuf<0x0a, 0x12>, "buffer_load_ushort", VGPR_32, i32, mubuf_az_extloadi16
 >;
 defm BUFFER_LOAD_SSHORT : MUBUF_Load_Helper <
-  mubuf<0x0b, 0x13>, "buffer_load_sshort", VGPR_32, i32, sextloadi16_global
+  mubuf<0x0b, 0x13>, "buffer_load_sshort", VGPR_32, i32, mubuf_sextloadi16
 >;
 defm BUFFER_LOAD_DWORD : MUBUF_Load_Helper <
   mubuf<0x0c, 0x14>, "buffer_load_dword", VGPR_32, i32, mubuf_load

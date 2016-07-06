@@ -1735,7 +1735,7 @@ SDValue DAGCombiner::visitADD(SDNode *N) {
     return SDValue(N, 0);
 
   // fold (a+b) -> (a|b) iff a and b share no bits.
-  if ((!LegalOperations || TLI.isOperationLegalOrCustom(ISD::OR, VT)) &&
+  if ((!LegalOperations || TLI.isOperationLegal(ISD::OR, VT)) &&
       VT.isInteger() && !VT.isVector() && DAG.haveNoCommonBitsSet(N0, N1))
     return DAG.getNode(ISD::OR, SDLoc(N), VT, N0, N1);
 
@@ -3775,19 +3775,24 @@ SDValue DAGCombiner::visitOR(SDNode *N) {
           int M0 = SV0->getMaskElt(i);
           int M1 = SV1->getMaskElt(i);
 
-          // Both shuffle indexes are undef. Propagate Undef.
-          if (M0 < 0 && M1 < 0) {
+          // Determine if either index is pointing to a zero vector.
+          bool M0Zero = M0 < 0 || (ZeroN00 == (M0 < NumElts));
+          bool M1Zero = M1 < 0 || (ZeroN10 == (M1 < NumElts));
+
+          // If one element is zero and the otherside is undef, keep undef.
+          // This also handles the case that both are undef.
+          if ((M0Zero && M1 < 0) || (M1Zero && M0 < 0)) {
             Mask[i] = -1;
             continue;
           }
 
-          // Determine if either index is pointing to a zero vector.
-          bool M0Zero = M0 >= 0 && (ZeroN00 == (M0 < NumElts));
-          bool M1Zero = M1 >= 0 && (ZeroN10 == (M1 < NumElts));
+          // Make sure only one of the elements is zero.
           if (M0Zero == M1Zero) {
             CanFold = false;
             break;
           }
+
+          assert((M0 >= 0 || M1 >= 0) && "Undef index!");
 
           // We have a zero and non-zero element. If the non-zero came from
           // SV0 make the index a LHS index. If it came from SV1, make it
@@ -6440,7 +6445,7 @@ SDValue DAGCombiner::visitZERO_EXTEND(SDNode *N) {
       isa<LoadSDNode>(N0.getOperand(0)) &&
       N0.getOperand(1).getOpcode() == ISD::Constant &&
       TLI.isLoadExtLegal(ISD::ZEXTLOAD, VT, N0.getValueType()) &&
-      (!LegalOperations && TLI.isOperationLegalOrCustom(N0.getOpcode(), VT))) {
+      (!LegalOperations && TLI.isOperationLegal(N0.getOpcode(), VT))) {
     LoadSDNode *LN0 = cast<LoadSDNode>(N0.getOperand(0));
     if (LN0->getExtensionType() != ISD::SEXTLOAD && LN0->isUnindexed()) {
       bool DoXform = true;
@@ -12391,6 +12396,14 @@ SDValue DAGCombiner::visitEXTRACT_VECTOR_ELT(SDNode *N) {
     if (BCSrc.getValueType().isScalarInteger())
       return DAG.getNode(ISD::TRUNCATE, SDLoc(N), NVT, BCSrc);
   }
+
+  // extract_vector_elt (insert_vector_elt vec, val, idx), idx) -> val
+  //
+  // This only really matters if the index is non-constant since other combines
+  // on the constant elements already work.
+  if (InVec.getOpcode() == ISD::INSERT_VECTOR_ELT &&
+      EltNo == InVec.getOperand(2))
+    return InVec.getOperand(1);
 
   // Transform: (EXTRACT_VECTOR_ELT( VECTOR_SHUFFLE )) -> EXTRACT_VECTOR_ELT.
   // We only perform this optimization before the op legalization phase because

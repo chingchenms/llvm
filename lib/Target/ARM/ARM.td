@@ -132,6 +132,24 @@ def FeaturePreferVMOVSR : SubtargetFeature<"prefer-vmovsr", "PreferVMOVSR",
 def FeaturePrefISHSTBarrier : SubtargetFeature<"prefer-ishst", "PreferISHST",
                                            "true", "Prefer ISHST barriers">;
 
+// Some targets (e.g. Cortex-A9) have muxed AGU and NEON/FPU.
+def FeatureMuxedUnits : SubtargetFeature<"muxed-units", "HasMuxedUnits", "true",
+                                         "Has muxed AGU and NEON/FPU">;
+
+// On some targets, a VLDM/VSTM starting with an odd register number needs more
+// microops than single VLDRS.
+def FeatureSlowOddRegister : SubtargetFeature<"slow-odd-reg", "SlowOddRegister",
+                     "true", "VLDM/VSTM starting with an odd register is slow">;
+
+// Some targets have a renaming dependency when loading into D subregisters.
+def FeatureSlowLoadDSubreg : SubtargetFeature<"slow-load-D-subreg",
+                                              "SlowLoadDSubregister", "true",
+                                              "Loading into D subregs is slow">;
+// Some targets (e.g. Cortex-A15) never want VMOVS to be widened to VMOVD.
+def FeatureDontWidenVMOVS : SubtargetFeature<"dont-widen-vmovs",
+                                             "DontWidenVMOVS", "true",
+                                             "Don't widen VMOVS to VMOVD">;
+
 // Some targets (e.g. Cortex-A9) want to convert VMOVRS, VMOVSR and VMOVS from
 // VFP to NEON, as an execution domain optimization.
 def FeatureNEONForFPMovs : SubtargetFeature<"neon-fpmovs", "UseNEONForFPMovs",
@@ -578,6 +596,7 @@ def : ProcessorModel<"cortex-a9",   CortexA9Model,      [ARMv7a, ProcA9,
                                                          FeatureFP16,
                                                          FeatureAvoidPartialCPSR,
                                                          FeaturePreferVMOVSR,
+                                                         FeatureMuxedUnits,
                                                          FeatureNEONForFPMovs,
                                                          FeatureCheckVLDnAlign,
                                                          FeatureMP]>;
@@ -597,7 +616,9 @@ def : ProcessorModel<"cortex-a12",  CortexA9Model,      [ARMv7a, ProcA12,
 
 // FIXME: A15 has currently the same Schedule model as A9.
 def : ProcessorModel<"cortex-a15",  CortexA9Model,      [ARMv7a, ProcA15,
+                                                         FeatureDontWidenVMOVS,
                                                          FeatureHasRetAddrStack,
+                                                         FeatureMuxedUnits,
                                                          FeatureTrustZone,
                                                          FeatureT2XtPk,
                                                          FeatureVFP4,
@@ -626,6 +647,7 @@ def : ProcessorModel<"cortex-a17",  CortexA9Model,      [ARMv7a, ProcA17,
 //        division features.
 def : ProcessorModel<"krait",       CortexA9Model,      [ARMv7a, ProcKrait,
                                                          FeatureHasRetAddrStack,
+                                                         FeatureMuxedUnits,
                                                          FeatureCheckVLDnAlign,
                                                          FeatureVMLxForwarding,
                                                          FeatureT2XtPk,
@@ -648,6 +670,8 @@ def : ProcessorModel<"swift",       SwiftModel,         [ARMv7a, ProcSwift,
                                                          FeatureHasSlowFPVMLx,
                                                          FeatureProfUnpredicate,
                                                          FeaturePrefISHSTBarrier,
+                                                         FeatureSlowOddRegister,
+                                                         FeatureSlowLoadDSubreg,
                                                          FeatureSlowVGETLNi32,
                                                          FeatureSlowVDUP32]>;
 
