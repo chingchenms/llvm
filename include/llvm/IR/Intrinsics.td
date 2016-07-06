@@ -615,6 +615,7 @@ def int_coro_from_promise : Intrinsic<[llvm_ptr_ty], [llvm_anyptr_ty], [IntrRead
 
 def int_coro_subfn_addr : Intrinsic<[llvm_ptr_ty], [llvm_ptr_ty, llvm_i8_ty], [IntrReadMem]>;
 def int_coro_gep : Intrinsic<[llvm_anyptr_ty], [llvm_anyptr_ty, llvm_i32_ty], [IntrReadMem]>;
+def int_coro_param : Intrinsic<[llvm_i1_ty], [llvm_ptr_ty, llvm_ptr_ty], [IntrReadMem]>;
 ///===-------------------------- Other Intrinsics --------------------------===//
 //
 def int_flt_rounds : Intrinsic<[llvm_i32_ty]>,
