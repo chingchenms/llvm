@@ -308,7 +308,6 @@ static Instruction* insertSpills(SpillInfo &Spills,
       }
     }
 
-    // FIXME: rename user => User, same with def
     if (auto PN = dyn_cast<PHINode>(E.user())) {
       for (Use& U : PN->incoming_values())
         if (U.get() == CurrentValue) {
