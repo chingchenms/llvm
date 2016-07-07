@@ -16,6 +16,7 @@
 
 #include "llvm/ADT/Statistic.h"
 #include "llvm/IR/Module.h"
+#include "llvm/IR/IRBuilder.h"
 #include "llvm/Pass.h"
 #include <llvm/IR/InstIterator.h>
 #include "llvm/Support/Debug.h"
@@ -29,9 +30,27 @@ using namespace llvm;
 //STATISTIC(CoroResumeCounter, "Number of @llvm.coro.resume replaced");
 //STATISTIC(CoroDestroyCounter, "Number of @llvm.coro.destroy replaced");
 //STATISTIC(CoroDeleteCounter, "Number of @llvm.coro.delete replaced");
+static Value* lowerSubFn(IRBuilder<>& Builder, CoroSubFnInst* SubFn) {
+  Builder.SetInsertPoint(SubFn);
+  Value *FrameRaw = SubFn->getFrame();
+  int Index = SubFn->getIndex();
+
+// FIXME: this should be queried from FrameBuilding layer, not here
+  auto FrameTy = StructType::get(SubFn->getContext(), 
+      {Builder.getInt8PtrTy(), Builder.getInt8PtrTy()});
+  PointerType* FramePtrTy = FrameTy->getPointerTo();
+
+  Builder.SetInsertPoint(SubFn);
+  auto FramePtr = Builder.CreateBitCast(FrameRaw, FramePtrTy);
+  auto Gep = Builder.CreateConstInBoundsGEP2_32(FrameTy, FramePtr, 0, Index);
+  auto Load = Builder.CreateLoad(Gep);
+
+  return Load;
+}
 
 static bool lowerRemainingCoroIntrinsics(Function& F) {
   bool changed = false;
+  IRBuilder<> Builder(F.getContext());
   for (auto IB = inst_begin(F), IE = inst_end(F); IB != IE;) {
     IntrinsicInst* II = dyn_cast<IntrinsicInst>(&*IB++);
     if (!II)
@@ -44,6 +63,8 @@ static bool lowerRemainingCoroIntrinsics(Function& F) {
     else if (auto CA = dyn_cast<CoroAllocInst>(II))
       ReplacementValue =
           ConstantPointerNull::get(cast<PointerType>(CA->getType()));
+    else if (auto FN = dyn_cast<CoroSubFnInst>(II))
+      ReplacementValue = lowerSubFn(Builder, FN);
     else if (isa<CoroEndInst>(II))
       ReplacementValue = nullptr;
     else

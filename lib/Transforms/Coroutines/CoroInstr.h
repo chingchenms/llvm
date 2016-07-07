@@ -171,8 +171,11 @@ namespace llvm {
                  : cast<AllocaInst>(Arg->stripPointerCasts());
     }
     void clearPromise() {
+      Value* Arg = getArgOperand(kPromise);
       setArgOperand(kPromise, 
         ConstantPointerNull::get(Type::getInt8PtrTy(getContext())));
+      if (auto BC = dyn_cast<BitCastInst>(Arg))
+        BC->eraseFromParent();
     }
 
     ConstantInt *getAlignment() const {
