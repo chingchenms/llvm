@@ -211,8 +211,6 @@ struct CoroEarly : public FunctionPass {
 }
 
 char CoroEarly::ID = 0;
-INITIALIZE_PASS(
-    CoroEarly, "coro-early",
-    "Coroutine frame allocation elision and indirect calls replacement", false,
-    false)
+INITIALIZE_PASS(CoroEarly, "coro-early", "Lower early coroutine intrinsics",
+                false, false)
 Pass *llvm::createCoroEarlyPass() { return new CoroEarly(); }
