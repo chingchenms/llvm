@@ -18,6 +18,7 @@
 #include "llvm/Analysis/CallGraph.h"
 #include "llvm/Analysis/CallGraphSCCPass.h"
 #include "llvm/Transforms/IPO/PassManagerBuilder.h"
+#include "llvm/Transforms/IPO.h"
 #include "llvm/IR/LegacyPassManager.h"
 #include "llvm/Transforms/Coroutines.h"
 #include "llvm/Analysis/ConstantFolding.h"
@@ -260,23 +261,21 @@ static void addPass(legacy::PassManagerBase &PM, Pass *P) {
 
 static void addCoroutineOpt0Passes(const PassManagerBuilder &Builder,
                                    PassManagerBase &PM) {
-  // addPass(PM, createCoroEarlyPass());
-  // addPass(PM, createCoroSplitPass());
-  // addPass(PM, createCoroLatePass());
+  addPass(PM, createCoroEarlyPass());
+  addPass(PM, createCoroSplitPass());
+  addPass(PM, createCoroElidePass());
+
+  addPass(PM, createBarrierNoopPass());
+  addPass(PM, createCoroCleanupPass());
 }
 
 static void addCoroutineEarlyPasses(const PassManagerBuilder &Builder,
                                     PassManagerBase &PM) {
   addPass(PM, createCoroEarlyPass());
-  // addPass(PM, createCoroSplitPass());
-  // addPass(PM, createCoroLatePass());
 }
 
 static void addCoroutineModuleEarlyPasses(const PassManagerBuilder &Builder,
                                           PassManagerBase &PM) {
-  // addPass(PM, createCoroOutlinePass());
-  // addPass(PM, createCoroSplitPass());
-  // addPass(PM, createCoroLatePass());
 }
 
 static void addCoroutineScalarOptimizerPasses(const PassManagerBuilder &Builder,
@@ -286,10 +285,7 @@ static void addCoroutineScalarOptimizerPasses(const PassManagerBuilder &Builder,
 
 static void addCoroutineSCCPasses(const PassManagerBuilder &Builder,
                                   PassManagerBase &PM) {
-  if (Builder.OptLevel > 0) {
-    //addPass(PM, createCoroInlinePass());
-    addPass(PM, createCoroSplitPass());
-  }
+  addPass(PM, createCoroSplitPass());
 }
 
 static void addCoroutineOptimizerLastPasses(const PassManagerBuilder &Builder,
