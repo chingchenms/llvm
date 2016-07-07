@@ -274,6 +274,17 @@ static Instruction* insertSpills(SpillInfo &Spills,
   if (Shape.PromiseAlloca)
     Allocas.emplace_back(Shape.PromiseAlloca, 3);
 
+  auto CreateReload = [&](Instruction* InsertBefore) {
+    Builder.SetInsertPoint(InsertBefore);
+    auto G = Builder.CreateConstInBoundsGEP2_32(
+      FrameTy, FramePtr, 0, Index,
+      CurrentValue->getName() + Twine(".reload.addr"));
+    return isa<AllocaInst>(CurrentValue)
+      ? G
+      : Builder.CreateLoad(G, CurrentValue->getName() +
+        Twine(".reload"));
+  };
+
   for (auto const &E : Spills) {
     // if we have not seen the value, generate a spill
     if (CurrentValue != E.def()) {
@@ -296,23 +307,29 @@ static Instruction* insertSpills(SpillInfo &Spills,
         Builder.CreateStore(CurrentValue, G);
       }
     }
-    // if we have not seen this block, generate a reload
+
+    // FIXME: rename user => User, same with def
+    if (auto PN = dyn_cast<PHINode>(E.user())) {
+      for (Use& U : PN->incoming_values())
+        if (U.get() == CurrentValue) {
+          auto IncomingBlock = PN->getIncomingBlock(U);
+          U.set(CreateReload(IncomingBlock->getTerminator()));
+        }
+      continue;
+    }
+
+    // If we have not seen this block, generate a reload.
     if (CurrentBlock != E.userBlock()) {
       CurrentBlock = E.userBlock();
-      Builder.SetInsertPoint(CurrentBlock->getFirstNonPHIOrDbgOrLifetime());
-      auto G = Builder.CreateConstInBoundsGEP2_32(
-          FrameTy, FramePtr, 0, Index,
-          CurrentValue->getName() + Twine(".reload.addr"));
-      CurrentReload = isa<AllocaInst>(CurrentValue)
-                          ? G
-                          : Builder.CreateLoad(G, CurrentValue->getName() +
-                                                      Twine(".reload"));
+      CurrentReload =
+          CreateReload(CurrentBlock->getFirstNonPHIOrDbgOrLifetime());
     }
     // replace all uses of CurrentValue in the current instruction with reload
     for (Use& U : E.user()->operands())
       if (U.get() == CurrentValue)
         U.set(CurrentReload);
   }
+
   auto FramePtrBB = FramePtr->getParent();
   Shape.AllocaSpillBlock =
       FramePtrBB->splitBasicBlock(FramePtr->getNextNode(), "AllocaSpillBB");
@@ -379,6 +396,17 @@ static void rewriteMaterializableInstructions(IRBuilder<> &IRB,
   Instruction* CurrentMaterialization = nullptr;
   Instruction* CurrentDef = nullptr;
 
+  auto CloneInstruction = [&](Instruction* InsertPt) {
+    auto ClonedInst = cast<Instruction>(CurrentDef)->clone();
+    if (CurrentMaterialization)
+      ClonedInst->setName(CurrentMaterialization->getName());
+    else {
+      ClonedInst->takeName(CurrentDef);
+    }
+    ClonedInst->insertBefore(InsertPt);
+    CurrentMaterialization = ClonedInst;
+  };
+
   for (auto const &E : Spills) {
     if (CurrentDef != E.def()) {
       CurrentDef = cast<Instruction>(E.def());
@@ -386,18 +414,21 @@ static void rewriteMaterializableInstructions(IRBuilder<> &IRB,
       CurrentMaterialization = nullptr;
     }
 
+    // TODO: add test that exercises this pass
+    if (auto PN = dyn_cast<PHINode>(E.user())) {
+      for (Use& U : PN->incoming_values())
+        if (U.get() == CurrentDef) {
+          auto IncomingBlock = PN->getIncomingBlock(U);
+          CloneInstruction(IncomingBlock->getTerminator());
+          U.set(CurrentMaterialization);
+        }
+      continue;
+    }
+
     // if we have not seen this block, materialize the value
     if (CurrentBlock != E.userBlock()) {
       CurrentBlock = E.userBlock();
-      IRB.SetInsertPoint(CurrentBlock->getFirstNonPHIOrDbgOrLifetime());
-      auto ClonedInst = cast<Instruction>(CurrentDef)->clone();
-      if (CurrentMaterialization)
-        ClonedInst->setName(CurrentMaterialization->getName());
-      else {
-        ClonedInst->takeName(CurrentDef);
-      }
-      ClonedInst->insertBefore(E.user());
-      CurrentMaterialization = ClonedInst;
+      CloneInstruction(CurrentBlock->getFirstNonPHIOrDbgOrLifetime());      
     }
     // replace all uses of CurrentValue in the current instruction with reload
     for (Use& U : E.user()->operands())
