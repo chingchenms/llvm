@@ -47,7 +47,7 @@ static BasicBlock* createResumeEntryBlock(Function& F, CoroutineShape& Shape) {
       Builder.CreateSwitch(Index, UnreachBB, Shape.CoroSuspend.size());
   Shape.ResumeSwitch = Switch;
 
-  uint8_t SuspendIndex = -1;
+  int SuspendIndex = Shape.CoroSuspend.front()->isFinal() ? -2 : -1;
   for (auto S: Shape.CoroSuspend) {
     ++SuspendIndex;
     ConstantInt* IndexVal = Builder.getInt8(SuspendIndex);
@@ -55,9 +55,19 @@ static BasicBlock* createResumeEntryBlock(Function& F, CoroutineShape& Shape) {
     // replace CoroSave with a store to Index
     auto Save = S->getCoroSave();
     Builder.SetInsertPoint(Save);
-    auto GepIndex =
-      Builder.CreateConstInBoundsGEP2_32(FrameTy, FramePtr, 0, 2, "index.addr");
-    Builder.CreateStore(IndexVal, GepIndex);
+    if (SuspendIndex == -1) {
+      // final suspend point is represented by storing zero in ResumeFnAddr
+      auto GepIndex = Builder.CreateConstInBoundsGEP2_32(FrameTy, FramePtr, 0,
+        0, "ResumeFn.addr");
+      auto NullPtr = ConstantPointerNull::get(cast<PointerType>(
+          cast<PointerType>(GepIndex->getType())->getElementType()));
+      Builder.CreateStore(NullPtr, GepIndex);
+    }
+    else {
+      auto GepIndex = Builder.CreateConstInBoundsGEP2_32(FrameTy, FramePtr, 0,
+                                                         2, "index.addr");
+      Builder.CreateStore(IndexVal, GepIndex);
+    }
     Save->replaceAllUsesWith(ConstantTokenNone::get(C));
     Save->eraseFromParent();
 
@@ -67,8 +77,10 @@ static BasicBlock* createResumeEntryBlock(Function& F, CoroutineShape& Shape) {
     auto SuspendBB = S->getParent();
     Builder.SetInsertPoint(S);
     Builder.CreateBr(SuspendDestBB);
-    auto ResumeBB = SuspendBB->splitBasicBlock(
-        S, "resume." + Twine::utohexstr(SuspendIndex));
+    auto ResumeBB =
+        SuspendBB->splitBasicBlock(S, SuspendIndex < 0
+                                   ? Twine("resume.final")
+                                   : "resume." + Twine(SuspendIndex));
     SuspendBB->getTerminator()->eraseFromParent();
 
     Switch->addCase(IndexVal, ResumeBB);
@@ -167,6 +179,24 @@ static void replaceCoroEnd(ArrayRef<CoroEndInst *> Ends,
   }
 }
 
+static void handleFinalSuspend(IRBuilder<> &Builder, CoroutineShape &Shape,
+                               SwitchInst *Switch, bool IsDestroy) {
+  BasicBlock* ResumeBB = Switch->case_begin().getCaseSuccessor();
+  Switch->removeCase(Switch->case_begin());
+  if (IsDestroy) {
+    BasicBlock* OldSwitchBB = Switch->getParent();
+    auto NewSwitchBB = OldSwitchBB->splitBasicBlock(Switch, "Switch");
+    Builder.SetInsertPoint(OldSwitchBB->getTerminator());
+    auto GepIndex = Builder.CreateConstInBoundsGEP2_32(
+        Shape.FrameTy, Shape.FramePtr, 0, 0, "ResumeFn.addr");
+    auto Load = Builder.CreateLoad(GepIndex);
+    auto NullPtr = ConstantPointerNull::get(cast<PointerType>(Load->getType()));
+    auto Cond = Builder.CreateICmpEQ(Load, NullPtr);
+    Builder.CreateCondBr(Cond, ResumeBB, NewSwitchBB);
+    OldSwitchBB->getTerminator()->eraseFromParent();
+  }
+}
+
 struct CreateCloneResult {
   Function* const Fn;
   Value* const VFrame;
@@ -225,9 +255,10 @@ static CreateCloneResult createClone(Function &F, Twine Suffix,
 
   // In ResumeClone (FnIndex == 0), it is undefined behavior to resume from
   // final suspend point, thus, we remove its case from the switch.
-  if (Shape.HasFinalSuspend && FnIndex == 0) {
-    auto Sw = cast<SwitchInst>(VMap[Shape.ResumeSwitch]);
-    Sw->removeCase(Sw->case_begin());
+  if (Shape.HasFinalSuspend) {
+    auto Switch = cast<SwitchInst>(VMap[Shape.ResumeSwitch]);
+    bool IsDestroy = FnIndex != 0;
+    handleFinalSuspend(Builder, Shape, Switch, IsDestroy);
   }
   
   // Store the address of this clone in the coroutine frame.

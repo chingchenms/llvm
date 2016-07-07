@@ -101,7 +101,7 @@ void Lowerer::lowerResumeOrDestroy(IntrinsicInst* II, unsigned Index) {
 
 void Lowerer::lowerCoroDone(IntrinsicInst* II) {
   Value *Operand = II->getArgOperand(0);
-
+#if 0
 // FIXME: this should be queried from FrameBuilding layer, not here
   auto FrameTy = StructType::get(C, 
       {AnyResumeFnPtrTy, AnyResumeFnPtrTy, Int8Ty});
@@ -112,7 +112,18 @@ void Lowerer::lowerCoroDone(IntrinsicInst* II) {
   auto Gep = Builder.CreateConstInBoundsGEP2_32(FrameTy, BCI, 0, 2);
   auto Load = Builder.CreateLoad(Gep);
   auto Cond = Builder.CreateICmpEQ(Load, ConstantInt::get(Int8Ty, 0));
+#else
+  // FIXME: this should be queried from FrameBuilding layer, not here
+  auto FrameTy = Builder.getInt8PtrTy();
+  PointerType* FramePtrTy = FrameTy->getPointerTo();
 
+  Builder.SetInsertPoint(II);
+  auto BCI = Builder.CreateBitCast(Operand, FramePtrTy);
+  auto Gep = Builder.CreateConstInBoundsGEP1_32(FrameTy, BCI, 0);
+  auto Load = Builder.CreateLoad(Gep);
+  auto Cond = Builder.CreateICmpEQ(
+      Load, ConstantPointerNull::get(Builder.getInt8PtrTy()));
+#endif
   II->replaceAllUsesWith(Cond);
   II->eraseFromParent();
 }
