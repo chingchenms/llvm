@@ -29,46 +29,6 @@ using namespace llvm;
 
 #define DEBUG_TYPE "coro-early"
 
-// Need metadata helper
-//   Coroutine comes out of front end with !"" in place of the metadata
-// 
-// CoroEarly, will replace it with the tuple:
-//   (!func,!"",!"",!"")
-
-#if 0
-static void initMetadata(CoroInitInst& CoroInit, Function& F) {
-  if (auto S = dyn_cast<MDString>(CoroInit.getRawMeta())) {
-    assert(S->getLength() != 0 && "Unexpected metadata string on coro.init");
-    SmallVector<Metadata *, 4> Args{ValueAsMetadata::get(&F), S, S, S};
-    CoroInit.setMeta(MDNode::get(F.getContext(), Args));
-  }
-}
-#endif
-#if 0
-static void addBranchToCoroEnd(CoroutineShape &S, Function &F) {
-  S.buildFrom(F);
-  auto Zero = ConstantInt::get(S.CoroSuspend.back()->getType(), 0);
-  auto RetBB = S.CoroEndFinal.back()->getParent();
-  assert(isa<CoroEndInst>(RetBB->front()) &&
-         "coro.end must be a first instruction in a block");
-  for (CoroSuspendInst* CI : S.CoroSuspend) {
-    auto InsertPt = CI->getNextNode();
-    auto Cond =
-      new ICmpInst(InsertPt, CmpInst::Predicate::ICMP_SLT, CI, Zero);
-    SplitBlockAndInsertIfThen(Cond, InsertPt, /*unreachable=*/false);
-  }
-}
-#endif
-
-static void finalizeCoroutine(Function& F) {
-  CoroutineShape CoroShape(F);
-  F.addFnAttr(Attribute::Coroutine);
-
-  auto SuspendCount = CoroShape.CoroSuspend.size();
-  if (SuspendCount == 0)
-    return;
-}
-
 // Keeps data common to all lowering functions.
 struct Lowerer {
   Module& M;

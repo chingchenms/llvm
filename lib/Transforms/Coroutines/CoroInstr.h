@@ -171,11 +171,12 @@ namespace llvm {
       Value* Arg = getArgOperand(kPromise);
       setArgOperand(kPromise, 
         ConstantPointerNull::get(Type::getInt8PtrTy(getContext())));
-      if (auto BC = dyn_cast<BitCastInst>(Arg))
+      if (auto BC = dyn_cast<BitCastInst>(Arg)) {
         if (BC->use_empty())
           BC->eraseFromParent();
         else
           BC->moveBefore(getNextNode());
+      }
     }
 
     ConstantInt *getAlignment() const {
