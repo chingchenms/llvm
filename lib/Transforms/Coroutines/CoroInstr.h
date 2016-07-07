@@ -29,7 +29,7 @@
 
 namespace llvm {
 
-  /// This represents the llvm.coro.free instruction.
+  /// This represents the llvm.coro.subfn instruction.
   class LLVM_LIBRARY_VISIBILITY CoroSubFnInst : public IntrinsicInst {
     enum { kFrame, kIndex };
   public:
@@ -51,7 +51,7 @@ namespace llvm {
     }
   };
 
-  /// This represents the llvm.coro.free instruction.
+  /// This represents the llvm.coro.size instruction.
   class LLVM_LIBRARY_VISIBILITY CoroSizeInst : public IntrinsicInst {
   public:
     // Methods to support type inquiry through isa, cast, and dyn_cast:
@@ -63,24 +63,7 @@ namespace llvm {
     }
   };
 
-  /// This represents the llvm.coro.free instruction.
-  class LLVM_LIBRARY_VISIBILITY CoroSaveInst : public IntrinsicInst {
-    enum { kFinal };
-  public:
-    bool isFinal() const {
-      return cast<Constant>(getArgOperand(kFinal))->isOneValue();
-    }
-
-    // Methods to support type inquiry through isa, cast, and dyn_cast:
-    static inline bool classof(const IntrinsicInst *I) {
-      return I->getIntrinsicID() == Intrinsic::coro_save;
-    }
-    static inline bool classof(const Value *V) {
-      return isa<IntrinsicInst>(V) && classof(cast<IntrinsicInst>(V));
-    }
-  };
-
-  /// This represents the llvm.coro.free instruction.
+  /// This represents the llvm.coro.alloc instruction.
   class LLVM_LIBRARY_VISIBILITY CoroAllocInst : public IntrinsicInst {
   public:
     // Methods to support type inquiry through isa, cast, and dyn_cast:
@@ -105,14 +88,28 @@ namespace llvm {
     }
   };
 
-  /// This represents the llvm.coro.end instruction.
+  /// This represents the llvm.coro.save instruction.
+  class LLVM_LIBRARY_VISIBILITY CoroSaveInst : public IntrinsicInst {
+  public:
+    // Methods to support type inquiry through isa, cast, and dyn_cast:
+    static inline bool classof(const IntrinsicInst *I) {
+      return I->getIntrinsicID() == Intrinsic::coro_save;
+    }
+    static inline bool classof(const Value *V) {
+      return isa<IntrinsicInst>(V) && classof(cast<IntrinsicInst>(V));
+    }
+  };
+
+  /// This represents the llvm.coro.suspend instruction.
   class LLVM_LIBRARY_VISIBILITY CoroSuspendInst : public IntrinsicInst {
-    enum { kSave };
+    enum { kSave, kFinal };
   public:
     CoroSaveInst *getCoroSave() const {
       return cast<CoroSaveInst>(getArgOperand(kSave));
     }
-    bool isFinal() const { return getCoroSave()->isFinal(); }
+    bool isFinal() const {
+      return cast<Constant>(getArgOperand(kFinal))->isOneValue();
+    }
 
     // Methods to support type inquiry through isa, cast, and dyn_cast:
     static inline bool classof(const IntrinsicInst *I) {
@@ -123,7 +120,7 @@ namespace llvm {
     }
   };
 
-  /// This represents the llvm.coro.end instruction.
+  /// This represents the llvm.coro.frame instruction.
   class LLVM_LIBRARY_VISIBILITY CoroFrameInst : public IntrinsicInst {
   public:
     // Methods to support type inquiry through isa, cast, and dyn_cast:
@@ -153,7 +150,7 @@ namespace llvm {
     }
   };
 
-  /// This represents the llvm.coro.init instruction.
+  /// This represents the llvm.coro.begin instruction.
   class LLVM_LIBRARY_VISIBILITY CoroBeginInst : public IntrinsicInst {
     enum { kMem, kAlloc, kAlign, kPromise, kInfo };
   public:
