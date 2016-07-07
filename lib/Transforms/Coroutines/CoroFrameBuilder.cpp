@@ -33,7 +33,10 @@
 #include <llvm/Transforms/Utils/BasicBlockUtils.h>
 #include "llvm/IR/CFG.h"
 
-#define DEBUG_TYPE "coro-frame"
+// coro-suspend-crossing is very noisy
+// there is another debug type defined later on which
+// is much nicer, called "coro-frame"
+#define DEBUG_TYPE "coro-suspend-crossing"
 
 using namespace llvm;
 using namespace llvm::CoroCommon;
@@ -207,6 +210,9 @@ SuspendCrossingInfo::SuspendCrossingInfo(Function &F, CoroutineShape &Shape)
   DEBUG(dump());
 }
 
+#undef DEBUG_TYPE // "coro-suspend-crossing"
+#define DEBUG_TYPE "coro-frame"
+
 // Split above and below a particular instruction so that it
 // is all alone by itself.
 static void splitAround(Instruction *I, const Twine &Name) {
@@ -231,6 +237,18 @@ struct Spill : std::pair<Value*, Instruction*> {
 };
 
 using SpillInfo = SmallVector<Spill, 8>;
+
+static void dump(StringRef Title, SpillInfo const& Spills) {
+  dbgs() << "------------- " << Title << "--------------\n";
+  Value* CurrentValue = nullptr;
+  for (auto const &E : Spills) {
+    if (CurrentValue != E.def()) {
+      CurrentValue = E.def();
+      CurrentValue->dump();
+    }
+    dbgs() << "   user: "; E.user()->dump();
+  }
+}
 
 static Instruction* insertSpills(SpillInfo &Spills,
                          CoroutineShape &Shape) {
@@ -388,9 +406,29 @@ static void rewriteMaterializableInstructions(IRBuilder<> &IRB,
   }
 }
 
-void llvm::buildCoroutineFrame(Function &F, CoroutineShape& Shape) {
-  DEBUG(dbgs() << "entering buildCoroutineFrame\n");
+static void sortAndSplitPhiEdges(StringRef Label, SpillInfo& Spills) {
+  std::sort(Spills.begin(), Spills.end());
+  DEBUG(dump("Materializations", Spills));
 
+  // Split PhiNodes, so that we have a place to insert spills for the values
+  // on incoming edges.
+  SmallVector<std::pair<BasicBlock*, BasicBlock*>, 16> PhiEdges;
+  for (auto const &E : Spills)
+    if (auto PN = dyn_cast<PHINode>(E.user()))
+      for (Use &U : PN->incoming_values())
+        PhiEdges.emplace_back(PN->getIncomingBlock(U), PN->getParent());
+
+  std::sort(PhiEdges.begin(), PhiEdges.end());
+  PhiEdges.erase(std::unique(PhiEdges.begin(), PhiEdges.end()), PhiEdges.end());
+
+  for (auto const& P : PhiEdges) {
+    DEBUG(dbgs() << "Splitting Phi Edge incoming from " <<
+      P.first->getName() << " to " << P.second->getName() << "\n");
+    SplitEdge(P.first, P.second);
+  }
+}
+
+void llvm::buildCoroutineFrame(Function &F, CoroutineShape& Shape) {
   Shape.PromiseAlloca = Shape.CoroBegin.back()->getPromise();
   if (Shape.PromiseAlloca) {
     Shape.CoroBegin.back()->clearPromise();
@@ -417,7 +455,7 @@ void llvm::buildCoroutineFrame(Function &F, CoroutineShape& Shape) {
   IRBuilder<> Builder(F.getContext());
 
   // Rewrite materializable instructions to be materialized at the use point.
-  std::sort(Spills.begin(), Spills.end());
+  sortAndSplitPhiEdges("Materializations", Spills);
   rewriteMaterializableInstructions(Builder, Spills);
   Spills.clear();
 
@@ -442,8 +480,7 @@ void llvm::buildCoroutineFrame(Function &F, CoroutineShape& Shape) {
       }
   }
 
-  std::sort(Spills.begin(), Spills.end());
-
-  Shape.FrameTy = buildFrameType(F, Shape, Spills);  
+  sortAndSplitPhiEdges("Spills", Spills);
+  Shape.FrameTy = buildFrameType(F, Shape, Spills);
   Shape.FramePtr = insertSpills(Spills, Shape);
 }
