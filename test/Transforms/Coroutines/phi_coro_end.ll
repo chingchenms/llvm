@@ -1,41 +1,32 @@
-; First example from Doc/Coroutines.rst
-; RUN: opt < %s -O3 -S | FileCheck %s
+; Verify that we correctly handle suspend when the coro.end node contains phi
+; RUN: opt < %s -O2 -S | FileCheck %s
 
 define i8* @f(i32 %n) coroutine {
 entry:
-  %size = call i32 @llvm.coro.size.i32(i8* null)
-  %alloc = call i8* @malloc(i32 %size)
-  %hdl = call i8* @llvm.coro.begin(i8* %alloc, i8* null, i32 0, i8* null, i8* null)
-  br label %loop
-
-loop:
-  %n.val = phi i32 [ %n, %entry ], [ %inc, %resume ]
-  call void @print(i32 %n.val)
+  %hdl = call i8* @llvm.coro.begin(i8* null, i8* null, i32 0, i8* null, i8* null)
   %0 = call i8 @llvm.coro.suspend(token none, i1 false)
-  switch i8 %0, label %suspend [i8 0, label %resume i8 1, label %cleanup]
-resume:
-  %inc = add i32 %n.val, 1
-  br label %loop
+  switch i8 %0, label %suspend [i8 0, label %cleanup i8 1, label %cleanup]
 
 cleanup:
   %mem = call i8* @llvm.coro.free(i8* %hdl)
   call void @free(i8* %mem)
   br label %suspend
+
 suspend:
-  call void @llvm.coro.end(i1 0)  
+  %r = phi i32 [%n, %entry], [1, %cleanup]
+  call void @llvm.coro.end(i1 false)  
+  call void @print(i32 %r)
   ret i8* %hdl
 }
 
 ; CHECK-LABEL: @main
 define i32 @main() {
 entry:
+;CHECK:      call void @print(i32 4)
+;CHECK-NEXT: call void @free(i8* null)
+;CHECK-NEXT: ret i32 0
   %hdl = call i8* @f(i32 4)
   call void @llvm.coro.resume(i8* %hdl)
-  call void @llvm.coro.resume(i8* %hdl)
-  call void @llvm.coro.destroy(i8* %hdl)
-; CHECK: call void @print(i32 4)
-; CHECK: call void @print(i32 5)
-; CHECK: call void @print(i32 6)
   ret i32 0
 }
 
