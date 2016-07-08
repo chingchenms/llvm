@@ -46,8 +46,12 @@ static BasicBlock* createResumeEntryBlock(Function& F, CoroutineShape& Shape) {
   auto Switch =
       Builder.CreateSwitch(Index, UnreachBB, Shape.CoroSuspend.size());
   Shape.ResumeSwitch = Switch;
-
+ 
+#if CORO_USE_INDEX_FOR_DONE
+  int SuspendIndex = -1;
+#else
   int SuspendIndex = Shape.CoroSuspend.front()->isFinal() ? -2 : -1;
+#endif;
   for (auto S: Shape.CoroSuspend) {
     ++SuspendIndex;
     ConstantInt* IndexVal = Builder.getInt8(SuspendIndex);
@@ -181,6 +185,10 @@ static void replaceCoroEnd(ArrayRef<CoroEndInst *> Ends,
 
 static void handleFinalSuspend(IRBuilder<> &Builder, CoroutineShape &Shape,
                                SwitchInst *Switch, bool IsDestroy) {
+#if CORO_USE_INDEX_FOR_DONE
+  if (!IsDestroy)
+    Switch->removeCase(Switch->case_begin());
+#else
   BasicBlock* ResumeBB = Switch->case_begin().getCaseSuccessor();
   Switch->removeCase(Switch->case_begin());
   if (IsDestroy) {
@@ -195,6 +203,7 @@ static void handleFinalSuspend(IRBuilder<> &Builder, CoroutineShape &Shape,
     Builder.CreateCondBr(Cond, ResumeBB, NewSwitchBB);
     OldSwitchBB->getTerminator()->eraseFromParent();
   }
+#endif
 }
 
 struct CreateCloneResult {
@@ -225,6 +234,8 @@ static CreateCloneResult createClone(Function &F, Twine Suffix,
     VMap[&A] = UndefValue::get(A.getType());
 
   CloneFunctionInto(NewF, &F, VMap, true, Returns);
+  NewF->removeAttribute(0, Attribute::NoAlias);
+  NewF->removeAttribute(0, Attribute::NonNull);
 
   // remap frame pointer
   Argument* NewFramePtr = &NewF->getArgumentList().front();

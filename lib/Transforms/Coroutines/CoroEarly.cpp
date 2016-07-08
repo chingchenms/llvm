@@ -101,7 +101,7 @@ void Lowerer::lowerResumeOrDestroy(IntrinsicInst* II, unsigned Index) {
 
 void Lowerer::lowerCoroDone(IntrinsicInst* II) {
   Value *Operand = II->getArgOperand(0);
-#if 0
+#if CORO_USE_INDEX_FOR_DONE
 // FIXME: this should be queried from FrameBuilding layer, not here
   auto FrameTy = StructType::get(C, 
       {AnyResumeFnPtrTy, AnyResumeFnPtrTy, Int8Ty});

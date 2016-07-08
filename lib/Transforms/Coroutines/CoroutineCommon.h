@@ -23,6 +23,8 @@
 #include <llvm/ADT/ArrayRef.h>
 #include <llvm/PassRegistry.h>
 
+#define CORO_USE_INDEX_FOR_DONE 0
+
 namespace llvm {
 
 class Function;
