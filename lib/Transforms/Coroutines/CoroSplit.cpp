@@ -52,7 +52,7 @@ static BasicBlock* createResumeEntryBlock(Function& F, CoroutineShape& Shape) {
   int SuspendIndex = -1;
 #else
   int SuspendIndex = Shape.CoroSuspend.front()->isFinal() ? -2 : -1;
-#endif;
+#endif
   for (auto S: Shape.CoroSuspend) {
     ++SuspendIndex;
     ConstantInt* IndexVal = Builder.getInt8(SuspendIndex);
