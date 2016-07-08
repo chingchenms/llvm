@@ -19,6 +19,7 @@
 #include <llvm/IR/Dominators.h>
 #include <llvm/IR/LegacyPassManagers.h>
 #include <llvm/IR/LegacyPassManager.h>
+#include <llvm/IR/Verifier.h>
 
 #include <llvm/ADT/SmallVector.h>
 #include <llvm/IR/Function.h>
@@ -112,6 +113,7 @@ static void preSplitCleanup(Function& F) {
 static void postSplitCleanup(Function& F) {
   llvm::legacy::FunctionPassManager FPM(F.getParent());
 
+  FPM.add(createVerifierPass());
   FPM.add(createSCCPPass());
   FPM.add(createCFGSimplificationPass());
   //FPM.add(createSROAPass());
@@ -148,7 +150,7 @@ static void replaceAndRemove(T const &C, Value *NewValue,
   replaceAndRemove(toArrayRef(C), NewValue, VMap);
 }
 
-static void replaceCoroReturn(IntrinsicInst *End, ValueToValueMapTy &VMap) {
+static void replaceFinalCoroEnd(IntrinsicInst *End, ValueToValueMapTy &VMap) {
   auto NewE = cast<IntrinsicInst>(VMap[End]);
   ReturnInst::Create(NewE->getContext(), nullptr, NewE);
 
@@ -158,8 +160,8 @@ static void replaceCoroReturn(IntrinsicInst *End, ValueToValueMapTy &VMap) {
   BB->getTerminator()->eraseFromParent();
 }
 
-static void replaceCoroEnd(ArrayRef<CoroEndInst *> Ends,
-                           ValueToValueMapTy &VMap) {
+static void replaceUnwindCoroEnds(ArrayRef<CoroEndInst *> Ends,
+                                  ValueToValueMapTy &VMap) {
   for (auto E : Ends) {
     if (E->isFinal())
       continue;
@@ -183,8 +185,9 @@ static void replaceCoroEnd(ArrayRef<CoroEndInst *> Ends,
   }
 }
 
-static void handleFinalSuspend(IRBuilder<> &Builder, CoroutineShape &Shape,
-                               SwitchInst *Switch, bool IsDestroy) {
+static void handleFinalSuspend(IRBuilder<> &Builder, Value *FramePtr,
+                               CoroutineShape &Shape, SwitchInst *Switch,
+                               bool IsDestroy) {
 #if CORO_USE_INDEX_FOR_DONE
   if (!IsDestroy)
     Switch->removeCase(Switch->case_begin());
@@ -195,8 +198,8 @@ static void handleFinalSuspend(IRBuilder<> &Builder, CoroutineShape &Shape,
     BasicBlock* OldSwitchBB = Switch->getParent();
     auto NewSwitchBB = OldSwitchBB->splitBasicBlock(Switch, "Switch");
     Builder.SetInsertPoint(OldSwitchBB->getTerminator());
-    auto GepIndex = Builder.CreateConstInBoundsGEP2_32(
-        Shape.FrameTy, Shape.FramePtr, 0, 0, "ResumeFn.addr");
+    auto GepIndex = Builder.CreateConstInBoundsGEP2_32(Shape.FrameTy, FramePtr,
+                                                       0, 0, "ResumeFn.addr");
     auto Load = Builder.CreateLoad(GepIndex);
     auto NullPtr = ConstantPointerNull::get(cast<PointerType>(Load->getType()));
     auto Cond = Builder.CreateICmpEQ(Load, NullPtr);
@@ -225,53 +228,71 @@ static CreateCloneResult createClone(Function &F, Twine Suffix,
   NewF->addAttribute(1, Attribute::NonNull);
   NewF->addAttribute(1, Attribute::NoAlias);
 
-  SmallVector<ReturnInst*, 4> Returns;
-
   ValueToValueMapTy VMap;
-
   // replace all args with undefs
   for (Argument& A : F.getArgumentList())
     VMap[&A] = UndefValue::get(A.getType());
 
-  CloneFunctionInto(NewF, &F, VMap, true, Returns);
-  NewF->removeAttribute(0, Attribute::NoAlias);
-  NewF->removeAttribute(0, Attribute::NonNull);
+  SmallVector<ReturnInst*, 4> Returns;
 
-  // remap frame pointer
+  CloneFunctionInto(NewF, &F, VMap, true, Returns);
+
+  LLVMContext& C = NewF->getContext();
+
+  // Remove old returns
+  for (ReturnInst* Return: Returns) {
+    new UnreachableInst(C, Return);
+    Return->eraseFromParent();
+  }
+
+  // Remove old return attributes.
+  NewF->removeAttributes(
+    AttributeSet::ReturnIndex,
+    AttributeSet::get(NewF->getContext(), AttributeSet::ReturnIndex,
+      AttributeFuncs::typeIncompatible(NewF->getReturnType())));
+
+  // Make AllocaSpillBlock the new entry block
+  auto SwitchBB = cast<BasicBlock>(VMap[ResumeEntry]);
+  auto Entry = cast<BasicBlock>(VMap[Shape.AllocaSpillBlock]);
+  Entry->moveBefore(&NewF->getEntryBlock());
+  Entry->getTerminator()->eraseFromParent();
+  BranchInst::Create(SwitchBB, Entry);
+  Entry->setName("entry" + Suffix);
+
+  // Clear all predecessors of the new entry block. 
+  auto Switch = cast<SwitchInst>(VMap[Shape.ResumeSwitch]);
+  Entry->replaceAllUsesWith(Switch->getDefaultDest());
+
+  IRBuilder<> Builder(&NewF->getEntryBlock().front());
+
+  // Remap frame pointer.
   Argument* NewFramePtr = &NewF->getArgumentList().front();
   Value* OldFramePtr = cast<Value>(VMap[Shape.FramePtr]);
   NewFramePtr->takeName(OldFramePtr);
   OldFramePtr->replaceAllUsesWith(NewFramePtr);
 
-  auto Entry = cast<BasicBlock>(VMap[ResumeEntry]);
-  auto SpillBB = cast<BasicBlock>(VMap[Shape.AllocaSpillBlock]);
-  SpillBB->moveBefore(&NewF->getEntryBlock());
-  SpillBB->getTerminator()->eraseFromParent();
-  BranchInst::Create(Entry, SpillBB);
-  Entry = SpillBB;
-
-  IRBuilder<> Builder(&Entry->front());
-
-  // remap vFrame
+  // Remap vFrame pointer.
   auto NewVFrame = Builder.CreateBitCast(
-      NewFramePtr, Type::getInt8PtrTy(Builder.getContext()), "vFrame");
+    NewFramePtr, Type::getInt8PtrTy(Builder.getContext()), "vFrame");
   Value* OldVFrame = cast<Value>(VMap[Shape.CoroBegin.back()]);
   OldVFrame->replaceAllUsesWith(NewVFrame);
-
-  auto NewValue = Builder.getInt8(FnIndex);
-  replaceAndRemove(Shape.CoroSuspend, NewValue, &VMap);
-
-  replaceCoroReturn(Shape.CoroEnd.front(), VMap);
-  replaceCoroEnd(Shape.CoroEnd, VMap);
 
   // In ResumeClone (FnIndex == 0), it is undefined behavior to resume from
   // final suspend point, thus, we remove its case from the switch.
   if (Shape.HasFinalSuspend) {
     auto Switch = cast<SwitchInst>(VMap[Shape.ResumeSwitch]);
     bool IsDestroy = FnIndex != 0;
-    handleFinalSuspend(Builder, Shape, Switch, IsDestroy);
+    handleFinalSuspend(Builder, NewFramePtr, Shape, Switch, IsDestroy);
   }
-  
+
+  // Replace coro suspend with the appropriate resume index. 
+  auto NewValue = Builder.getInt8(FnIndex);
+  replaceAndRemove(Shape.CoroSuspend, NewValue, &VMap);
+
+  // Remove coro.end intrinsics.
+  replaceFinalCoroEnd(Shape.CoroEnd.front(), VMap);
+  replaceUnwindCoroEnds(Shape.CoroEnd, VMap);
+
   // Store the address of this clone in the coroutine frame.
   Builder.SetInsertPoint(Shape.FramePtr->getNextNode());
   auto G = Builder.CreateConstInBoundsGEP2_32(Shape.FrameTy, Shape.FramePtr, 0,
