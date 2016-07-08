@@ -35,8 +35,6 @@ static BasicBlock* createResumeEntryBlock(Function& F, CoroutineShape& Shape) {
   LLVMContext& C = F.getContext();
   auto NewEntry = BasicBlock::Create(C, "resume.entry", &F);
   auto UnreachBB = BasicBlock::Create(C, "UnreachBB", &F);
-  auto SuspendDestBB = Shape.CoroEnd.front()->getParent();
-  assert(&SuspendDestBB->front() == Shape.CoroEnd.front());
 
   IRBuilder<> Builder(NewEntry);
   auto FramePtr = Shape.FramePtr;
@@ -76,19 +74,25 @@ static BasicBlock* createResumeEntryBlock(Function& F, CoroutineShape& Shape) {
     Save->replaceAllUsesWith(ConstantTokenNone::get(C));
     Save->eraseFromParent();
 
-    // make sure that CoroSuspend is at the beginning of the block
-    // and add a branch to it from a switch
-
+    // Split block before and after coro.suspend and add a jump from an entry
+    // switch.
     auto SuspendBB = S->getParent();
-    Builder.SetInsertPoint(S);
-    Builder.CreateBr(SuspendDestBB);
     auto ResumeBB =
-        SuspendBB->splitBasicBlock(S, SuspendIndex < 0
-                                   ? Twine("resume.final")
-                                   : "resume." + Twine(SuspendIndex));
-    SuspendBB->getTerminator()->eraseFromParent();
-
+      SuspendBB->splitBasicBlock(S, SuspendIndex < 0
+        ? Twine("resume.final")
+        : "resume." + Twine(SuspendIndex));
+    auto LandingBB = ResumeBB->splitBasicBlock(
+        S->getNextNode(), SuspendBB->getName() + Twine(".landing"));
     Switch->addCase(IndexVal, ResumeBB);
+
+    // Make SuspendBB byPass ResumeBB and jump straight to LandingBB.
+    // Add a phi node, to provide -1 as the result of the coro.suspend we bypass
+    // during suspend.
+    cast<BranchInst>(SuspendBB->getTerminator())->setSuccessor(0, LandingBB);
+    auto PN = PHINode::Create(Builder.getInt8Ty(), 2, "", &LandingBB->front());
+    S->replaceAllUsesWith(PN);
+    PN->addIncoming(Builder.getInt8(-1), SuspendBB);
+    PN->addIncoming(S, ResumeBB);
   }
 
   Builder.SetInsertPoint(UnreachBB);
