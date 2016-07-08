@@ -65,6 +65,8 @@ static bool lowerRemainingCoroIntrinsics(Function& F) {
           ConstantPointerNull::get(cast<PointerType>(CA->getType()));
     else if (auto FN = dyn_cast<CoroSubFnInst>(II))
       ReplacementValue = lowerSubFn(Builder, FN);
+    else if (auto FN = dyn_cast<CoroSizeInst>(II))
+      ReplacementValue = UndefValue::get(II->getType());
     else if (isa<CoroEndInst>(II))
       ReplacementValue = nullptr;
     else

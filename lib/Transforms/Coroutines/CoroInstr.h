@@ -88,9 +88,13 @@ namespace llvm {
     }
   };
 
+  class LLVM_LIBRARY_VISIBILITY CoroSuspendInst;
+
   /// This represents the llvm.coro.save instruction.
   class LLVM_LIBRARY_VISIBILITY CoroSaveInst : public IntrinsicInst {
   public:
+    static CoroSaveInst *Create(CoroSuspendInst *);
+
     // Methods to support type inquiry through isa, cast, and dyn_cast:
     static inline bool classof(const IntrinsicInst *I) {
       return I->getIntrinsicID() == Intrinsic::coro_save;
@@ -105,7 +109,10 @@ namespace llvm {
     enum { kSave, kFinal };
   public:
     CoroSaveInst *getCoroSave() const {
-      return cast<CoroSaveInst>(getArgOperand(kSave));
+      if (auto SI = dyn_cast<CoroSaveInst>(getArgOperand(kSave)))
+        return SI;
+      assert(isa<ConstantTokenNone>(getArgOperand(kSave)));
+      return nullptr;
     }
     bool isFinal() const {
       return cast<Constant>(getArgOperand(kFinal))->isOneValue();

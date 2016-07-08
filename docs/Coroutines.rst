@@ -6,46 +6,50 @@ Coroutines in LLVM
    :local:
    :depth: 3
 
-Status
-======
+.. warning::
+  This is a work in progress. Compatibility across LLVM releases is not 
+  guaranteed.
 
-This document describes a set of experimental extensions to LLVM. Use
-with caution.  Because the intrinsics have experimental status,
-compatibility across LLVM releases is not guaranteed. These intrinsics
-are added to support C++ Coroutines (P0057_), though they are general enough 
-to be used to implement coroutines in other languages as well.
+.. Status
+.. ======
 
+.. This document describes a set of experimental extensions to LLVM. Use
+.. with caution.  Because the intrinsics have experimental status,
+.. compatibility across LLVM releases is not guaranteed. These intrinsics
+.. are added to support C++ Coroutines (P0057_), though they are general enough 
+.. to be used to implement coroutines in other languages as well.
 .. as to experiment with C++ coroutine alternatives other than P0057.
 
 .. _P0057: http://www.open-std.org/jtc1/sc22/wg21/docs/papers/2016/p0057r4.pdf
 
-Overview
-========
+Introduction
+============
 
 .. _coroutine handle:
 
 LLVM coroutines are functions that have one or more `suspend points`_. 
 When a suspend point is reached, the execution of a coroutine is suspended and
 control is returned back to its caller. A suspended coroutine can be resumed 
-to continue execution from the last suspend point or be destroyed. 
+to continue execution from the last suspend point or it can be destroyed. 
 
 ..  In the following example function `f` returns
     a handle to a suspended coroutine (**coroutine handle**) that can be passed to 
     `coro.resume`_ and `coro.destroy`_ intrinsics to resume and destroy the 
     coroutine respectively.
 
-In the following example, function `f` (which may or may not be a coroutine itself)
-returns a handle to a suspended coroutine (**coroutine handle**) that is used 
-by `main` to resume the coroutine twice and then destroy it:
+In the following example, we call function `f` (which may or may not be a 
+coroutine itself) that returns a handle to a suspended coroutine 
+(**coroutine handle**) that is used by `main` to resume the coroutine twice and
+then destroy it:
 
 .. code-block:: llvm
 
   define i32 @main() {
   entry:
     %hdl = call i8* @f(i32 4)
-    call void @llvm.experimental.coro.resume(i8* %hdl)
-    call void @llvm.experimental.coro.resume(i8* %hdl)
-    call void @llvm.experimental.coro.destroy(i8* %hdl)
+    call void @llvm.coro.resume(i8* %hdl)
+    call void @llvm.coro.resume(i8* %hdl)
+    call void @llvm.coro.destroy(i8* %hdl)
     ret i32 0
   }
 
@@ -68,10 +72,14 @@ coroutine:
    creates the coroutine frame and executes the coroutine code until it 
    encounters a suspend point or reaches the end of the function;
 
-2. a coroutine resume function that contains the code to be 
-   executed once the coroutine is resumed;
+2. a coroutine resume function that is invoked when the coroutine is resumed;
 
 3. a coroutine destroy function that is invoked when the coroutine is destroyed.
+
+.. note:: Splitting out resume and destroy functions are just one of the 
+   possible ways of lowering the coroutine. We chose it for initial 
+   implementation as it matches closely the mental model and results in 
+   reasonably nice code.
 
 ..
   This is not the only way of lowering the coroutine intrinsics. Another 
@@ -110,25 +118,25 @@ above starting with coroutine frame creation and destruction:
 
   define i8* @f(i32 %n) {
   entry:
-    %frame.size = call i32 @llvm.experimental.coro.size()
-    %alloc = call i8* @malloc(i32 %frame.size)
-    %frame = call i8* @llvm.experimental.coro.init(i8* %alloc, i32 0, i8* null, i8* null)
-    %first.return = call i1 @llvm.experimental.coro.fork()
-    br i1 %first.return, label %coro.return, label %coro.start
-  
-  coro.start:
-    ; ...
+    %size = call i32 @llvm.coro.size()
+    %alloc = call i8* @malloc(i32 %size)
+    %hdl = call i8* @llvm.coro.init(i8* %alloc, i8* null, i32 0, i8* null, i8* null)
+
+  loop:
+    %n.val = phi i32 [ %n, %entry ], [ %inc, %resume ]
+    call void @print(i32 %n.val)
+    %0 = call i8 @llvm.coro.suspend(token none, i1 false)
+    switch i8 %0, label %suspend [i8 0, label %resume i32 1, label %cleanup]
   resume:
-    ; ...
+    %inc = add i32 %n.val, 1
+    br label %coro.start
 
   cleanup:
-    %mem = call i8* @llvm.experimental.coro.delete(i8* %frame)
+    %mem = call i8* @llvm.coro.delete(i8* %hdl)
     call void @free(i8* %mem)
-    call void @llvm.experimental.coro.resume.end()  
-    br label %coro.return
-
-  coro.return:
-    ret i8* %frame
+  suspend:
+    call void @llvm.coro.end(i1 0)  
+    ret i8* %hdl
   }
 
 First three lines of `entry` block establish the coroutine frame. The
@@ -164,7 +172,7 @@ is straightforward:
   coro.start:
     %n.val = phi i32 [ %n, %entry ], [ %inc, %resume ]
     call void @yield(i32 %n.val)
-    %suspend = call i1 @llvm.experimental.coro.suspend(token none, i1 false)
+    %suspend = call i1 @llvm.coro.suspend(token none, i1 false)
     br i1 %suspend, label %resume, label %cleanup
 
   resume:
@@ -209,7 +217,7 @@ look like:
   define i8* @f(i32 %n) {
   entry:
     %alloc = call noalias i8* @malloc(i32 24)
-    %0 = call nonnull i8* @llvm.experimental.coro.init(i8* %alloc, i32 0, i8* null, i8* null)
+    %0 = call nonnull i8* @llvm.coro.init(i8* %alloc, i32 0, i8* null, i8* null)
     %frame = bitcast i8* %frame to %f.frame*
     %1 = getelementptr %f.frame, %f.frame* %frame, i32 0, i32 0
     store void (%f.frame*)* @f.resume, void (%f.frame*)** %1
@@ -270,18 +278,18 @@ an address of a coroutine frame on the caller's frame when possible and
 .. code-block:: llvm
 
   entry:
-    %elide = call i8* @llvm.experimental.coro.elide()
+    %elide = call i8* @llvm.coro.elide()
     %0 = icmp ne i8* %elide, null
     br i1 %0, label %coro.init, label %coro.alloc
 
   coro.alloc:
-    %frame.size = call i32 @llvm.experimental.coro.size()
+    %frame.size = call i32 @llvm.coro.size()
     %alloc = call i8* @malloc(i32 %frame.size)
     br label %coro.init
 
   coro.init:
     %phi = phi i8* [ %elide, %entry ], [ %alloc, %coro.alloc ]
-    %frame = call i8* @llvm.experimental.coro.init(i8* %phi, i32 0, i8* null, i8* null)
+    %frame = call i8* @llvm.coro.init(i8* %phi, i32 0, i8* null, i8* null)
 
 In the cleanup block, we will make freeing the coroutine frame conditional on
 `coro.delete`_ intrinsic. If allocation is elided, `coro.delete`_ returns `null`
@@ -290,7 +298,7 @@ thus skipping the deallocation code:
 .. code-block:: llvm
 
   cleanup:
-    %mem = call i8* @llvm.experimental.coro.delete(i8* %frame)
+    %mem = call i8* @llvm.coro.delete(i8* %frame)
     %tobool = icmp ne i8* %mem, null
     br i1 %tobool, label %if.then, label %if.end
 
@@ -299,7 +307,7 @@ thus skipping the deallocation code:
     br label %if.end
 
   if.end:
-    call void @llvm.experimental.coro.resume.end()
+    call void @llvm.coro.resume.end()
     br label %coro.return
 
 With allocations and deallocations described as above, after inlining and heap
@@ -340,14 +348,14 @@ as the code in the previous section):
   coro.start:
       %n.val = phi i32 [ %n, %coro.init ], [ %inc, %resume ]
       call void @yield(i32 %n.val)
-      %suspend1 = call i1 @llvm.experimental.coro.suspend(token none, i1 false)
+      %suspend1 = call i1 @llvm.coro.suspend(token none, i1 false)
       br i1 %suspend1, label %resume, label %cleanup
 
     resume:
       %inc = add i32 %n.val, 1
       %sub = sub nsw i32 0, %inc
       call void @yield(i32 %sub)
-      %suspend2 = call i1 @llvm.experimental.coro.suspend(token none, i1 false)
+      %suspend2 = call i1 @llvm.coro.suspend(token none, i1 false)
       br i1 %suspend2, label %coro.start, label %cleanup
 
 In this case, the coroutine frame would include a suspend index that will indicate
@@ -429,15 +437,15 @@ point when coroutine should be ready for resumption:
 .. code-block:: llvm
 
   if.true:
-    %save1 = call token @llvm.experimental.coro.save()
+    %save1 = call token @llvm.coro.save()
     call void async_op1(i8* %frame)
-    %suspend1 = call i1 @llvm.experimental.coro.suspend(token %save1, i1 false)
+    %suspend1 = call i1 @llvm.coro.suspend(token %save1, i1 false)
     br i1 %suspend1, label %resume1, label %cleanup
 
   if.false:
-    %save2 = call token @llvm.experimental.coro.save()
+    %save2 = call token @llvm.coro.save()
     call void async_op2(i8* %frame)
-    %suspend2 = call i1 @llvm.experimental.coro.suspend(token %save2, i1 false)
+    %suspend2 = call i1 @llvm.coro.suspend(token %save2, i1 false)
     br i1 %suspend2, label %resume2, label %cleanup
 
 .. _coroutine promise:
@@ -459,16 +467,16 @@ store the current value produced by a coroutine.
   entry:
     %promise = alloca i32
     %pv = bitcast i32* %promise to i8*
-    %frame.size = call i32 @llvm.experimental.coro.size()
+    %frame.size = call i32 @llvm.coro.size()
     %alloc = call noalias i8* @malloc(i32 %frame.size)
-    %frame = call i8* @llvm.experimental.coro.init(i8* %alloc, i32 0, i8* %pv, i8* null)
-    %first.return = call i1 @llvm.experimental.coro.fork()
+    %frame = call i8* @llvm.coro.init(i8* %alloc, i32 0, i8* %pv, i8* null)
+    %first.return = call i1 @llvm.coro.fork()
     br i1 %first.return, label %coro.return, label %coro.start
 
   coro.start:
     %n.val = phi i32 [ %n, %entry ], [ %inc, %resume ]
     store i32 %n.val, i32* %promise
-    %suspend = call i1 @llvm.experimental.coro.suspend2(token none, i1 false)
+    %suspend = call i1 @llvm.coro.suspend2(token none, i1 false)
     br i1 %suspend, label %resume, label %cleanup
 
   resume:
@@ -476,7 +484,7 @@ store the current value produced by a coroutine.
     br label %coro.start
 
   cleanup:
-    %mem = call i8* @llvm.experimental.coro.delete(i8* %frame)
+    %mem = call i8* @llvm.coro.delete(i8* %frame)
     call void @free(i8* %mem)
     br label %coro.return
 
@@ -492,16 +500,16 @@ coroutine promise.
   define i32 @main() {
   entry:
     %hdl = call i8* @f(i32 4)
-    %promise.addr = call i32* @llvm.experimental.coro.promise.p0i32(i8* %hdl)
+    %promise.addr = call i32* @llvm.coro.promise.p0i32(i8* %hdl)
     %val0 = load i32, i32* %promise.addr
     call void @yield(i32 %val0)
-    call void @llvm.experimental.coro.resume(i8* %hdl)
+    call void @llvm.coro.resume(i8* %hdl)
     %val1 = load i32, i32* %promise.addr
     call void @yield(i32 %val1)
-    call void @llvm.experimental.coro.resume(i8* %hdl)
+    call void @llvm.coro.resume(i8* %hdl)
     %val2 = load i32, i32* %promise.addr
     call void @yield(i32 %val2)
-    call void @llvm.experimental.coro.destroy(i8* %hdl)
+    call void @llvm.coro.destroy(i8* %hdl)
     ret i32 0
   }
 
@@ -543,13 +551,13 @@ destroyed:
     %coro = call i8* @g()
     br %while.cond
   while.cond:
-    %done = call i1 @llvm.experimental.coro.done(i8* %coro)
+    %done = call i1 @llvm.coro.done(i8* %coro)
     br i1 %done, label %while.end, label %while.body
   while.body:
-    call void @llvm.experimental.coro.resume(i8* %coro)
+    call void @llvm.coro.resume(i8* %coro)
     br label %while.cond
   while.end:
-    call void @llvm.experimental.coro.destroy(i8* %coro)
+    call void @llvm.coro.destroy(i8* %coro)
     ret i32 0
   }
 
@@ -565,7 +573,7 @@ to a `coroutine frame`_ or a pointer to a `coroutine promise`_.
 
 .. _coro.destroy:
 
-'llvm.experimental.coro.destroy' Intrinsic
+'llvm.coro.destroy' Intrinsic
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 Syntax:
@@ -573,12 +581,12 @@ Syntax:
 
 ::
 
-      declare void @llvm.experimental.coro.destroy(i8* <handle>)
+      declare void @llvm.coro.destroy(i8* <handle>)
 
 Overview:
 """""""""
 
-The '``llvm.experimental.coro.destroy``' intrinsic destroys a suspended
+The '``llvm.coro.destroy``' intrinsic destroys a suspended
 coroutine.
 
 Arguments:
@@ -597,17 +605,17 @@ undefined behavior.
 
 .. _coro.resume:
 
-'llvm.experimental.coro.resume' Intrinsic
+'llvm.coro.resume' Intrinsic
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 ::
 
-      declare void @llvm.experimental.coro.resume(i8* <handle>)
+      declare void @llvm.coro.resume(i8* <handle>)
 
 Overview:
 """""""""
 
-The '``llvm.experimental.coro.resume``' intrinsic resumes a suspended
+The '``llvm.coro.resume``' intrinsic resumes a suspended
 coroutine.
 
 Arguments:
@@ -626,17 +634,17 @@ undefined behavior.
 
 .. _coro.done:
 
-'llvm.experimental.coro.done' Intrinsic
+'llvm.coro.done' Intrinsic
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 ::
 
-      declare i1 @llvm.experimental.coro.done(i8* <handle>)
+      declare i1 @llvm.coro.done(i8* <handle>)
 
 Overview:
 """""""""
 
-The '``llvm.experimental.coro.done``' intrinsic checks whether a suspended
+The '``llvm.coro.done``' intrinsic checks whether a suspended
 coroutine is at the final suspend point or not.
 
 Arguments:
@@ -652,17 +660,17 @@ or on a coroutine that is not suspended leads to undefined behavior.
 
 .. _coro.promise:
 
-'llvm.experimental.coro.promise' Intrinsic
+'llvm.coro.promise' Intrinsic
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 ::
 
-      declare <type>* @llvm.experimental.coro.promise.p0<type>(i8* <handle>)
+      declare <type>* @llvm.coro.promise.p0<type>(i8* <handle>)
 
 Overview:
 """""""""
 
-The '``llvm.experimental.coro.promise``' intrinsic returns a pointer to a 
+The '``llvm.coro.promise``' intrinsic returns a pointer to a 
 `coroutine promise`_.
 
 Arguments:
@@ -680,17 +688,17 @@ a coroutine user are responsible to makes sure there is no data races.
 
 .. _coro.from.promise:
 
-'llvm.experimental.coro.from.promise' Intrinsic
+'llvm.coro.from.promise' Intrinsic
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 ::
 
-    declare i8* @llvm.experimental.coro.from.promise.p0<type>(<type>* <handle>)
+    declare i8* @llvm.coro.from.promise.p0<type>(<type>* <handle>)
 
 Overview:
 """""""""
 
-The '``llvm.experimental.coro.from.promise``' intrinsic returns a coroutine
+The '``llvm.coro.from.promise``' intrinsic returns a coroutine
 handle given the coroutine promise.
 
 Arguments:
@@ -713,17 +721,17 @@ the coroutine structure. They should not be used outside of a coroutine.
 
 .. _coro.size:
 
-'llvm.experimental.coro.size' Intrinsic
+'llvm.coro.size' Intrinsic
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 ::
 
-    declare i32 @llvm.experimental.coro.size()
-    declare i64 @llvm.experimental.coro.size()
+    declare i32 @llvm.coro.size()
+    declare i64 @llvm.coro.size()
 
 Overview:
 """""""""
 
-The '``llvm.experimental.coro.size``' intrinsic returns the number of bytes
+The '``llvm.coro.size``' intrinsic returns the number of bytes
 required to store a `coroutine frame`_.
 
 Arguments:
@@ -739,16 +747,16 @@ the coroutine frame.
 
 .. _coro.init:
 
-'llvm.experimental.coro.init' Intrinsic
+'llvm.coro.init' Intrinsic
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 ::
 
-  declare i8* @llvm.experimental.coro.init(i8* %mem, i32 %align, i8* %promise, i8* %fnaddr)
+  declare i8* @llvm.coro.init(i8* %mem, i32 %align, i8* %promise, i8* %fnaddr)
 
 Overview:
 """""""""
 
-The '``llvm.experimental.coro.init``' intrinsic returns an address of the 
+The '``llvm.coro.init``' intrinsic returns an address of the 
 coroutine frame.
 
 Arguments:
@@ -791,16 +799,16 @@ It should appear prior to `coro.fork`_ intrinsic.
 
 .. _coro.delete:
 
-'llvm.experimental.coro.delete' Intrinsic
+'llvm.coro.delete' Intrinsic
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 ::
 
-  declare i8* @llvm.experimental.coro.delete(i8* %frame)
+  declare i8* @llvm.coro.delete(i8* %frame)
 
 Overview:
 """""""""
 
-The '``llvm.experimental.coro.delete``' intrinsic returns a pointer to a block
+The '``llvm.coro.delete``' intrinsic returns a pointer to a block
 of memory where coroutine frame is stored or `null` if the allocation
 of the coroutine frame was elided.
 
@@ -816,7 +824,7 @@ Example (allow heap allocation elision):
 .. code-block:: llvm
 
   cleanup:
-    %mem = call i8* @llvm.experimental.coro.delete(i8* %frame)
+    %mem = call i8* @llvm.coro.delete(i8* %frame)
     %tobool = icmp ne i8* %mem, null
     br i1 %tobool, label %if.then, label %if.end
 
@@ -833,23 +841,23 @@ Example (no heap allocation elision):
 .. code-block:: llvm
 
   cleanup:
-    %mem = call i8* @llvm.experimental.coro.delete(i8* %frame)
+    %mem = call i8* @llvm.coro.delete(i8* %frame)
     call void @free(i8* %mem)
     ret void
 
 
 .. _coro.elide:
 
-'llvm.experimental.coro.elide' Intrinsic
+'llvm.coro.elide' Intrinsic
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 ::
 
-  declare i8* @llvm.experimental.coro.elide()
+  declare i8* @llvm.coro.elide()
 
 Overview:
 """""""""
 
-The '``llvm.experimental.coro.elide``' intrinsic returns an address of the 
+The '``llvm.coro.elide``' intrinsic returns an address of the 
 memory on the callers frame where coroutine frame of this coroutine can be 
 placed and `null` otherwise.
 
@@ -871,31 +879,31 @@ Example:
 .. code-block:: llvm
 
   entry:
-    %elide = call i8* @llvm.experimental.coro.elide()
+    %elide = call i8* @llvm.coro.elide()
     %0 = icmp ne i8* %elide, null
     br i1 %0, label %coro.init, label %coro.alloc
 
   coro.alloc:
-    %frame.size = call i32 @llvm.experimental.coro.size()
+    %frame.size = call i32 @llvm.coro.size()
     %alloc = call i8* @malloc(i32 %frame.size)
     br label %coro.init
 
   coro.init:
     %phi = phi i8* [ %elide, %entry ], [ %alloc, %coro.alloc ]
-    %frame = call i8* @llvm.experimental.coro.init(i8* %phi, i32 0, i8* null, i8* null)
+    %frame = call i8* @llvm.coro.init(i8* %phi, i32 0, i8* null, i8* null)
 
 .. _coro.frame:
 
-'llvm.experimental.coro.frame' Intrinsic
+'llvm.coro.frame' Intrinsic
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 ::
 
-  declare i8* @llvm.experimental.coro.frame()
+  declare i8* @llvm.coro.frame()
 
 Overview:
 """""""""
 
-The '``llvm.experimental.coro.frame``' intrinsic returns an address of the 
+The '``llvm.coro.frame``' intrinsic returns an address of the 
 coroutine frame.
 
 Arguments:
@@ -913,16 +921,16 @@ and can be removed.
 
 .. _coro.fork:
 
-'llvm.experimental.coro.fork' Intrinsic
+'llvm.coro.fork' Intrinsic
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 ::
 
-  declare i1 @llvm.experimental.coro.fork()
+  declare i1 @llvm.coro.fork()
 
 Overview:
 """""""""
 
-The '``llvm.experimental.coro.fork``' intrinsic is used to indicate where the
+The '``llvm.coro.fork``' intrinsic is used to indicate where the
 control should transfer on the first suspension of the coroutine. 
 
 Arguments:
@@ -942,16 +950,16 @@ The 'coro.fork` itself is always lowered to constant `false`.
 
 .. _coro.resume.end:
 
-'llvm.experimental.coro.resume.end' Intrinsic
+'llvm.coro.resume.end' Intrinsic
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 ::
 
-  declare void @llvm.experimental.coro.resume.end()
+  declare void @llvm.coro.resume.end()
 
 Overview:
 """""""""
 
-The '``llvm.experimental.coro.resume.end``' marks the point where execution
+The '``llvm.coro.resume.end``' marks the point where execution
 of the resume part of the coroutine should end and control returns back to 
 the caller.
 
@@ -978,16 +986,16 @@ caller.
 .. _coro.suspend:
 .. _suspend points:
 
-'llvm.experimental.coro.suspend' Intrinsic
+'llvm.coro.suspend' Intrinsic
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 ::
 
-  declare i1 @llvm.experimental.coro.suspend(token %save, i1 %final)
+  declare i1 @llvm.coro.suspend(token %save, i1 %final)
 
 Overview:
 """""""""
 
-The '``llvm.experimental.coro.suspend``' marks the point where execution
+The '``llvm.coro.suspend``' marks the point where execution
 of the coroutine need to get suspended and control returned back to the caller.
 Conditional branch consuming the result of this intrinsic marks basic blocks
 where coroutine should proceed when resumed via `coro.resume` and `coro.destroy` 
@@ -1020,16 +1028,16 @@ unreachable and can perform optimizations that can take advantage of that fact.
 
 .. _coro.save:
 
-'llvm.experimental.coro.save' Intrinsic
+'llvm.coro.save' Intrinsic
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 ::
 
-  declare token @llvm.experimental.coro.save()
+  declare token @llvm.coro.save()
 
 Overview:
 """""""""
 
-The '``llvm.experimental.coro.save``' marks the point where a coroutine 
+The '``llvm.coro.save``' marks the point where a coroutine 
 is considered suspened (and thus eligible for resumption). Its return value 
 should be consumed by exactly one `coro.suspend` intrinsic.
 
@@ -1059,9 +1067,9 @@ to the coroutine:
 
 .. code-block:: llvm
 
-    %save = call token @llvm.experimental.coro.save()
+    %save = call token @llvm.coro.save()
     call void async_op(i8* %frame)
-    %suspend = call i1 @llvm.experimental.coro.suspend(token %save, i1 false)
+    %suspend = call i1 @llvm.coro.suspend(token %save, i1 false)
     br i1 %suspend, label %resume, label %cleanup
 
 Coroutine Transformation Passes

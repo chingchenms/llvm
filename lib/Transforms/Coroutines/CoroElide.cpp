@@ -75,13 +75,20 @@ static void replaceWithConstant(Constant *Value,
 static void elideHeapAllocations(CoroBeginInst *CoroBegin, Function* Resume) {
   auto ArgType = Resume->getArgumentList().front().getType();
   auto FrameTy = cast<PointerType>(ArgType)->getElementType();
+  LLVMContext& C = CoroBegin->getContext();
 
-  auto AllocInst = CoroBegin->getAlloc();
-  IRBuilder<> Builder(AllocInst);
-  auto Frame = Builder.CreateAlloca(FrameTy);
-  auto vFrame = Builder.CreateBitCast(Frame, AllocInst->getType());
-  AllocInst->replaceAllUsesWith(vFrame);
-  AllocInst->eraseFromParent();
+  auto Frame = new AllocaInst(FrameTy, "");
+  auto vFrame = new BitCastInst(Frame, Type::getInt8PtrTy(C), "vFrame");
+
+  if (auto AllocInst = CoroBegin->getAlloc()) {
+    vFrame->insertBefore(AllocInst);
+    AllocInst->replaceAllUsesWith(vFrame);
+    AllocInst->eraseFromParent();
+  }
+  else {
+    vFrame->insertBefore(CoroBegin);
+  }
+  Frame->insertBefore(vFrame);
 
   CoroCommon::replaceCoroFree(CoroBegin, nullptr);
   CoroBegin->replaceAllUsesWith(vFrame);

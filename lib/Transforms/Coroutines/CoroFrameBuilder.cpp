@@ -438,7 +438,7 @@ static void rewriteMaterializableInstructions(IRBuilder<> &IRB,
 
 static void sortAndSplitPhiEdges(StringRef Label, SpillInfo& Spills) {
   std::sort(Spills.begin(), Spills.end());
-  DEBUG(dump("Materializations", Spills));
+  DEBUG(dump(Label, Spills));
 
   // Split PhiNodes, so that we have a place to insert spills for the values
   // on incoming edges.
@@ -498,6 +498,11 @@ void llvm::buildCoroutineFrame(Function &F, CoroutineShape& Shape) {
     // token returned by CoroSave is an artifact of how we build save/suspend
     // pairs and should not be part of the Coroutine Frame
     if (isa<CoroSaveInst>(&I))
+      continue;
+    // CoroBeginInst returns a handle to a coroutine which is passed as a sole
+    // parameter to .resume and .cleanup parts and should not go into coroutine
+    // frame.
+    if (isa<CoroBeginInst>(&I))
       continue;
     if (Shape.PromiseAlloca == &I)
       continue;

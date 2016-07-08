@@ -201,6 +201,9 @@ void llvm::CoroutineShape::buildFrom(Function &F) {
         break;
       case Intrinsic::coro_suspend:
         CoroSuspend.push_back(cast<CoroSuspendInst>(II));
+        if (!CoroSuspend.back()->getCoroSave()) {
+          CoroSaveInst::Create(CoroSuspend.back());
+        }
         if (CoroSuspend.back()->isFinal()) {
           HasFinalSuspend = true;
           if (CoroSuspend.size() > 1) {
@@ -236,7 +239,7 @@ void llvm::CoroutineShape::buildFrom(Function &F) {
   }
   assert(CoroBegin.size() == 1 &&
     "coroutine should have exactly one defining @llvm.coro.begin");
-  assert(CoroAlloc.size() == 1 &&
+  assert(CoroAlloc.size() <= 1 &&
     "coroutine should have exactly one @llvm.coro.alloc");
 }
 

@@ -27,3 +27,12 @@ CoroSubFnInst *llvm::CoroSubFnInst::Create(IRBuilder<> &Builder,
   return cast<CoroSubFnInst>(Call);
 }
 
+CoroSaveInst *llvm::CoroSaveInst::Create(CoroSuspendInst *SuspendInst) {
+  Module *M = SuspendInst->getModule();
+  auto Fn = Intrinsic::getDeclaration(M, Intrinsic::coro_save);
+  auto SaveInst = cast<CoroSaveInst>(CallInst::Create(Fn, "", SuspendInst));
+  assert(!SuspendInst->getCoroSave());
+  SuspendInst->setArgOperand(0, SaveInst);
+  return SaveInst;
+}
+
