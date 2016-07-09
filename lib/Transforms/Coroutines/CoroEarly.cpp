@@ -93,10 +93,9 @@ void Lowerer::lowerResumeOrDestroy(IntrinsicInst* II, unsigned Index) {
                                /*isVarArg=*/false);
   auto Bitcast = new BitCastInst(Call, FTy->getPointerTo(), "", II);
 
-  auto Indirect = CallInst::Create(Bitcast, II->getArgOperand(0), "", II);
+  auto Indirect = CallInst::Create(Bitcast, II->getArgOperand(0), "");
   Indirect->setCallingConv(CallingConv::Fast);
-
-  II->eraseFromParent();
+  ReplaceInstWithInst(II, Indirect);
 }
 
 void Lowerer::lowerCoroDone(IntrinsicInst* II) {
