@@ -21,7 +21,9 @@
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/Analysis/ConstantFolding.h"
+#include "llvm/Analysis/AliasAnalysis.h"
 #include "llvm/IR/IRBuilder.h"
+#include "llvm/IR/CallSite.h"
 #include "llvm/IR/InstIterator.h"
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/Module.h"
@@ -38,12 +40,20 @@ namespace {
     static char ID;
     CoroElide() : FunctionPass(ID) {}
     bool runOnFunction(Function &F) override;
+    void getAnalysisUsage(AnalysisUsage &AU) const override {
+      AU.addRequired<AAResultsWrapperPass>();
+    }
   };
 
 }
 
 char CoroElide::ID = 0;
-INITIALIZE_PASS(
+INITIALIZE_PASS_BEGIN(
+    CoroElide, "coro-elide",
+    "Coroutine frame allocation elision and indirect calls replacement", false,
+    false)
+INITIALIZE_PASS_DEPENDENCY(AAResultsWrapperPass)
+INITIALIZE_PASS_END(
     CoroElide, "coro-elide",
     "Coroutine frame allocation elision and indirect calls replacement", false,
     false)
@@ -72,7 +82,27 @@ static void replaceWithConstant(Constant *Value,
   CoroCommon::constantFoldUsers(Value);
 }
 
-static void elideHeapAllocations(CoroBeginInst *CoroBegin, Function* Resume) {
+static bool operandReferences(CallSite CS, AllocaInst* Frame, AAResults& AA) {
+  for (Value* Op : CS->operand_values())
+    if (AA.alias(Op, Frame) != NoAlias)
+      return true;
+  return false;
+}
+
+static void removeTailCalls(AllocaInst* Frame, AAResults& AA) {
+  Function& F = *Frame->getFunction();
+  for (Instruction& I : instructions(F))
+    if (auto CS = CallSite(&I))
+      if (CS.isTailCall() && operandReferences(CS, Frame, AA)) {
+        if (auto C = dyn_cast<CallInst>(&I))
+          C->setTailCall(false);
+        else if (auto Inv = dyn_cast<InvokeInst>(&I))
+          C->setTailCall(false);
+      }
+}
+
+static void elideHeapAllocations(CoroBeginInst *CoroBegin, Function *Resume,
+                                 AAResults &AA) {
   auto ArgType = Resume->getArgumentList().front().getType();
   auto FrameTy = cast<PointerType>(ArgType)->getElementType();
   LLVMContext& C = CoroBegin->getContext();
@@ -93,9 +123,13 @@ static void elideHeapAllocations(CoroBeginInst *CoroBegin, Function* Resume) {
   CoroCommon::replaceCoroFree(CoroBegin, nullptr);
   CoroBegin->replaceAllUsesWith(vFrame);
   CoroBegin->eraseFromParent();
+
+  // Since now coroutine frame lives on the stack we need to make sure that
+  // any tail call referencing it, must be made non-tail call.
+  removeTailCalls(Frame, AA);
 }
 
-static bool replaceIndirectCalls(CoroBeginInst *CoroBegin) {
+static bool replaceIndirectCalls(CoroBeginInst *CoroBegin, AAResults& AA) {
   SmallVector<CoroSubFnInst*, 8> ResumeAddr;
   SmallVector<CoroSubFnInst*, 8> DestroyAddr;
 
@@ -114,13 +148,14 @@ static bool replaceIndirectCalls(CoroBeginInst *CoroBegin) {
   replaceWithConstant(ResumeAddrConstant, ResumeAddr);
   replaceWithConstant(CleanupAddrConstant, DestroyAddr);
   if (!DestroyAddr.empty())
-    elideHeapAllocations(CoroBegin, cast<Function>(ResumeAddrConstant));
+    elideHeapAllocations(CoroBegin, cast<Function>(ResumeAddrConstant), AA);
 
   return true;
 }
 
 bool CoroElide::runOnFunction(Function &F) {
   bool changed = false;
+  AAResults& AA = getAnalysis<AAResultsWrapperPass>().getAAResults();
 
   // Collect all coro inits
   SmallVector<CoroBeginInst*, 4> CoroBegins;
@@ -130,7 +165,7 @@ bool CoroElide::runOnFunction(Function &F) {
         CoroBegins.push_back(CB);
 
   for (auto CB : CoroBegins)
-    changed |= replaceIndirectCalls(CB);
+    changed |= replaceIndirectCalls(CB, AA);
 
   return changed;
 }

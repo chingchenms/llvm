@@ -321,7 +321,7 @@ static Instruction* insertSpills(SpillInfo &Spills,
     if (CurrentBlock != E.userBlock()) {
       CurrentBlock = E.userBlock();
       CurrentReload =
-          CreateReload(CurrentBlock->getFirstNonPHIOrDbgOrLifetime());
+          CreateReload(CurrentBlock->getFirstNonPHI());
     }
     // replace all uses of CurrentValue in the current instruction with reload
     for (Use& U : E.user()->operands())
@@ -427,7 +427,7 @@ static void rewriteMaterializableInstructions(IRBuilder<> &IRB,
     // if we have not seen this block, materialize the value
     if (CurrentBlock != E.userBlock()) {
       CurrentBlock = E.userBlock();
-      CloneInstruction(CurrentBlock->getFirstNonPHIOrDbgOrLifetime());      
+      CloneInstruction(CurrentBlock->getFirstNonPHI());      
     }
     // replace all uses of CurrentValue in the current instruction with reload
     for (Use& U : E.user()->operands())
@@ -469,7 +469,7 @@ void llvm::buildCoroutineFrame(Function &F, CoroutineShape& Shape) {
     splitAround(CSI->getCoroSave(), "CoroSave");
 
   // Put CoroEnds into their own blocks.
-  splitAround(Shape.CoroEnd.back(), "CoroReturn");
+  splitAround(Shape.CoroEnd.back(), "CoroEnd");
 
   SuspendCrossingInfo Checker(F, Shape);
 

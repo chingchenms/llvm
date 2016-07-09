@@ -236,7 +236,6 @@ static CreateCloneResult createClone(Function &F, Twine Suffix,
   for (Argument& A : F.getArgumentList())
     VMap[&A] = UndefValue::get(A.getType());
 
-
   SmallVector<ReturnInst*, 4> Returns;
 
   CloneFunctionInto(NewF, &F, VMap, false, Returns);
@@ -463,6 +462,10 @@ static void splitCoroutine(Function &F, CallGraph &CG, CallGraphSCC &SCC) {
   auto ResumeEntry = createResumeEntryBlock(F, Shape);
   auto ResumeClone = createClone(F, ".Resume", Shape, ResumeEntry, 0);
   auto DestroyClone = createClone(F, ".Destroy", Shape, ResumeEntry, 1);
+
+  // we no longer need coro.end in F
+  for (CoroEndInst* CE : Shape.CoroEnd)
+    CE->eraseFromParent();
 
   postSplitCleanup(F);
   postSplitCleanup(*ResumeClone.Fn);
