@@ -17,7 +17,6 @@
 #include <llvm/Transforms/Utils/Cloning.h>
 #include <llvm/Transforms/Utils/PromoteMemToReg.h>
 #include <llvm/IR/Dominators.h>
-#include <llvm/IR/LegacyPassManagers.h>
 #include <llvm/IR/LegacyPassManager.h>
 #include <llvm/IR/Verifier.h>
 
@@ -237,9 +236,10 @@ static CreateCloneResult createClone(Function &F, Twine Suffix,
   for (Argument& A : F.getArgumentList())
     VMap[&A] = UndefValue::get(A.getType());
 
+
   SmallVector<ReturnInst*, 4> Returns;
 
-  CloneFunctionInto(NewF, &F, VMap, true, Returns);
+  CloneFunctionInto(NewF, &F, VMap, false, Returns);
 
   LLVMContext& C = NewF->getContext();
 
