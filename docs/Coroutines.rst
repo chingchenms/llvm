@@ -136,17 +136,15 @@ The LLVM IR for this coroutine looks like this:
     ret i8* %hdl
   }
 
-First three lines of `entry` block establish the coroutine frame. The
-`coro.size`_ intrinsic is lowered to a constant representing the size required 
-for the coroutine frame. 
-The `coro.begin`_ intrinsic returns the address to be used as a coroutine
-frame pointer (which could be at an offset relative to the allocated block of
-memory).
+The `entry` block establish the coroutine frame. The `coro.size`_ intrinsic is lowered to a constant representing the size required for the coroutine frame. 
+The `coro.begin`_ intrinsic initializes the coroutine frame and returns the coroutine handle. The first parameter of `coro.begin` is given a block of memory to be used if the coroutine frame need to be allocated dynamically.
+
+The `cleanup` block 
 
 The `coro.free` intrinsic, given the coroutine frame pointer,
 returns a pointer of the memory block to be freed.
 
-The `coro.resume.end`_ intrinsic marks the point where coroutine needs to return control back to the caller if it is not an initial invocation of the coroutine. (During the inital coroutine invocation this intrinsic is a no-op).
+The `coro.end`_ intrinsic marks the point where coroutine needs to return control back to the caller if it is not an initial invocation of the coroutine. (During the initial coroutine invocation this intrinsic is a no-op).
 
 This function returns a pointer to a coroutine frame which acts as 
 a `coroutine handle`_  expected by `coro.resume`_ and `coro.destroy`_ intrinsics. (There is no requirement that the coroutine has to return a handle
@@ -301,7 +299,7 @@ thus skipping the deallocation code:
     br label %if.end
 
   if.end:
-    call void @llvm.coro.resume.end()
+    call void @llvm.coro.end()
     br label %coro.return
 
 With allocations and deallocations described as above, after inlining and heap
@@ -942,18 +940,18 @@ replaced with a jump to the basic block designated by the true branch.
 
 The 'coro.fork` itself is always lowered to constant `false`.
 
-.. _coro.resume.end:
+.. _coro.end:
 
-'llvm.coro.resume.end' Intrinsic
+'llvm.coro.end' Intrinsic
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 ::
 
-  declare void @llvm.coro.resume.end()
+  declare void @llvm.coro.end()
 
 Overview:
 """""""""
 
-The '``llvm.coro.resume.end``' marks the point where execution
+The '``llvm.coro.end``' marks the point where execution
 of the resume part of the coroutine should end and control returns back to 
 the caller.
 
@@ -965,14 +963,14 @@ None
 
 Semantics:
 """"""""""
-The `coro.resume.end`_ intrinsic is a no-op during an initial invocation of the 
+The `coro.end`_ intrinsic is a no-op during an initial invocation of the 
 coroutine. When the coroutine resumes, the intrinsic marks the point when 
 coroutine need to return control back to the caller.
 
 This intrinsic is removed by the CoroSplit pass when a coroutine is split into
 the start, resume and destroy parts. In start part, the intrinsic is removed,
 in resume and destroy parts, it is replaced with `ret void` instructions and
-the rest of the block containing `coro.resume.end` instruction is discarded.
+the rest of the block containing `coro.end` instruction is discarded.
 
 In landing pads it is replaced with an appropriate instruction to unwind to 
 caller.
