@@ -33,8 +33,8 @@ control is returned back to its caller. A suspended coroutine can be resumed
 to continue execution from the last suspend point or it can be destroyed. 
 
 ..  In the following example function `f` returns
-    a handle to a suspended coroutine (**coroutine handle**) that can be passed to 
-    `coro.resume`_ and `coro.destroy`_ intrinsics to resume and destroy the 
+    a handle to a suspended coroutine (**coroutine handle**) that can be passed 
+    to `coro.resume`_ and `coro.destroy`_ intrinsics to resume and destroy the 
     coroutine respectively.
 
 In the following example, we call function `f` (which may or may not be a 
@@ -55,9 +55,9 @@ then destroy it:
 
 .. _coroutine frame:
 
-In addition to the function stack frame which exists when a coroutine is executing, 
-there is an additional region of storage that contains objects that keep the 
-coroutine state when a coroutine is suspended. This region of storage
+In addition to the function stack frame which exists when a coroutine is 
+executing, there is an additional region of storage that contains objects that 
+keep the coroutine state when a coroutine is suspended. This region of storage
 is called **coroutine frame**. It is created when a coroutine is called and 
 destroyed when a coroutine runs to completion or destroyed by a call to 
 the `coro.destroy`_ intrinsic. 
@@ -120,7 +120,7 @@ above starting with coroutine frame creation and destruction:
   entry:
     %size = call i32 @llvm.coro.size()
     %alloc = call i8* @malloc(i32 %size)
-    %hdl = call i8* @llvm.coro.init(i8* %alloc, i8* null, i32 0, i8* null, i8* null)
+    %hdl = call i8* @llvm.coro.begin(i8* %alloc, i8* null, i32 0, i8* null, i8* null)
 
   loop:
     %n.val = phi i32 [ %n, %entry ], [ %inc, %resume ]
@@ -132,7 +132,7 @@ above starting with coroutine frame creation and destruction:
     br label %coro.start
 
   cleanup:
-    %mem = call i8* @llvm.coro.delete(i8* %hdl)
+    %mem = call i8* @llvm.coro.free(i8* %hdl)
     call void @free(i8* %mem)
   suspend:
     call void @llvm.coro.end(i1 0)  
@@ -142,11 +142,11 @@ above starting with coroutine frame creation and destruction:
 First three lines of `entry` block establish the coroutine frame. The
 `coro.size`_ intrinsic is lowered to a constant representing the size required 
 for the coroutine frame. 
-The `coro.init`_ intrinsic returns the address to be used as a coroutine
+The `coro.begin`_ intrinsic returns the address to be used as a coroutine
 frame pointer (which could be at an offset relative to the allocated block of
 memory).
 
-The `coro.delete` intrinsic, given the coroutine frame pointer,
+The `coro.free` intrinsic, given the coroutine frame pointer,
 returns a pointer of the memory block to be freed.
 
 Two other intrinsics seen in this fragment are used to mark up the control flow
@@ -217,7 +217,7 @@ look like:
   define i8* @f(i32 %n) {
   entry:
     %alloc = call noalias i8* @malloc(i32 24)
-    %0 = call nonnull i8* @llvm.coro.init(i8* %alloc, i32 0, i8* null, i8* null)
+    %0 = call nonnull i8* @llvm.coro.begin(i8* %alloc, i32 0, i8* null, i8* null)
     %frame = bitcast i8* %frame to %f.frame*
     %1 = getelementptr %f.frame, %f.frame* %frame, i32 0, i32 0
     store void (%f.frame*)* @f.resume, void (%f.frame*)** %1
@@ -280,25 +280,25 @@ an address of a coroutine frame on the caller's frame when possible and
   entry:
     %elide = call i8* @llvm.coro.elide()
     %0 = icmp ne i8* %elide, null
-    br i1 %0, label %coro.init, label %coro.alloc
+    br i1 %0, label %coro.begin, label %coro.alloc
 
   coro.alloc:
     %frame.size = call i32 @llvm.coro.size()
     %alloc = call i8* @malloc(i32 %frame.size)
-    br label %coro.init
+    br label %coro.begin
 
-  coro.init:
+  coro.begin:
     %phi = phi i8* [ %elide, %entry ], [ %alloc, %coro.alloc ]
-    %frame = call i8* @llvm.coro.init(i8* %phi, i32 0, i8* null, i8* null)
+    %frame = call i8* @llvm.coro.begin(i8* %phi, i32 0, i8* null, i8* null)
 
 In the cleanup block, we will make freeing the coroutine frame conditional on
-`coro.delete`_ intrinsic. If allocation is elided, `coro.delete`_ returns `null`
+`coro.free`_ intrinsic. If allocation is elided, `coro.free`_ returns `null`
 thus skipping the deallocation code:
 
 .. code-block:: llvm
 
   cleanup:
-    %mem = call i8* @llvm.coro.delete(i8* %frame)
+    %mem = call i8* @llvm.coro.free(i8* %frame)
     %tobool = icmp ne i8* %mem, null
     br i1 %tobool, label %if.then, label %if.end
 
@@ -346,7 +346,7 @@ as the code in the previous section):
 .. code-block:: llvm
 
   coro.start:
-      %n.val = phi i32 [ %n, %coro.init ], [ %inc, %resume ]
+      %n.val = phi i32 [ %n, %coro.begin ], [ %inc, %resume ]
       call void @yield(i32 %n.val)
       %suspend1 = call i1 @llvm.coro.suspend(token none, i1 false)
       br i1 %suspend1, label %resume, label %cleanup
@@ -455,7 +455,7 @@ Coroutine Promise
 
 A coroutine author or a frontend may designate a distinguished `alloca` that can
 be used to communicate with the coroutine. This distinguished alloca is called
-**coroutine promise** and is provided as a third parameter to the `coro.init`_ 
+**coroutine promise** and is provided as a third parameter to the `coro.begin`_ 
 intrinsic.
 
 The following coroutine designates a 32 bit integer `promise` and uses it to
@@ -469,7 +469,7 @@ store the current value produced by a coroutine.
     %pv = bitcast i32* %promise to i8*
     %frame.size = call i32 @llvm.coro.size()
     %alloc = call noalias i8* @malloc(i32 %frame.size)
-    %frame = call i8* @llvm.coro.init(i8* %alloc, i32 0, i8* %pv, i8* null)
+    %frame = call i8* @llvm.coro.begin(i8* %alloc, i32 0, i8* %pv, i8* null)
     %first.return = call i1 @llvm.coro.fork()
     br i1 %first.return, label %coro.return, label %coro.start
 
@@ -484,7 +484,7 @@ store the current value produced by a coroutine.
     br label %coro.start
 
   cleanup:
-    %mem = call i8* @llvm.coro.delete(i8* %frame)
+    %mem = call i8* @llvm.coro.free(i8* %frame)
     call void @free(i8* %mem)
     br label %coro.return
 
@@ -745,18 +745,18 @@ Semantics:
 The `coro.size` intrinsic is lowered to a constant representing the size of
 the coroutine frame.
 
-.. _coro.init:
+.. _coro.begin:
 
-'llvm.coro.init' Intrinsic
+'llvm.coro.begin' Intrinsic
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 ::
 
-  declare i8* @llvm.coro.init(i8* %mem, i32 %align, i8* %promise, i8* %fnaddr)
+  declare i8* @llvm.coro.begin(i8* %mem, i32 %align, i8* %promise, i8* %fnaddr)
 
 Overview:
 """""""""
 
-The '``llvm.coro.init``' intrinsic returns an address of the 
+The '``llvm.coro.begin``' intrinsic returns an address of the 
 coroutine frame.
 
 Arguments:
@@ -768,7 +768,7 @@ a call to a `coro.elide`_ intrinsics representing a storage that can be used on 
 frame of the calling function.
 
 The second argument provides information on alignment of the memory returned by
-the allocation function and given to `coro.init` by the first parameter. If this
+the allocation function and given to `coro.begin` by the first parameter. If this
 argument is 0, the memory is assumed to be aligned to 2 * sizeof(i8*).
 This argument only accepts constants.
 
@@ -780,35 +780,35 @@ If this argument is `null`, CoroEarly pass will replace it
 with an address of the enclosing function. 
 
 .. note::
-  Since `coro.init` intrinsic is not lowered until late optimizer passes, 
-  `fnaddr` argument can be used to distinguish between `coro.init` that 
-  describes a structure of a pre-split coroutine or a `coro.init` belonging to 
+  Since `coro.begin` intrinsic is not lowered until late optimizer passes, 
+  `fnaddr` argument can be used to distinguish between `coro.begin` that 
+  describes a structure of a pre-split coroutine or a `coro.begin` belonging to 
   a post-split coroutine that was inlined into a different function.
 
 Semantics:
 """"""""""
 
 Depending on the alignment requirements of the objects in the coroutine frame
-and/or on the codegen compactness reasons the pointer returned from `coro.init` 
+and/or on the codegen compactness reasons the pointer returned from `coro.begin` 
 may be at offset to the `%mem` argument. (This could be beneficial if instructions
 that express relative access to data can be more compactly encoded with small
 positive and negative offsets).
 
-Frontend should emit exactly one `coro.init` intrinsic per coroutine.
+Frontend should emit exactly one `coro.begin` intrinsic per coroutine.
 It should appear prior to `coro.fork`_ intrinsic.
 
-.. _coro.delete:
+.. _coro.free:
 
-'llvm.coro.delete' Intrinsic
+'llvm.coro.free' Intrinsic
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 ::
 
-  declare i8* @llvm.coro.delete(i8* %frame)
+  declare i8* @llvm.coro.free(i8* %frame)
 
 Overview:
 """""""""
 
-The '``llvm.coro.delete``' intrinsic returns a pointer to a block
+The '``llvm.coro.free``' intrinsic returns a pointer to a block
 of memory where coroutine frame is stored or `null` if the allocation
 of the coroutine frame was elided.
 
@@ -816,7 +816,7 @@ Arguments:
 """"""""""
 
 A pointer to the coroutine frame. This should be the same pointer that was 
-returned by prior `coro.init` call.
+returned by prior `coro.begin` call.
 
 Example (allow heap allocation elision):
 """"""""""""""""""""""""""""""""""""""""
@@ -824,7 +824,7 @@ Example (allow heap allocation elision):
 .. code-block:: llvm
 
   cleanup:
-    %mem = call i8* @llvm.coro.delete(i8* %frame)
+    %mem = call i8* @llvm.coro.free(i8* %frame)
     %tobool = icmp ne i8* %mem, null
     br i1 %tobool, label %if.then, label %if.end
 
@@ -841,7 +841,7 @@ Example (no heap allocation elision):
 .. code-block:: llvm
 
   cleanup:
-    %mem = call i8* @llvm.coro.delete(i8* %frame)
+    %mem = call i8* @llvm.coro.free(i8* %frame)
     call void @free(i8* %mem)
     ret void
 
@@ -881,16 +881,16 @@ Example:
   entry:
     %elide = call i8* @llvm.coro.elide()
     %0 = icmp ne i8* %elide, null
-    br i1 %0, label %coro.init, label %coro.alloc
+    br i1 %0, label %coro.begin, label %coro.alloc
 
   coro.alloc:
     %frame.size = call i32 @llvm.coro.size()
     %alloc = call i8* @malloc(i32 %frame.size)
-    br label %coro.init
+    br label %coro.begin
 
-  coro.init:
+  coro.begin:
     %phi = phi i8* [ %elide, %entry ], [ %alloc, %coro.alloc ]
-    %frame = call i8* @llvm.coro.init(i8* %phi, i32 0, i8* null, i8* null)
+    %frame = call i8* @llvm.coro.begin(i8* %phi, i32 0, i8* null, i8* null)
 
 .. _coro.frame:
 
@@ -914,7 +914,7 @@ None
 Semantics:
 """"""""""
 
-This intrinsic is lowered to refer to the `coro.init`_ instruction. This is
+This intrinsic is lowered to refer to the `coro.begin`_ instruction. This is
 a frontend convenience intrinsic that makes it easier to refer to the
 coroutine frame. This intrinsic is not necessary for the llvm coroutine model 
 and can be removed.
@@ -1104,7 +1104,7 @@ CoroElide
 The pass CoroElide examines if the inlined coroutine is eligible for heap 
 allocation elision optimization. If so, it replaces `coro.elide` intrinsic with
 an address of a coroutine frame placed on its caller and replaces
-`coro.delete` intrinsics with null to remove the deallocation code. This pass
+`coro.free` intrinsics with null to remove the deallocation code. This pass
 also replaces `coro.resume` and `coro.destroy` intrinsics with direct calls to
 resume and destroy functions for a particular coroutine where possible.
 
@@ -1134,7 +1134,7 @@ Areas Requiring Attention
 
 #. Cannot handle coroutines with inalloca parameters (used in x86 on Windows)
 
-#. Alignment is ignored by coro.init and coro.delete intrinsics.
+#. Alignment is ignored by coro.begin and coro.free intrinsics.
 
 #. Make required changes to make sure that coroutine optimizations work with
    LTO.
