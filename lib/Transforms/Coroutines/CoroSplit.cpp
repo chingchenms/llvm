@@ -17,7 +17,6 @@
 #include <llvm/Transforms/Utils/Local.h>
 #include <llvm/Transforms/Utils/Cloning.h>
 #include <llvm/Transforms/Utils/PromoteMemToReg.h>
-#include <llvm/IR/Dominators.h>
 #include <llvm/IR/LegacyPassManager.h>
 #include <llvm/IR/Verifier.h>
 
@@ -102,6 +101,7 @@ static BasicBlock* createResumeEntryBlock(Function& F, CoroutineShape& Shape) {
 }
 
 static void preSplitCleanup(Function& F) {
+  removeUnreachableBlocks(F);
   llvm::legacy::FunctionPassManager FPM(F.getParent());
 
   FPM.add(createSCCPPass());
@@ -115,6 +115,7 @@ static void preSplitCleanup(Function& F) {
 }
 
 static void postSplitCleanup(Function& F) {
+  removeUnreachableBlocks(F);
   llvm::legacy::FunctionPassManager FPM(F.getParent());
 
   FPM.add(createVerifierPass());
