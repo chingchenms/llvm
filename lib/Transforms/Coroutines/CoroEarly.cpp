@@ -145,6 +145,10 @@ bool lowerEarlyIntrinsics(Function& F) {
       switch (II->getIntrinsicID()) {
       default:
         continue;
+      case Intrinsic::coro_begin:
+        if (cast<CoroBeginInst>(II)->getInfo().isPreSplit())
+          F.addFnAttr(Attribute::Coroutine);
+        break;
       case Intrinsic::coro_size:
         L.canonicalizeCoroSize(II);
         break;
