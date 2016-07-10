@@ -199,16 +199,16 @@ void llvm::CoroutineShape::buildFrom(Function &F) {
         II->eraseFromParent();
         break;
       case Intrinsic::coro_suspend:
-        CoroSuspend.push_back(cast<CoroSuspendInst>(II));
-        if (!CoroSuspend.back()->getCoroSave()) {
-          CoroSaveInst::Create(CoroSuspend.back());
+        CoroSuspends.push_back(cast<CoroSuspendInst>(II));
+        if (!CoroSuspends.back()->getCoroSave()) {
+          CoroSaveInst::Create(CoroSuspends.back());
         }
-        if (CoroSuspend.back()->isFinal()) {
+        if (CoroSuspends.back()->isFinal()) {
           HasFinalSuspend = true;
-          if (CoroSuspend.size() > 1) {
-            assert(!CoroSuspend.front()->isFinal() &&
+          if (CoroSuspends.size() > 1) {
+            assert(!CoroSuspends.front()->isFinal() &&
                    "Only one suspend point can be marked as final");
-            std::swap(CoroSuspend.front(), CoroSuspend.back());
+            std::swap(CoroSuspends.front(), CoroSuspends.back());
           }
         }
         break;

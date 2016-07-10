@@ -47,7 +47,7 @@ struct LLVM_LIBRARY_VISIBILITY CoroutineShape {
   CoroBeginInst* CoroBegin;
   SmallVector<CoroEndInst*, 4> CoroEnds;
   SmallVector<CoroSizeInst*, 2> CoroSizes;
-  SmallVector<CoroSuspendInst*, 4> CoroSuspend;
+  SmallVector<CoroSuspendInst*, 4> CoroSuspends;
 
   StructType* FrameTy;
   Instruction* FramePtr;
@@ -72,7 +72,7 @@ template <class F> void CoroutineShape::reflect(F&& Inspect) {
   CORO_SHAPE_REFLECT(CoroBegin);
   CORO_SHAPE_REFLECT(CoroEnds);
   CORO_SHAPE_REFLECT(CoroSizes);
-  CORO_SHAPE_REFLECT(CoroSuspend);
+  CORO_SHAPE_REFLECT(CoroSuspends);
 
   CORO_SHAPE_REFLECT(FrameTy);
   CORO_SHAPE_REFLECT(FramePtr);

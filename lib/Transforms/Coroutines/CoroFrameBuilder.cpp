@@ -148,7 +148,7 @@ SuspendCrossingInfo::SuspendCrossingInfo(Function &F, CoroutineShape &Shape)
     getBlockData(CE->getParent()).End = true;
 
   // Mark all suspend blocks and indicate that kill everything they consume
-  for (CoroSuspendInst* CSI : Shape.CoroSuspend) {
+  for (CoroSuspendInst* CSI : Shape.CoroSuspends) {
     CoroSaveInst* const CoroSave = CSI->getCoroSave();
     BasicBlock* const CoroSaveBB = CoroSave->getParent();
     auto &B = getBlockData(CoroSaveBB);
@@ -465,7 +465,7 @@ void llvm::buildCoroutineFrame(Function &F, CoroutineShape& Shape) {
   }
 
   // Split all of the blocks on CoroSave.
-  for (CoroSuspendInst* CSI : Shape.CoroSuspend)
+  for (CoroSuspendInst* CSI : Shape.CoroSuspends)
     splitAround(CSI->getCoroSave(), "CoroSave");
 
   // Put CoroEnds into their own blocks.

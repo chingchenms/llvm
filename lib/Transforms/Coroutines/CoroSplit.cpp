@@ -43,15 +43,15 @@ static BasicBlock* createResumeEntryBlock(Function& F, CoroutineShape& Shape) {
       Builder.CreateConstInBoundsGEP2_32(FrameTy, FramePtr, 0, 2, "index.addr");
   auto Index = Builder.CreateLoad(GepIndex, "index");
   auto Switch =
-      Builder.CreateSwitch(Index, UnreachBB, Shape.CoroSuspend.size());
+      Builder.CreateSwitch(Index, UnreachBB, Shape.CoroSuspends.size());
   Shape.ResumeSwitch = Switch;
  
 #if CORO_USE_INDEX_FOR_DONE
   int SuspendIndex = -1;
 #else
-  int SuspendIndex = Shape.CoroSuspend.front()->isFinal() ? -2 : -1;
+  int SuspendIndex = Shape.CoroSuspends.front()->isFinal() ? -2 : -1;
 #endif
-  for (auto S: Shape.CoroSuspend) {
+  for (auto S: Shape.CoroSuspends) {
     ++SuspendIndex;
     ConstantInt* IndexVal = Builder.getInt8(SuspendIndex);
 
@@ -291,7 +291,7 @@ static CreateCloneResult createClone(Function &F, Twine Suffix,
 
   // Replace coro suspend with the appropriate resume index. 
   auto NewValue = Builder.getInt8(FnIndex);
-  replaceAndRemove(Shape.CoroSuspend, NewValue, &VMap);
+  replaceAndRemove(Shape.CoroSuspends, NewValue, &VMap);
 
   // Remove coro.end intrinsics.
   replaceFinalCoroEnd(Shape.CoroEnds.front(), VMap);
@@ -422,7 +422,7 @@ static bool simplifySuspendPoint(CoroSuspendInst* Suspend) {
 }
 
 static void simplifySuspendPoints(CoroutineShape& Shape) {
-  auto& S = Shape.CoroSuspend;
+  auto& S = Shape.CoroSuspends;
   unsigned I = 0, N = S.size();
   if (N == 0)
     return;
@@ -453,7 +453,7 @@ static void splitCoroutine(Function &F, CallGraph &CG, CallGraphSCC &SCC) {
 
   // If there is no suspend points, no split required, just remove
   // the allocation and deallocation blocks, they are not needed
-  if (Shape.CoroSuspend.empty()) {
+  if (Shape.CoroSuspends.empty()) {
     handleNoSuspendCoroutine(Shape.CoroBegin, Shape.FrameTy);
     postSplitCleanup(F);
     CoroCommon::updateCallGraph(F, {}, CG, SCC);
