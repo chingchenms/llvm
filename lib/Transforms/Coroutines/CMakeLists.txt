@@ -1,6 +1,6 @@
 add_llvm_library(LLVMCoroutines
   CoroCleanup.cpp
-  CoroutineCommon.cpp
+  CoroCommon.cpp
   CoroExtract.cpp
   CoroShape.cpp
   CoroEarly.cpp
