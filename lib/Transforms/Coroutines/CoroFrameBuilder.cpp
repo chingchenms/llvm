@@ -20,7 +20,7 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "CoroutineCommon.h"
+#include "CoroUtils.h"
 
 #include <llvm/ADT/BitVector.h>
 #include <llvm/ADT/PackedVector.h>

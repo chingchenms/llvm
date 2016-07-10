@@ -13,7 +13,7 @@
 ///
 //===----------------------------------------------------------------------===//
 
-#include "CoroutineCommon.h"
+#include "CoroUtils.h"
 #include "llvm/Transforms/Utils/CodeExtractor.h"
 #include "llvm/Analysis/CallGraph.h"
 #include "llvm/Analysis/CallGraphSCCPass.h"

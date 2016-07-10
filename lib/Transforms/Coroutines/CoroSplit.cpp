@@ -11,7 +11,7 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "CoroutineCommon.h"
+#include "CoroUtils.h"
 #include <llvm/Transforms/Coroutines.h>
 #include <llvm/Transforms/Scalar.h>
 #include <llvm/Transforms/Utils/Local.h>

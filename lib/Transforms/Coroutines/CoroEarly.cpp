@@ -12,7 +12,7 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "CoroutineCommon.h"
+#include "CoroUtils.h"
 
 #include "llvm/IR/Module.h"
 #include "llvm/IR/CFG.h"
