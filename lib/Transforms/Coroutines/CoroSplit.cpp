@@ -14,6 +14,7 @@
 #include "CoroutineCommon.h"
 #include <llvm/Transforms/Coroutines.h>
 #include <llvm/Transforms/Scalar.h>
+#include <llvm/Transforms/Utils/Local.h>
 #include <llvm/Transforms/Utils/Cloning.h>
 #include <llvm/Transforms/Utils/PromoteMemToReg.h>
 #include <llvm/IR/Dominators.h>
@@ -439,6 +440,7 @@ static void simplifySuspendPoints(CoroutineShape& Shape) {
 }
 
 static void splitCoroutine(Function &F, CallGraph &CG, CallGraphSCC &SCC) {
+  LowerDbgDeclare(F);
   preSplitCleanup(F);
 
   // After split coroutine will be a normal function
