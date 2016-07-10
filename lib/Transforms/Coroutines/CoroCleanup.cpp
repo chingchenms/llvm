@@ -48,6 +48,18 @@ static Value* lowerSubFn(IRBuilder<>& Builder, CoroSubFnInst* SubFn) {
   return Load;
 }
 
+static Value* lowerCoroSize(IntrinsicInst* II) {
+  auto PtrTy = II->getArgOperand(0)->stripPointerCasts()->getType();
+  auto FuncTy = cast<FunctionType>(cast<PointerType>(PtrTy)->getElementType());
+  auto FramePtrTy = cast<PointerType>(FuncTy->params().front());
+  auto FrameTy = FramePtrTy->getElementType();
+  Module* M = II->getModule();
+  const DataLayout &DL = M->getDataLayout();
+  auto Size = DL.getTypeAllocSize(FrameTy);
+  auto SizeConstant = ConstantInt::get(II->getType(), Size);
+  return SizeConstant;
+}
+
 static bool lowerRemainingCoroIntrinsics(Function& F) {
   bool changed = false;
   IRBuilder<> Builder(F.getContext());
@@ -66,7 +78,7 @@ static bool lowerRemainingCoroIntrinsics(Function& F) {
     else if (auto FN = dyn_cast<CoroSubFnInst>(II))
       ReplacementValue = lowerSubFn(Builder, FN);
     else if (isa<CoroSizeInst>(II))
-      ReplacementValue = UndefValue::get(II->getType());
+      ReplacementValue = lowerCoroSize(II);
     else if (isa<CoroEndInst>(II))
       ReplacementValue = nullptr;
     else

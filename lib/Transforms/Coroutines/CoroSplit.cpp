@@ -320,10 +320,12 @@ static Function *createCleanupClone(Function &F, Twine Suffix,
   return CleanupClone;
 }
 
-static void replaceFrameSize(CoroutineShape& Shape) {
-  if (Shape.CoroSizes.empty())
-    return;
-
+static void replaceFrameSize(Function* ResumeFn, CoroutineShape& Shape) {
+  LLVMContext& C = ResumeFn->getContext();
+  auto BC = ConstantFolder().CreateBitCast(ResumeFn, Type::getInt8PtrTy(C));
+  for (auto CoroSize : Shape.CoroSizes)
+    CoroSize->setArgOperand(0, BC);
+#if 0
   auto SizeIntrin = Shape.CoroSizes.back();
   Module* M = SizeIntrin->getModule();
   const DataLayout &DL = M->getDataLayout();
@@ -331,6 +333,7 @@ static void replaceFrameSize(CoroutineShape& Shape) {
   auto SizeConstant = ConstantInt::get(SizeIntrin->getType(), Size);
 
   replaceAndRemove(toArrayRef(Shape.CoroSizes), SizeConstant);
+#endif
 }
 
 static void updateCoroInfo(Function& F, CoroutineShape &Shape,
@@ -441,6 +444,7 @@ static void simplifySuspendPoints(CoroutineShape& Shape) {
 
 static void splitCoroutine(Function &F, CallGraph &CG, CallGraphSCC &SCC) {
   LowerDbgDeclare(F);
+  CoroCommon::removeLifetimeIntrinsics(F);
   preSplitCleanup(F);
 
   // After split coroutine will be a normal function
@@ -449,7 +453,6 @@ static void splitCoroutine(Function &F, CallGraph &CG, CallGraphSCC &SCC) {
 
   simplifySuspendPoints(Shape);
   buildCoroutineFrame(F, Shape);
-  replaceFrameSize(Shape);
 
   // If there is no suspend points, no split required, just remove
   // the allocation and deallocation blocks, they are not needed
@@ -476,7 +479,7 @@ static void splitCoroutine(Function &F, CallGraph &CG, CallGraphSCC &SCC) {
       createCleanupClone(F, ".Cleanup", DestroyClone);
 
   updateCoroInfo(F, Shape, { ResumeClone.Fn, DestroyClone.Fn, CleanupClone });
-
+  replaceFrameSize(ResumeClone.Fn, Shape);
   CoroCommon::updateCallGraph(
       F, {ResumeClone.Fn, DestroyClone.Fn, CleanupClone}, CG, SCC);
 }
