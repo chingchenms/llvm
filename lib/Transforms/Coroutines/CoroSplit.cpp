@@ -294,8 +294,8 @@ static CreateCloneResult createClone(Function &F, Twine Suffix,
   replaceAndRemove(Shape.CoroSuspend, NewValue, &VMap);
 
   // Remove coro.end intrinsics.
-  replaceFinalCoroEnd(Shape.CoroEnd.front(), VMap);
-  replaceUnwindCoroEnds(Shape.CoroEnd, VMap);
+  replaceFinalCoroEnd(Shape.CoroEnds.front(), VMap);
+  replaceUnwindCoroEnds(Shape.CoroEnds, VMap);
 
   // Store the address of this clone in the coroutine frame.
   Builder.SetInsertPoint(Shape.FramePtr->getNextNode());
@@ -465,7 +465,7 @@ static void splitCoroutine(Function &F, CallGraph &CG, CallGraphSCC &SCC) {
   auto DestroyClone = createClone(F, ".Destroy", Shape, ResumeEntry, 1);
 
   // we no longer need coro.end in F
-  for (CoroEndInst* CE : Shape.CoroEnd)
+  for (CoroEndInst* CE : Shape.CoroEnds)
     CE->eraseFromParent();
 
   postSplitCleanup(F);

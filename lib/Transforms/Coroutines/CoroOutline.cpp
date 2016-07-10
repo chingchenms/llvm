@@ -34,7 +34,7 @@ using namespace llvm::CoroCommon;
 #define DEBUG_TYPE "coro-outline"
 
 static std::pair<Instruction*,Instruction*> getRetCode(CoroutineShape& S) {
-  auto NextNode = S.CoroEnd.front()->getNextNode();
+  auto NextNode = S.CoroEnds.front()->getNextNode();
   BasicBlock* EndBB = nullptr;
   if(NextNode->isTerminator()) {
     if (isa<ReturnInst>(NextNode))

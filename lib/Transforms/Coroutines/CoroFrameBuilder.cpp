@@ -144,7 +144,7 @@ SuspendCrossingInfo::SuspendCrossingInfo(Function &F, CoroutineShape &Shape)
   }
 
   // Mark all CoroEnd Blocks
-  for (auto CE : Shape.CoroEnd)
+  for (auto CE : Shape.CoroEnds)
     getBlockData(CE->getParent()).End = true;
 
   // Mark all suspend blocks and indicate that kill everything they consume
@@ -469,7 +469,7 @@ void llvm::buildCoroutineFrame(Function &F, CoroutineShape& Shape) {
     splitAround(CSI->getCoroSave(), "CoroSave");
 
   // Put CoroEnds into their own blocks.
-  splitAround(Shape.CoroEnd.back(), "CoroEnd");
+  splitAround(Shape.CoroEnds.front(), "CoroEnd");
 
   SuspendCrossingInfo Checker(F, Shape);
 

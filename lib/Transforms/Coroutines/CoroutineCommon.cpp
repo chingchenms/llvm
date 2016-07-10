@@ -224,21 +224,18 @@ void llvm::CoroutineShape::buildFrom(Function &F) {
         break;
       }
       case Intrinsic::coro_end:
-        CoroEnd.push_back(cast<CoroEndInst>(II));
-        if (CoroEnd.back()->isFinal()) {
-          if (CoroEnd.size() > 1) {
-            assert(!CoroEnd.front()->isFinal() &&
+        CoroEnds.push_back(cast<CoroEndInst>(II));
+        if (CoroEnds.back()->isFinal()) {
+          if (CoroEnds.size() > 1) {
+            assert(!CoroEnds.front()->isFinal() &&
               "Only one suspend point can be marked as final");
-            std::swap(CoroEnd.front(), CoroEnd.back());
+            std::swap(CoroEnds.front(), CoroEnds.back());
           }
         }
         break;
       }
     }
   }
-  for (User* U : CoroBegin->users())
-    if (auto CF = dyn_cast<CoroFreeInst>(U))
-      CoroFree.push_back(CF);
 }
 
 void llvm::initializeCoroutines(PassRegistry &registry) {

@@ -45,9 +45,8 @@ namespace CoroCommon {
 /// Holds all structural Coroutine Intrinsics for a particular function.
 struct LLVM_LIBRARY_VISIBILITY CoroutineShape {
   CoroBeginInst* CoroBegin;
-  SmallVector<CoroEndInst*, 4> CoroEnd;
+  SmallVector<CoroEndInst*, 4> CoroEnds;
   SmallVector<CoroSizeInst*, 2> CoroSize;
-  SmallVector<CoroFreeInst*, 2> CoroFree;
   SmallVector<CoroSuspendInst*, 4> CoroSuspend;
 
   StructType* FrameTy;
@@ -71,10 +70,8 @@ private:
 template <class F> void CoroutineShape::reflect(F&& Inspect) {
 #define CORO_SHAPE_REFLECT(Field) Inspect(Field, #Field)
   CORO_SHAPE_REFLECT(CoroBegin);
-  CORO_SHAPE_REFLECT(CoroEnd);
-
+  CORO_SHAPE_REFLECT(CoroEnds);
   CORO_SHAPE_REFLECT(CoroSize);
-  CORO_SHAPE_REFLECT(CoroFree);
   CORO_SHAPE_REFLECT(CoroSuspend);
 
   CORO_SHAPE_REFLECT(FrameTy);
