@@ -23,7 +23,6 @@
 #include "llvm/Analysis/ConstantFolding.h"
 #include "llvm/Analysis/AliasAnalysis.h"
 #include "llvm/IR/IRBuilder.h"
-#include "llvm/IR/CallSite.h"
 #include "llvm/IR/InstIterator.h"
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/Module.h"
@@ -82,8 +81,8 @@ static void replaceWithConstant(Constant *Value,
   CoroCommon::constantFoldUsers(Value);
 }
 
-static bool operandReferences(CallSite CS, AllocaInst* Frame, AAResults& AA) {
-  for (Value* Op : CS->operand_values())
+static bool operandReferences(CallInst* CI, AllocaInst* Frame, AAResults& AA) {
+  for (Value *Op : CI->operand_values())
     if (AA.alias(Op, Frame) != NoAlias)
       return true;
   return false;
@@ -92,13 +91,9 @@ static bool operandReferences(CallSite CS, AllocaInst* Frame, AAResults& AA) {
 static void removeTailCalls(AllocaInst* Frame, AAResults& AA) {
   Function& F = *Frame->getFunction();
   for (Instruction& I : instructions(F))
-    if (auto CS = CallSite(&I))
-      if (CS.isTailCall() && operandReferences(CS, Frame, AA)) {
-        if (auto C = dyn_cast<CallInst>(&I))
-          C->setTailCall(false);
-        else if (auto Inv = dyn_cast<InvokeInst>(&I))
-          C->setTailCall(false);
-      }
+    if (auto Call = dyn_cast<CallInst>(&I))
+      if (Call->isTailCall() && operandReferences(Call, Frame, AA))
+        Call->setTailCall(false);
 }
 
 static void elideHeapAllocations(CoroBeginInst *CoroBegin, Function *Resume,
