@@ -117,54 +117,70 @@ The LLVM IR for this coroutine looks like this:
   entry:
     %size = call i32 @llvm.coro.size.i32(i8* null)
     %alloc = call i8* @malloc(i32 %size)
-    %hdl = call i8* @llvm.coro.begin(i8* %alloc, i8* null, i32 0, i8* null, i8* null)
+    %hdl = call noalias i8* @llvm.coro.begin(i8* %alloc, i8* null, i32 0, i8* null, i8* null)
     br label %loop
   loop:
-    %n.val = phi i32 [ %n, %entry ], [ %inc, %resume ]
+    %n.val = phi i32 [ %n, %entry ], [ %inc, %loop ]
+    %inc = add nsw i32 %n.val, 1
     call void @print(i32 %n.val)
     %0 = call i8 @llvm.coro.suspend(token none, i1 false)
-    switch i8 %0, label %suspend [i8 0, label %resume
+    switch i8 %0, label %suspend [i8 0, label %loop
                                   i8 1, label %cleanup]
-  resume:
-    %inc = add i32 %n.val, 1
-    br label %loop
   cleanup:
     %mem = call i8* @llvm.coro.free(i8* %hdl)
     call void @free(i8* %mem)
     br label %suspend
   suspend:
-    call void @llvm.coro.end(i1 0)
+    call void @llvm.coro.end(i1 false)
     ret i8* %hdl
   }
 
-The `entry` block establishes the coroutine frame. The `coro.size`_ intrinsic is lowered to a constant representing the size required for the coroutine frame. 
-The `coro.begin`_ intrinsic initializes the coroutine frame and returns the coroutine handle. The first parameter of `coro.begin` is given a block of memory to be used if the coroutine frame need to be allocated dynamically.
+The `entry` block establishes the coroutine frame. The `coro.size`_ intrinsic is
+lowered to a constant representing the size required for the coroutine frame. 
+The `coro.begin`_ intrinsic initializes the coroutine frame and returns the 
+coroutine handle. The first parameter of `coro.begin` is given a block of memory 
+to be used if the coroutine frame need to be allocated dynamically.
 
-The `cleanup` block destroys the coroutine frame. The `coro.free`_ intrinsic, given the coroutine handle, returns a pointer of the memory block to be freed or `null` if the coroutine frame was not allocated dynamically. The `cleanup` block is entered when coroutine runs to completion by itself or destroyed via
+The `cleanup` block destroys the coroutine frame. The `coro.free`_ intrinsic, 
+given the coroutine handle, returns a pointer of the memory block to be freed or
+`null` if the coroutine frame was not allocated dynamically. The `cleanup` 
+block is entered when coroutine runs to completion by itself or destroyed via
 call to the `coro.destroy`_ intrinsic.
 
-The `suspend` block contains code to be executed when coroutine runs to completion or suspended. The `coro.end`_ intrinsic marks the point where coroutine needs to return control back to the caller if it is not an initial invocation of the coroutine. 
+The `suspend` block contains code to be executed when coroutine runs to 
+completion or suspended. The `coro.end`_ intrinsic marks the point where 
+coroutine needs to return control back to the caller if it is not an initial 
+invocation of the coroutine. 
 
-The `loop` and `resume` blocks represent the body of the coroutine. The `coro.suspend`_ intrinsic in combination with the following switch indicates what happens to control flow when a coroutine is suspended (default case), resumed (case 0) or destroyed (case 1).
+The `loop` blocks represents the body of the coroutine. The `coro.suspend`_ 
+intrinsic in combination with the following switch indicates what happens to 
+control flow when a coroutine is suspended (default case), resumed (case 0) or 
+destroyed (case 1).
 
 Coroutine Transformation
 ------------------------
 
-One of the steps of coroutine lowering is building of the coroutine frame. The
-def-use chains are analyzed to determine which objects need be kept alive across suspend points.
-
-In the coroutine shown in the previous section, use of virtual register 
-`%n.val` in `resume` block is separated from the definition in the `loop` block by a suspend point, therefore, it cannot reside on the stack frame since the latter goes away once the coroutine is suspended and control is returned back to the caller. An i32 slot is allocated in the coroutine frame and 
-`%n.val` is spilled and reloaded from that slot as needed.
+One of the steps of coroutine lowering is building the coroutine frame. The
+def-use chains are analyzed to determine which objects need be kept alive across
+suspend points. In the coroutine shown in the previous section, use of virtual register 
+`%n.val` is separated from the definition by a suspend point, therefore, it 
+cannot reside on the stack frame since the latter goes away once the coroutine 
+is suspended and control is returned back to the caller. An i32 slot is 
+allocated in the coroutine frame and `%n.val` is spilled and reloaded from that
+slot as needed.
 
 We also store addresses of the resume and destroy functions so that the 
-`coro.resume` and `coro.destroy` intrinsics can resume and destroy the coroutine when its identity cannot be determined statically at compile time. For our example, coroutine frame will be:
+`coro.resume` and `coro.destroy` intrinsics can resume and destroy the coroutine
+when its identity cannot be determined statically at compile time. For our 
+example, the coroutine frame will be:
 
 .. code-block:: llvm
 
   %f.frame = type { void (%f.frame*)*, void (%f.frame*)*, i32 }
 
-After resume and destroy parts are outlined, function `f` will contain only the code responsible for creation and initialization of the coroutine frame and execution of the coroutine until a suspend point is reached:
+After resume and destroy parts are outlined, function `f` will contain only the 
+code responsible for creation and initialization of the coroutine frame and 
+execution of the coroutine until a suspend point is reached:
 
 .. code-block:: llvm
 
@@ -178,29 +194,29 @@ After resume and destroy parts are outlined, function `f` will contain only the 
     %2 = getelementptr %f.frame, %f.frame* %frame, i32 0, i32 1
     store void (%f.frame*)* @f.destroy, void (%f.frame*)** %2
    
-    %n.val.addr = getelementptr %f.frame, %f.frame* %frame, i32 0, i32 2
-    store i32 %n, i32* %n.val.addr ; spill n.val to the coroutine frame
+    %inc = add nsw i32 %n, 1
+    %inc.spill.addr = getelementptr inbounds %f.Frame, %f.Frame* %FramePtr, i32 0, i32 2
+    store i32 %inc, i32* %inc.spill.addr
     call void @print(i32 %n)
    
     ret i8* %frame
   }
 
-Part of the original coroutine `f` that is responsible for executing code after 
-resume will be extracted into `f.resume` function:
+Outlined resume part of the coroutine will reside in function `f.resume`:
 
 .. code-block:: llvm
 
   define internal fastcc void @f.resume(%f.frame* %frame.ptr.resume) {
   entry:
-    %n.val.addr = getelementptr %f.frame, %f.frame* %frame.ptr.resume, i64 0, i32 2
-    %n.val = load i32, i32* %n.val.addr, align 4
+    %inc.spill.addr = getelementptr %f.frame, %f.frame* %frame.ptr.resume, i64 0, i32 2
+    %inc.spill = load i32, i32* %inc.spill.addr, align 4
     %inc = add i32 %n.val, 1
-    store i32 %inc, i32* %n.val.addr, align 4
+    store i32 %inc, i32* %inc.spill.addr, align 4
     tail call void @print(i32 %inc)
     ret void
   }
 
-Whereas function `f.destroy` will end up simply calling `free` function:
+Whereas function `f.destroy` will contain the cleanup code for the coroutine:
 
 .. code-block:: llvm
 
@@ -216,34 +232,38 @@ Whereas function `f.destroy` will end up simply calling `free` function:
 Avoiding Heap Allocations
 -------------------------
  
-A particular coroutine usage pattern, which is illustrated by the `main` function
-in the overview section where a coroutine is created, manipulated and destroyed by
-the same calling function, is common for generator coroutines and is suitable for
-allocation elision optimization which avoid dynamic allocation by storing 
-coroutine frame on the caller's frame.
+A particular coroutine usage pattern, which is illustrated by the `main` 
+function in the overview section, where a coroutine is created, manipulated and 
+destroyed by the same calling function, is common for coroutines implementing
+RAII idiom and is suitable for allocation elision optimization which avoid 
+dynamic allocation by storing the coroutine frame as a static `alloca` in its 
+caller.
 
-To enable this optimization, we need to mark frame allocation and deallocation 
-calls to allow bypassing them if not needed.
+If a coroutine uses allocation and deallocation functions that are known to
+LLVM, unused calls to `malloc` and calls to `free` with `null` argument will be
+removed as dead code. However, if custom allocation functions are used, the
+`coro.alloc` and `coro.free` intrinsics can be used to enable removal of custom
+allocation and deallocation code when coroutine does not require dynamic
+allocation of the coroutine frame.
 
-In the entry block, we will call `coro.elide`_ intrinsic that will return 
-an address of a coroutine frame on the caller's frame when possible and 
-`null` otherwise:
+In the entry block, we will call `coro.alloc`_ intrinsic that will return `null`
+when dynamic allocation is required, and non-null otherwise:
 
 .. code-block:: llvm
 
   entry:
-    %elide = call i8* @llvm.coro.elide()
+    %elide = call i8* @llvm.coro.alloc()
     %0 = icmp ne i8* %elide, null
-    br i1 %0, label %coro.begin, label %coro.alloc
+    br i1 %0, label %coro.begin, label %dyn.alloc
 
-  coro.alloc:
+  dyn.alloc:
     %frame.size = call i32 @llvm.coro.size()
-    %alloc = call i8* @malloc(i32 %frame.size)
+    %alloc = call i8* @CustomAlloc(i32 %frame.size)
     br label %coro.begin
 
   coro.begin:
-    %phi = phi i8* [ %elide, %entry ], [ %alloc, %coro.alloc ]
-    %frame = call i8* @llvm.coro.begin(i8* %phi, i32 0, i8* null, i8* null)
+    %phi = phi i8* [ %elide, %entry ], [ %alloc, %dyn.alloc ]
+    %frame = call i8* @llvm.coro.begin(i8* %phi, %elide, i32 0, i8* null, i8* null)
 
 In the cleanup block, we will make freeing the coroutine frame conditional on
 `coro.free`_ intrinsic. If allocation is elided, `coro.free`_ returns `null`
@@ -257,12 +277,11 @@ thus skipping the deallocation code:
     br i1 %tobool, label %if.then, label %if.end
 
   if.then:
-    call void @free(i8* %mem)
+    call void @CustomFree(i8* %mem)
     br label %if.end
 
   if.end:
-    call void @llvm.coro.end()
-    br label %coro.return
+    ...
 
 With allocations and deallocations described as above, after inlining and heap
 allocation elision optimization, the resulting main will end up looking like:
@@ -718,7 +737,7 @@ Arguments:
 
 The first argument is a pointer to a block of memory in which coroutine frame
 will reside. This could be the result of an allocation function or the result of
-a call to a `coro.elide`_ intrinsics representing a storage that can be used on a
+a call to a `coro.alloc`_ intrinsics representing a storage that can be used on a
 frame of the calling function.
 
 The second argument provides information on alignment of the memory returned by
@@ -800,18 +819,18 @@ Example (no heap allocation elision):
     ret void
 
 
-.. _coro.elide:
+.. _coro.alloc:
 
-'llvm.coro.elide' Intrinsic
+'llvm.coro.alloc' Intrinsic
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 ::
 
-  declare i8* @llvm.coro.elide()
+  declare i8* @llvm.coro.alloc()
 
 Overview:
 """""""""
 
-The '``llvm.coro.elide``' intrinsic returns an address of the 
+The '``llvm.coro.alloc``' intrinsic returns an address of the 
 memory on the callers frame where coroutine frame of this coroutine can be 
 placed and `null` otherwise.
 
@@ -833,7 +852,7 @@ Example:
 .. code-block:: llvm
 
   entry:
-    %elide = call i8* @llvm.coro.elide()
+    %elide = call i8* @llvm.coro.alloc()
     %0 = icmp ne i8* %elide, null
     br i1 %0, label %coro.begin, label %coro.alloc
 
@@ -1056,9 +1075,9 @@ The pass CoroSplit extracts resume and destroy parts into separate functions.
 CoroElide
 ---------
 The pass CoroElide examines if the inlined coroutine is eligible for heap 
-allocation elision optimization. If so, it replaces `coro.elide` intrinsic with
+allocation elision optimization. If so, it replaces `coro.alloc` intrinsic with
 an address of a coroutine frame placed on its caller and replaces
-`coro.free` intrinsics with null to remove the deallocation code. This pass
+`coro.free` intrinsics with `null` to remove the deallocation code. This pass
 also replaces `coro.resume` and `coro.destroy` intrinsics with direct calls to
 resume and destroy functions for a particular coroutine where possible.
 
