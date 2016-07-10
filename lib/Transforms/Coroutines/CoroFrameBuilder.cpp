@@ -99,16 +99,25 @@ struct SuspendCrossingInfo {
     return Result;
   }
 
-  bool definitionAcrossSuspend(Argument& A, User* U) {
-    BasicBlock* DefBB = &A.getParent()->getEntryBlock();
-    BasicBlock* UseBB = cast<Instruction>(U)->getParent();
+  bool definitionAcrossSuspend(BasicBlock* DefBB, User* U) {
+    auto I = cast<Instruction>(U);
+
+    // We rewritten PHINodes, so that only the ones with exactly one incoming
+    // value neeed to be analyzed.
+    if (auto PN = dyn_cast<PHINode>(I))
+      if (PN->getNumIncomingValues() > 1)
+        return false;
+
+    BasicBlock* UseBB = I->getParent();
     return hasPathCrossingSuspendPoint(DefBB, UseBB);
   }
 
-  bool definitionAcrossSuspend(Instruction& I, User* U) {
-    BasicBlock* DefBB = I.getParent();
-    BasicBlock* UseBB = cast<Instruction>(U)->getParent();
-    return hasPathCrossingSuspendPoint(DefBB, UseBB);
+  bool definitionAcrossSuspend(Argument &A, User *U) {
+    return definitionAcrossSuspend(&A.getParent()->getEntryBlock(), U);
+  }
+
+  bool definitionAcrossSuspend(Instruction &I, User *U) {
+    return definitionAcrossSuspend(I.getParent(), U);
   }
 };
 
@@ -308,21 +317,21 @@ static Instruction* insertSpills(SpillInfo &Spills,
       }
     }
 
-    if (auto PN = dyn_cast<PHINode>(E.user())) {
-      for (Use& U : PN->incoming_values())
-        if (U.get() == CurrentValue) {
-          auto IncomingBlock = PN->getIncomingBlock(U);
-          U.set(CreateReload(IncomingBlock->getTerminator()));
-        }
-      continue;
-    }
-
     // If we have not seen this block, generate a reload.
     if (CurrentBlock != E.userBlock()) {
       CurrentBlock = E.userBlock();
       CurrentReload =
           CreateReload(CurrentBlock->getFirstNonPHI());
     }
+
+    if (auto PN = dyn_cast<PHINode>(E.user())) {
+      assert(PN->getNumIncomingValues() == 1 && "unexpected number of incoming "
+                                                "values in the PHINode");
+      PN->replaceAllUsesWith(CurrentReload);
+      PN->eraseFromParent();
+      continue;
+    }
+
     // replace all uses of CurrentValue in the current instruction with reload
     for (Use& U : E.user()->operands())
       if (U.get() == CurrentValue)
@@ -403,7 +412,7 @@ static void rewriteMaterializableInstructions(IRBuilder<> &IRB,
       ClonedInst->takeName(CurrentDef);
     }
     ClonedInst->insertBefore(InsertPt);
-    CurrentMaterialization = ClonedInst;
+    return ClonedInst;
   };
 
   for (auto const &E : Spills) {
@@ -413,22 +422,20 @@ static void rewriteMaterializableInstructions(IRBuilder<> &IRB,
       CurrentMaterialization = nullptr;
     }
 
-    // TODO: add test that exercises this pass
-    if (auto PN = dyn_cast<PHINode>(E.user())) {
-      for (Use& U : PN->incoming_values())
-        if (U.get() == CurrentDef) {
-          auto IncomingBlock = PN->getIncomingBlock(U);
-          CloneInstruction(IncomingBlock->getTerminator());
-          U.set(CurrentMaterialization);
-        }
-      continue;
-    }
-
     // if we have not seen this block, materialize the value
     if (CurrentBlock != E.userBlock()) {
       CurrentBlock = E.userBlock();
-      CloneInstruction(CurrentBlock->getFirstNonPHI());      
+      CurrentMaterialization = CloneInstruction(CurrentBlock->getFirstNonPHI());
     }
+
+    if (auto PN = dyn_cast<PHINode>(E.user())) {
+      assert(PN->getNumIncomingValues() == 1 && "unexpected number of incoming "
+        "values in the PHINode");
+      PN->replaceAllUsesWith(CurrentMaterialization);
+      PN->eraseFromParent();
+      continue;
+    }
+
     // replace all uses of CurrentValue in the current instruction with reload
     for (Use& U : E.user()->operands())
       if (U.get() == CurrentDef)
@@ -436,26 +443,53 @@ static void rewriteMaterializableInstructions(IRBuilder<> &IRB,
   }
 }
 
-static void sortAndSplitPhiEdges(StringRef Label, SpillInfo& Spills) {
-  std::sort(Spills.begin(), Spills.end());
-  DEBUG(dump(Label, Spills));
+static void rewritePHIs(BasicBlock &BB) {
+  // For every incoming edge we will create a block holding all
+  // incoming values in a single PHI nodes.
+  //
+  // loop:
+  //    %n.val = phi i32[%n, %entry], [%inc, %loop]
+  // 
+  // It will create:
+  //
+  // loop.from.entry:
+  //    %n.loop.pre = phi i32 [%n, %entry]
+  //    br %label loop
+  // loop.from.loop:
+  //    %inc.loop.pre = phi i32 [%inc, %loop]
+  //    br %label loop
+  //
+  // After this rewrite, further analysis will ignore any phi nodes with more
+  // than one incoming edge.
 
-  // Split PhiNodes, so that we have a place to insert spills for the values
-  // on incoming edges.
-  SmallVector<std::pair<BasicBlock*, BasicBlock*>, 16> PhiEdges;
-  for (auto const &E : Spills)
-    if (auto PN = dyn_cast<PHINode>(E.user()))
-      for (Use &U : PN->incoming_values())
-        PhiEdges.emplace_back(PN->getIncomingBlock(U), PN->getParent());
-
-  std::sort(PhiEdges.begin(), PhiEdges.end());
-  PhiEdges.erase(std::unique(PhiEdges.begin(), PhiEdges.end()), PhiEdges.end());
-
-  for (auto const& P : PhiEdges) {
-    DEBUG(dbgs() << "Splitting Phi Edge incoming from " <<
-      P.first->getName() << " to " << P.second->getName() << "\n");
-    SplitEdge(P.first, P.second);
+  SmallVector<BasicBlock*, 8> Preds(pred_begin(&BB), pred_end(&BB));
+  for (BasicBlock* Pred : Preds) {
+    auto IncomingBB = SplitEdge(Pred, &BB);
+    IncomingBB->setName(BB.getName() + Twine(".from.") + Pred->getName());
+    auto PN = cast<PHINode>(&BB.front());
+    do {
+      int Index = PN->getBasicBlockIndex(IncomingBB);
+      Value* V = PN->getIncomingValue(Index);
+      PHINode *InputV = PHINode::Create(
+          V->getType(), 1, V->getName() + Twine(".") + BB.getName(),
+          &IncomingBB->front());
+      InputV->addIncoming(V, Pred);
+      PN->setIncomingValue(Index, InputV);
+      PN = dyn_cast<PHINode>(PN->getNextNode());
+    } while (PN);
   }
+}
+
+static void rewritePHIs(Function &F) {
+  SmallVector<BasicBlock*, 8> WorkList;
+
+  for (BasicBlock& BB : F)
+    if (auto PN = dyn_cast<PHINode>(&BB.front()))
+      if (PN->getNumIncomingValues() > 1)
+        WorkList.push_back(&BB);
+
+  for (BasicBlock* BB : WorkList)
+    rewritePHIs(*BB);
 }
 
 void llvm::buildCoroutineFrame(Function &F, CoroutineShape& Shape) {
@@ -470,10 +504,14 @@ void llvm::buildCoroutineFrame(Function &F, CoroutineShape& Shape) {
 
   // Put CoroEnds into their own blocks.
   splitAround(Shape.CoroEnds.front(), "CoroEnd");
+  rewritePHIs(F);
 
   SuspendCrossingInfo Checker(F, Shape);
 
+  IRBuilder<> Builder(F.getContext());
+
   SpillInfo Spills;
+  // Collect the 
 
   // See if there are materializable instructions across suspend points.
   for (Instruction& I : instructions(F))
@@ -482,10 +520,9 @@ void llvm::buildCoroutineFrame(Function &F, CoroutineShape& Shape) {
         if (Checker.definitionAcrossSuspend(I, U))
           Spills.emplace_back(&I, U);
 
-  IRBuilder<> Builder(F.getContext());
-
   // Rewrite materializable instructions to be materialized at the use point.
-  sortAndSplitPhiEdges("Materializations", Spills);
+  std::sort(Spills.begin(), Spills.end());
+  DEBUG(dump("Materializations", Spills));
   rewriteMaterializableInstructions(Builder, Spills);
   Spills.clear();
 
@@ -515,7 +552,8 @@ void llvm::buildCoroutineFrame(Function &F, CoroutineShape& Shape) {
       }
   }
 
-  sortAndSplitPhiEdges("Spills", Spills);
+  std::sort(Spills.begin(), Spills.end());
+  DEBUG(dump("Spills", Spills));
   Shape.FrameTy = buildFrameType(F, Shape, Spills);
   Shape.FramePtr = insertSpills(Spills, Shape);
 }
