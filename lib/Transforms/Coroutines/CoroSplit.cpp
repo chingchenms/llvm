@@ -321,16 +321,16 @@ static Function *createCleanupClone(Function &F, Twine Suffix,
 }
 
 static void replaceFrameSize(CoroutineShape& Shape) {
-  if (Shape.CoroSize.empty())
+  if (Shape.CoroSizes.empty())
     return;
 
-  auto SizeIntrin = Shape.CoroSize.back();
+  auto SizeIntrin = Shape.CoroSizes.back();
   Module* M = SizeIntrin->getModule();
   const DataLayout &DL = M->getDataLayout();
   auto Size = DL.getTypeAllocSize(Shape.FrameTy);
   auto SizeConstant = ConstantInt::get(SizeIntrin->getType(), Size);
 
-  replaceAndRemove(toArrayRef(Shape.CoroSize), SizeConstant);
+  replaceAndRemove(toArrayRef(Shape.CoroSizes), SizeConstant);
 }
 
 static void updateCoroInfo(Function& F, CoroutineShape &Shape,

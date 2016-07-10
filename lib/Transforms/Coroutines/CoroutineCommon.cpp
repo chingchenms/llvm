@@ -191,7 +191,7 @@ void llvm::CoroutineShape::buildFrom(Function &F) {
       case Intrinsic::coro_size:
         if (auto Arg = II->getArgOperand(0)->stripPointerCasts())
           if (Arg->getType() == Type::getInt8PtrTy(II->getContext()))
-            CoroSize.push_back(cast<CoroSizeInst>(II));
+            CoroSizes.push_back(cast<CoroSizeInst>(II));
         break;
       case Intrinsic::coro_frame:
         assert(CoroBegin && "coro.frame should not appear before coro.begin");
