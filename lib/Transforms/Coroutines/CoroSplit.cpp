@@ -278,7 +278,7 @@ static CreateCloneResult createClone(Function &F, Twine Suffix,
   // Remap vFrame pointer.
   auto NewVFrame = Builder.CreateBitCast(
     NewFramePtr, Type::getInt8PtrTy(Builder.getContext()), "vFrame");
-  Value* OldVFrame = cast<Value>(VMap[Shape.CoroBegin.back()]);
+  Value* OldVFrame = cast<Value>(VMap[Shape.CoroBegin]);
   OldVFrame->replaceAllUsesWith(NewVFrame);
 
   // In ResumeClone (FnIndex == 0), it is undefined behavior to resume from
@@ -350,7 +350,7 @@ static void updateCoroInfo(Function& F, CoroutineShape &Shape,
   // Update coro.begin instruction to refer to this constant
   LLVMContext &C = F.getContext();
   auto BC = ConstantFolder().CreateBitCast(GV, Type::getInt8PtrTy(C));
-  Shape.CoroBegin.back()->setInfo(BC);
+  Shape.CoroBegin->setInfo(BC);
 }
 
 static void handleNoSuspendCoroutine(CoroBeginInst *CoroBegin, Type *FrameTy) {
@@ -450,12 +450,11 @@ static void splitCoroutine(Function &F, CallGraph &CG, CallGraphSCC &SCC) {
   simplifySuspendPoints(Shape);
   buildCoroutineFrame(F, Shape);
   replaceFrameSize(Shape);
-  replaceAndRemove(Shape.CoroFrame, Shape.CoroBegin.back());
 
   // If there is no suspend points, no split required, just remove
   // the allocation and deallocation blocks, they are not needed
   if (Shape.CoroSuspend.empty()) {
-    handleNoSuspendCoroutine(Shape.CoroBegin.back(), Shape.FrameTy);
+    handleNoSuspendCoroutine(Shape.CoroBegin, Shape.FrameTy);
     postSplitCleanup(F);
     CoroCommon::updateCallGraph(F, {}, CG, SCC);
     return;

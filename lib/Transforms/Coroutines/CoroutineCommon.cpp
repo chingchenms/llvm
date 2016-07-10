@@ -183,21 +183,20 @@ void llvm::CoroutineShape::dump() { reflect(DumpVisitor{}); }
 
 void llvm::CoroutineShape::buildFrom(Function &F) {
   clear();
-  for (Instruction& I : instructions(F)) {
-    if (auto RI = dyn_cast<ReturnInst>(&I))
-      Return.push_back(RI);
-    else if (auto II = dyn_cast<IntrinsicInst>(&I)) {
+  for (auto IB = inst_begin(F), IE = inst_end(F); IB != IE;) {
+    if (auto II = dyn_cast<IntrinsicInst>(&*IB++)) {
       switch (II->getIntrinsicID()) {
       default:
         continue;
       case Intrinsic::coro_size:
-        CoroSize.push_back(cast<CoroSizeInst>(II));
+        if (auto Arg = II->getArgOperand(0)->stripPointerCasts())
+          if (Arg->getType() == Type::getInt8PtrTy(II->getContext()))
+            CoroSize.push_back(cast<CoroSizeInst>(II));
         break;
       case Intrinsic::coro_frame:
-        CoroFrame.push_back(cast<CoroFrameInst>(II));
-        break;
-      case Intrinsic::coro_alloc:
-        CoroAlloc.push_back(cast<CoroAllocInst>(II));
+        assert(CoroBegin && "coro.frame should not appear before coro.begin");
+        II->replaceAllUsesWith(CoroBegin);
+        II->eraseFromParent();
         break;
       case Intrinsic::coro_suspend:
         CoroSuspend.push_back(cast<CoroSuspendInst>(II));
@@ -215,15 +214,15 @@ void llvm::CoroutineShape::buildFrom(Function &F) {
         break;
       case Intrinsic::coro_begin: {
         auto CB = cast<CoroBeginInst>(II);
-        CB->addAttribute(0, Attribute::NonNull);
-        CB->addAttribute(0, Attribute::NoAlias);
-        if (CB->getInfo().isPreSplit())
-          CoroBegin.push_back(CB);
+        if (CB->getInfo().isPreSplit()) {
+          assert(!CoroBegin &&
+                 "coroutine should have exactly one defining @llvm.coro.begin");
+          CB->addAttribute(0, Attribute::NonNull);
+          CB->addAttribute(0, Attribute::NoAlias);
+          CoroBegin = CB;
+        }
         break;
       }
-      case Intrinsic::coro_free:
-        CoroFree.push_back(cast<CoroFreeInst>(II));
-        break;
       case Intrinsic::coro_end:
         CoroEnd.push_back(cast<CoroEndInst>(II));
         if (CoroEnd.back()->isFinal()) {
@@ -237,10 +236,9 @@ void llvm::CoroutineShape::buildFrom(Function &F) {
       }
     }
   }
-  assert(CoroBegin.size() == 1 &&
-    "coroutine should have exactly one defining @llvm.coro.begin");
-  assert(CoroAlloc.size() <= 1 &&
-    "coroutine should have exactly one @llvm.coro.alloc");
+  for (User* U : CoroBegin->users())
+    if (auto CF = dyn_cast<CoroFreeInst>(U))
+      CoroFree.push_back(CF);
 }
 
 void llvm::initializeCoroutines(PassRegistry &registry) {

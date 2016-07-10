@@ -252,7 +252,7 @@ static void dump(StringRef Title, SpillInfo const& Spills) {
 
 static Instruction* insertSpills(SpillInfo &Spills,
                          CoroutineShape &Shape) {
-  auto CB = Shape.CoroBegin.back();
+  auto CB = Shape.CoroBegin;
   IRBuilder<> Builder(CB->getNextNode());
   PointerType* FramePtrTy = Shape.FrameTy->getPointerTo();
   Instruction *FramePtr =
@@ -459,9 +459,9 @@ static void sortAndSplitPhiEdges(StringRef Label, SpillInfo& Spills) {
 }
 
 void llvm::buildCoroutineFrame(Function &F, CoroutineShape& Shape) {
-  Shape.PromiseAlloca = Shape.CoroBegin.back()->getPromise();
+  Shape.PromiseAlloca = Shape.CoroBegin->getPromise();
   if (Shape.PromiseAlloca) {
-    Shape.CoroBegin.back()->clearPromise();
+    Shape.CoroBegin->clearPromise();
   }
 
   // Split all of the blocks on CoroSave.

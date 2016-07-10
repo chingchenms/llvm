@@ -60,7 +60,7 @@ static std::pair<Instruction*,Instruction*> getRetCode(CoroutineShape& S) {
 void llvm::outlineCoroutineParts(Function &F, CallGraph &CG,
                                  CallGraphSCC &SCC) {
   CoroutineShape S(F);
-  Module &M = *F.getParent();
+//  Module &M = *F.getParent();
   CoroCommon::removeLifetimeIntrinsics(F); // for now
   DEBUG(dbgs() << "Processing Coroutine: " << F.getName() << "\n");
   DEBUG(S.dump());
@@ -77,9 +77,9 @@ void llvm::outlineCoroutineParts(Function &F, CallGraph &CG,
   // Outline the parts and create a metadata tuple, so that CoroSplit
   // pass can quickly figure out what they are.
 
-  SmallVector<Function *, 8> Funcs{Outline(".AllocPart", S.CoroAlloc.back(),
-                                           S.CoroBegin.back()->getNextNode())};
 #if 0 // FIXME: outlining of End Parts
+  SmallVector<Function *, 8> Funcs{Outline(".AllocPart", S.CoroAlloc.back(),
+                                           S.CoroBegin->getNextNode())};
   for (CoroEndInst *CE : S.CoroEnd) {
     Value* FrameArg = CE->getFrameArg();
     if (isa<ConstantPointerNull>(FrameArg))
@@ -92,7 +92,6 @@ void llvm::outlineCoroutineParts(Function &F, CallGraph &CG,
     auto End = CE->getNextNode();
     Funcs.push_back(Outline(".FreePart", Start, End));
   }
-#endif
 
   {
     auto RC = getRetCode(S);
@@ -117,10 +116,11 @@ void llvm::outlineCoroutineParts(Function &F, CallGraph &CG,
   // Update coro.begin instruction to refer to this constant
   LLVMContext &C = F.getContext();
   auto BC = ConstantFolder().CreateBitCast(GV, Type::getInt8PtrTy(C));
-  S.CoroBegin.back()->setInfo(BC);
+  S.CoroBegin->setInfo(BC);
 
   updateCallGraph(F, Funcs, CG, SCC);
-  }
+#endif
+}
 
 #if 0
 static bool processModule(Module& M) {

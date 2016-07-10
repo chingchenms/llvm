@@ -35,7 +35,7 @@ struct Lowerer {
   LLVMContext& C;
   IRBuilder<> Builder;
   Type* Int8Ty;
-  Type* Int8PtrTy;
+  PointerType* Int8PtrTy;
 
   PointerType* AnyResumeFnPtrTy;
 
@@ -49,7 +49,7 @@ struct Lowerer {
   void replaceCoroPromise(IntrinsicInst *Intrin, bool from = false);
   void lowerResumeOrDestroy(IntrinsicInst* II, unsigned Index);
   void lowerCoroDone(IntrinsicInst* II);
-
+  void canonicalizeCoroSize(IntrinsicInst* II);
 };
 
 void Lowerer::replaceCoroPromise(IntrinsicInst *Intrin, bool from) {
@@ -113,7 +113,7 @@ void Lowerer::lowerCoroDone(IntrinsicInst* II) {
   auto Cond = Builder.CreateICmpEQ(Load, ConstantInt::get(Int8Ty, 0));
 #else
   // FIXME: this should be queried from FrameBuilding layer, not here
-  auto FrameTy = Builder.getInt8PtrTy();
+  auto FrameTy = Int8PtrTy;
   PointerType* FramePtrTy = FrameTy->getPointerTo();
 
   Builder.SetInsertPoint(II);
@@ -121,21 +121,33 @@ void Lowerer::lowerCoroDone(IntrinsicInst* II) {
   auto Gep = Builder.CreateConstInBoundsGEP1_32(FrameTy, BCI, 0);
   auto Load = Builder.CreateLoad(Gep);
   auto Cond = Builder.CreateICmpEQ(
-      Load, ConstantPointerNull::get(Builder.getInt8PtrTy()));
+      Load, ConstantPointerNull::get(Int8PtrTy));
 #endif
   II->replaceAllUsesWith(Cond);
   II->eraseFromParent();
+}
+
+void Lowerer::canonicalizeCoroSize(IntrinsicInst* II) {
+  Value* Arg = II->getArgOperand(0);
+  if (isa<ConstantPointerNull>(Arg))
+    return;
+  II->setArgOperand(0, ConstantPointerNull::get(Int8PtrTy));
+  if (Arg->user_empty())
+    cast<Instruction>(Arg)->eraseFromParent();
 }
 
 // TODO: handle invoke coro.resume and coro.destroy
 bool lowerEarlyIntrinsics(Function& F) {
   Lowerer L(F);
   bool changed = false;
-  for (auto IB = inst_begin(F), IE = inst_end(F); IB != IE;)
+  for (auto IB = inst_begin(F), IE = inst_end(F); IB != IE;) 
     if (auto II = dyn_cast<IntrinsicInst>(&*IB++)) {
       switch (II->getIntrinsicID()) {
       default:
         continue;
+      case Intrinsic::coro_size:
+        L.canonicalizeCoroSize(II);
+        break;
       case Intrinsic::coro_resume:
         L.lowerResumeOrDestroy(II, 0);
         break;
