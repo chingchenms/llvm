@@ -13,7 +13,7 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "CoroUtils.h"
+#include "CoroExtract.h"
 
 #include <llvm/Transforms/Utils/Cloning.h>
 
