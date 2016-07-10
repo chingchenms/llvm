@@ -64,7 +64,7 @@ the `coro.destroy`_ intrinsic.
 
 An LLVM coroutine is represented as an LLVM function that has calls to
 `coroutine intrinsics`_ defining the structure of the coroutine.
-After mandatory CoroSplit_ pass, a coroutine is split into several
+After lowering, a coroutine is split into several
 functions that represent three different ways of how control can enter the 
 coroutine: 
 
@@ -99,20 +99,17 @@ by the following pseudo-code.
 
   void *f(int n) {
      for(;;) {
-       yield(n++);
+       print(n++);
        <suspend> // magic: returns a coroutine handle on first suspend
      }
   }
 
-This coroutine calls some function `yield` with value `n` as an argument and
-suspends execution. Every time it resumes it calls `yield` again with an 
-argument one bigger than the last time. This coroutine never completes by 
-itself and must be destroyed explicitly. If we use this coroutine with 
-a `main` shown in the previous section. It will call `yield` with values 4, 5 
+This coroutine calls some function `print` with value `n` as an argument and
+suspends execution. Every time this coroutine resumes, it calls `print` again with an argument one bigger than the last time. This coroutine never completes by itself and must be destroyed explicitly. If we use this coroutine with 
+a `main` shown in the previous section. It will call `print` with values 4, 5 
 and 6 after which the coroutine will be destroyed.
 
-We will look at individual parts of the LLVM coroutine matching the pseudo-code
-above starting with coroutine frame creation and destruction:
+The LLVM IR for this coroutine looks like this:
 
 .. code-block:: llvm
 
@@ -149,17 +146,14 @@ memory).
 The `coro.free` intrinsic, given the coroutine frame pointer,
 returns a pointer of the memory block to be freed.
 
-Two other intrinsics seen in this fragment are used to mark up the control flow
-during an initial and subsequent invocation of the coroutine. The true branch
-of the conditional branch instruction consuming the result of the `coro.fork`_ 
-intrinsic indicates the block where control should transfer on the first
-suspension of the coroutine. The `coro.resume.end`_ intrinsic marks the point
-where coroutine needs to return control back to the caller if it is not an initial
-invocation of the coroutine. (During the inital coroutine invocation this
-intrinsic is a no-op).
+The `coro.resume.end`_ intrinsic marks the point where coroutine needs to return control back to the caller if it is not an initial invocation of the coroutine. (During the inital coroutine invocation this intrinsic is a no-op).
 
 This function returns a pointer to a coroutine frame which acts as 
-a `coroutine handle`_  expected by `coro.resume`_ and `coro.destroy`_ intrinsics.
+a `coroutine handle`_  expected by `coro.resume`_ and `coro.destroy`_ intrinsics. (There is no requirement that the coroutine has to return a handle
+to itself as a return value. It just happens so, that the particular coroutine
+we are looking in this example does.)
+
+
 
 .. The `malloc` function is used to allocate memory dynamically for 
 .. coroutine frame.   
@@ -171,7 +165,7 @@ is straightforward:
 
   coro.start:
     %n.val = phi i32 [ %n, %entry ], [ %inc, %resume ]
-    call void @yield(i32 %n.val)
+    call void @print(i32 %n.val)
     %suspend = call i1 @llvm.coro.suspend(token none, i1 false)
     br i1 %suspend, label %resume, label %cleanup
 
@@ -226,7 +220,7 @@ look like:
    
     %n.val.addr = getelementptr %f.frame, %f.frame* %frame, i32 0, i32 2
     store i32 %n, i32* %n.val.addr
-    call void @yield(i32 %n)
+    call void @print(i32 %n)
    
     ret i8* %frame
   }
@@ -242,7 +236,7 @@ resume will be extracted into `f.resume` function:
     %n.val = load i32, i32* %n.val.addr, align 4
     %inc = add i32 %n.val, 1
     store i32 %inc, i32* %n.val.addr, align 4
-    tail call void @yield(i32 %inc)
+    tail call void @print(i32 %inc)
     ret void
   }
 
@@ -317,9 +311,9 @@ allocation elision optimization, the resulting main will end up looking like:
 
   define i32 @main() {
   entry:
-    call void @yield(i32 4)
-    call void @yield(i32 5)
-    call void @yield(i32 6)
+    call void @print(i32 4)
+    call void @print(i32 5)
+    call void @print(i32 6)
     ret i32 0
   }
 
@@ -333,9 +327,9 @@ Let's consider the coroutine that has more than one suspend point:
 
   void *f(int n) {
      for(;;) {
-       yield(n++);
+       print(n++);
        <suspend>
-       yield(-n);
+       print(-n);
        <suspend>
      }
   }
@@ -347,14 +341,14 @@ as the code in the previous section):
 
   coro.start:
       %n.val = phi i32 [ %n, %coro.begin ], [ %inc, %resume ]
-      call void @yield(i32 %n.val)
+      call void @print(i32 %n.val)
       %suspend1 = call i1 @llvm.coro.suspend(token none, i1 false)
       br i1 %suspend1, label %resume, label %cleanup
 
     resume:
       %inc = add i32 %n.val, 1
       %sub = sub nsw i32 0, %inc
-      call void @yield(i32 %sub)
+      call void @print(i32 %sub)
       %suspend2 = call i1 @llvm.coro.suspend(token none, i1 false)
       br i1 %suspend2, label %coro.start, label %cleanup
 
@@ -502,13 +496,13 @@ coroutine promise.
     %hdl = call i8* @f(i32 4)
     %promise.addr = call i32* @llvm.coro.promise.p0i32(i8* %hdl)
     %val0 = load i32, i32* %promise.addr
-    call void @yield(i32 %val0)
+    call void @print(i32 %val0)
     call void @llvm.coro.resume(i8* %hdl)
     %val1 = load i32, i32* %promise.addr
-    call void @yield(i32 %val1)
+    call void @print(i32 %val1)
     call void @llvm.coro.resume(i8* %hdl)
     %val2 = load i32, i32* %promise.addr
-    call void @yield(i32 %val2)
+    call void @print(i32 %val2)
     call void @llvm.coro.destroy(i8* %hdl)
     ret i32 0
   }
