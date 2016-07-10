@@ -100,9 +100,9 @@ by the following pseudo-code.
   void *f(int n) {
      for(;;) {
        print(n++);
-       <suspend> // magic: returns a coroutine handle on first suspend
-     }
-  }
+       <suspend> // returns a coroutine handle on first suspend
+     }     
+  } 
 
 This coroutine calls some function `print` with value `n` as an argument and
 suspends execution. Every time this coroutine resumes, it calls `print` again with an argument one bigger than the last time. This coroutine never completes by itself and must be destroyed explicitly. If we use this coroutine with 
@@ -115,101 +115,63 @@ The LLVM IR for this coroutine looks like this:
 
   define i8* @f(i32 %n) {
   entry:
-    %size = call i32 @llvm.coro.size()
+    %size = call i32 @llvm.coro.size.i32(i8* null)
     %alloc = call i8* @malloc(i32 %size)
     %hdl = call i8* @llvm.coro.begin(i8* %alloc, i8* null, i32 0, i8* null, i8* null)
-
+    br label %loop
   loop:
     %n.val = phi i32 [ %n, %entry ], [ %inc, %resume ]
     call void @print(i32 %n.val)
     %0 = call i8 @llvm.coro.suspend(token none, i1 false)
-    switch i8 %0, label %suspend [i8 0, label %resume i32 1, label %cleanup]
+    switch i8 %0, label %suspend [i8 0, label %resume
+                                  i8 1, label %cleanup]
   resume:
     %inc = add i32 %n.val, 1
-    br label %coro.start
-
+    br label %loop
   cleanup:
     %mem = call i8* @llvm.coro.free(i8* %hdl)
     call void @free(i8* %mem)
+    br label %suspend
   suspend:
-    call void @llvm.coro.end(i1 0)  
+    call void @llvm.coro.end(i1 0)
     ret i8* %hdl
   }
 
-The `entry` block establish the coroutine frame. The `coro.size`_ intrinsic is lowered to a constant representing the size required for the coroutine frame. 
+The `entry` block establishes the coroutine frame. The `coro.size`_ intrinsic is lowered to a constant representing the size required for the coroutine frame. 
 The `coro.begin`_ intrinsic initializes the coroutine frame and returns the coroutine handle. The first parameter of `coro.begin` is given a block of memory to be used if the coroutine frame need to be allocated dynamically.
 
-The `cleanup` block 
+The `cleanup` block destroys the coroutine frame. The `coro.free`_ intrinsic, given the coroutine handle, returns a pointer of the memory block to be freed or `null` if the coroutine frame was not allocated dynamically. The `cleanup` block is entered when coroutine runs to completion by itself or destroyed via
+call to the `coro.destroy`_ intrinsic.
 
-The `coro.free` intrinsic, given the coroutine frame pointer,
-returns a pointer of the memory block to be freed.
+The `suspend` block contains code to be executed when coroutine runs to completion or suspended. The `coro.end`_ intrinsic marks the point where coroutine needs to return control back to the caller if it is not an initial invocation of the coroutine. 
 
-The `coro.end`_ intrinsic marks the point where coroutine needs to return control back to the caller if it is not an initial invocation of the coroutine. (During the initial coroutine invocation this intrinsic is a no-op).
-
-This function returns a pointer to a coroutine frame which acts as 
-a `coroutine handle`_  expected by `coro.resume`_ and `coro.destroy`_ intrinsics. (There is no requirement that the coroutine has to return a handle
-to itself as a return value. It just happens so, that the particular coroutine
-we are looking in this example does.)
-
-
-
-.. The `malloc` function is used to allocate memory dynamically for 
-.. coroutine frame.   
-
-The rest of the coroutine code in blocks `coro.start` and `resume` 
-is straightforward:
-
-.. code-block:: llvm
-
-  coro.start:
-    %n.val = phi i32 [ %n, %entry ], [ %inc, %resume ]
-    call void @print(i32 %n.val)
-    %suspend = call i1 @llvm.coro.suspend(token none, i1 false)
-    br i1 %suspend, label %resume, label %cleanup
-
-  resume:
-    %inc = add i32 %n.val, 1
-    br label %coro.start
-
-When control reaches `coro.suspend`_ intrinsic, the coroutine is suspended and
-returns control back to the caller.
-The conditional branch following the `coro.suspend` intrinsic indicates two
-alternative continuation for the coroutine, one for normal resume, another
-for destroy. The boolean parameter to `coro.suspend` indicates whether a
-suspend point represents a `final suspend`_ or not.
+The `loop` and `resume` blocks represent the body of the coroutine. The `coro.suspend`_ intrinsic in combination with the following switch indicates what happens to control flow when a coroutine is suspended (default case), resumed (case 0) or destroyed (case 1).
 
 Coroutine Transformation
 ------------------------
 
-One of the steps in coroutine transformation is to figure out what objects can
-reside on the normal function stack frame or in the register and which needs 
-to go into a coroutine frame.
+One of the steps of coroutine lowering is building of the coroutine frame. The
+def-use chains are analyzed to determine which objects need be kept alive across suspend points.
 
-In the coroutine shown in the previous section, use of virtual register `%n.val`
-is separated from the definition by a suspend point, it cannot reside
-on the stack frame since it will go away once the coroutine is
-suspended and returns control back to the caller and, therefore, need to be a 
-part of the coroutine frame.
+In the coroutine shown in the previous section, use of virtual register 
+`%n.val` in `resume` block is separated from the definition in the `loop` block by a suspend point, therefore, it cannot reside on the stack frame since the latter goes away once the coroutine is suspended and control is returned back to the caller. An i32 slot is allocated in the coroutine frame and 
+`%n.val` is spilled and reloaded from that slot as needed.
 
-Other members of the coroutine frame are addresses of resume and destroy
-functions representing the coroutine behavior for when a coroutine
-is resumed and destroyed respectively.
+We also store addresses of the resume and destroy functions so that the 
+`coro.resume` and `coro.destroy` intrinsics can resume and destroy the coroutine when its identity cannot be determined statically at compile time. For our example, coroutine frame will be:
 
 .. code-block:: llvm
 
   %f.frame = type { void (%f.frame*)*, void (%f.frame*)*, i32 }
 
-After coroutine transformation, function `f` is responsible for creation and
-initialization of the coroutine frame and execution of the coroutine code until
-a suspend point is reached or control reaches the end of the function. It will
-look like:
+After resume and destroy parts are outlined, function `f` will contain only the code responsible for creation and initialization of the coroutine frame and execution of the coroutine until a suspend point is reached:
 
 .. code-block:: llvm
 
   define i8* @f(i32 %n) {
   entry:
     %alloc = call noalias i8* @malloc(i32 24)
-    %0 = call nonnull i8* @llvm.coro.begin(i8* %alloc, i32 0, i8* null, i8* null)
+    %0 = call noalias i8* @llvm.coro.begin(i8* %alloc, i32 0, i8* null, i8* null)
     %frame = bitcast i8* %frame to %f.frame*
     %1 = getelementptr %f.frame, %f.frame* %frame, i32 0, i32 0
     store void (%f.frame*)* @f.resume, void (%f.frame*)** %1
@@ -217,7 +179,7 @@ look like:
     store void (%f.frame*)* @f.destroy, void (%f.frame*)** %2
    
     %n.val.addr = getelementptr %f.frame, %f.frame* %frame, i32 0, i32 2
-    store i32 %n, i32* %n.val.addr
+    store i32 %n, i32* %n.val.addr ; spill n.val to the coroutine frame
     call void @print(i32 %n)
    
     ret i8* %frame
