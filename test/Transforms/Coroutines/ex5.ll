@@ -30,7 +30,7 @@ cleanup:
   call void @free(i8* %mem)
   br label %suspend
 suspend:
-  call void @llvm.coro.end(i8* null, i1 false)
+  call void @llvm.coro.end(i8* %hdl, i1 false)
   ret i8* %hdl
 }
 

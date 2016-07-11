@@ -12,7 +12,7 @@ entry:
 loop:
   %n.val = phi i32 [ %n, %entry ], [ %inc, %loop ]
   %inc = add nsw i32 %n.val, 1
-  store i32 %n.val, i32* %promise
+  store i32 %n.val, i32* %promise ; storing the result in the promise
   %0 = call i8 @llvm.coro.suspend(token none, i1 false)
   switch i8 %0, label %suspend [i8 0, label %loop
                                 i8 1, label %cleanup]

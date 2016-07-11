@@ -12,7 +12,8 @@ loop:
   %n.val = phi i32 [ %n, %entry ], [ %inc, %resume ]
   call void @print(i32 %n.val)
   %0 = call i8 @llvm.coro.suspend(token none, i1 false)
-  switch i8 %0, label %suspend [i8 0, label %resume i8 1, label %cleanup]
+  switch i8 %0, label %suspend [i8 0, label %resume 
+                                i8 1, label %cleanup]
 resume:
   %inc = add i32 %n.val, 1
   br label %loop
