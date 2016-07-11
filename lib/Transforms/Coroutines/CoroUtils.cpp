@@ -199,9 +199,10 @@ void llvm::CoroutineShape::buildFrom(Function &F) {
         II->eraseFromParent();
         break;
       case Intrinsic::coro_suspend:
+        assert(CoroBegin && "coro.suspend should not appear before coro.begin");
         CoroSuspends.push_back(cast<CoroSuspendInst>(II));
         if (!CoroSuspends.back()->getCoroSave()) {
-          CoroSaveInst::Create(CoroSuspends.back());
+          CoroSaveInst::Create(CoroBegin, CoroSuspends.back());
         }
         if (CoroSuspends.back()->isFinal()) {
           HasFinalSuspend = true;

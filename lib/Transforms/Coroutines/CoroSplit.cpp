@@ -458,6 +458,7 @@ static void splitCoroutine(Function &F, CallGraph &CG, CallGraphSCC &SCC) {
   // If there is no suspend points, no split required, just remove
   // the allocation and deallocation blocks, they are not needed
   if (Shape.CoroSuspends.empty()) {
+    preSplitCleanup(F);
     handleNoSuspendCoroutine(Shape.CoroBegin, Shape.FrameTy);
     postSplitCleanup(F);
     CoroCommon::updateCallGraph(F, {}, CG, SCC);

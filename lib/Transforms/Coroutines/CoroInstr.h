@@ -24,10 +24,9 @@
 #include <llvm/IR/IRBuilder.h>
 #include <llvm/IR/GlobalVariable.h> // TODO: move to .cpp
 
-// Metadata tuple in CoroInitInstr starts with a string identifying 
-// the pass that produces the metadata. It can hold one of these values:
-
 namespace llvm {
+
+  class CoroBeginInst;
 
   /// This represents the llvm.coro.subfn instruction.
   class LLVM_LIBRARY_VISIBILITY CoroSubFnInst : public IntrinsicInst {
@@ -93,7 +92,7 @@ namespace llvm {
   /// This represents the llvm.coro.save instruction.
   class LLVM_LIBRARY_VISIBILITY CoroSaveInst : public IntrinsicInst {
   public:
-    static CoroSaveInst *Create(CoroSuspendInst *);
+    static CoroSaveInst *Create(CoroBeginInst*, CoroSuspendInst *);
 
     // Methods to support type inquiry through isa, cast, and dyn_cast:
     static inline bool classof(const IntrinsicInst *I) {
@@ -141,7 +140,7 @@ namespace llvm {
 
   /// This represents the llvm.coro.end instruction.
   class LLVM_LIBRARY_VISIBILITY CoroEndInst : public IntrinsicInst {
-    enum { kUnwind  };
+    enum { kFrame, kUnwind  };
   public:
     bool isFinal() const { return !isUnwind(); }
     bool isUnwind() const {
@@ -159,11 +158,15 @@ namespace llvm {
 
   /// This represents the llvm.coro.begin instruction.
   class LLVM_LIBRARY_VISIBILITY CoroBeginInst : public IntrinsicInst {
-    enum { kMem, kAlloc, kAlign, kPromise, kInfo };
+    enum { kMem, kAlign, kPromise, kInfo };
   public:
 
     CoroAllocInst *getAlloc() const {
-      return dyn_cast<CoroAllocInst>(getArgOperand(kAlloc));
+      if (auto PN = dyn_cast<PHINode>(getMem()))
+        for (Value *V : PN->incoming_values())
+          if (auto CA = dyn_cast<CoroAllocInst>(V))
+            return CA;
+      return nullptr;
     }
 
     Value *getMem() const { return getArgOperand(kMem); }
