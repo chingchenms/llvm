@@ -314,46 +314,51 @@ as the code in the previous section):
 
 .. code-block:: llvm
 
-loop:
-  %n.addr = phi i32 [ %n, %entry ], [ %inc, %loop.resume ]
-  call void @print(i32 %n.addr) #4
-  %2 = call i8 @llvm.coro.suspend(token none, i1 false)
-  switch i8 %2, label %suspend [i8 0, label %loop.resume
-                                i8 1, label %cleanup]
-loop.resume:
-  %inc = add nsw i32 %n.addr, 1
-  %sub = xor i32 %n.addr, -1
-  call void @print(i32 %sub)
-  %3 = call i8 @llvm.coro.suspend(token none, i1 false)
-  switch i8 %3, label %suspend [i8 0, label %loop
-                                i8 1, label %cleanup]
+  loop:
+    %n.addr = phi i32 [ %n, %entry ], [ %inc, %loop.resume ]
+    call void @print(i32 %n.addr) #4
+    %2 = call i8 @llvm.coro.suspend(token none, i1 false)
+    switch i8 %2, label %suspend [i8 0, label %loop.resume
+                                  i8 1, label %cleanup]
+  loop.resume:
+    %inc = add nsw i32 %n.addr, 1
+    %sub = xor i32 %n.addr, -1
+    call void @print(i32 %sub)
+    %3 = call i8 @llvm.coro.suspend(token none, i1 false)
+    switch i8 %3, label %suspend [i8 0, label %loop
+                                  i8 1, label %cleanup]
 
-In this case, the coroutine frame would include a suspend index that will indicate
-at which suspend point the coroutine needs to resume. The resume function will 
-use an index to jump to an appropriate basic block and will look as follows:
+In this case, the coroutine frame would include a suspend index that will 
+indicate at which suspend point the coroutine needs to resume. The resume 
+function will use an index to jump to an appropriate basic block and will look 
+as follows:
 
 .. start with a switch as follows:
 
 .. code-block:: llvm
 
-  define internal fastcc void @f.resume(%f.frame* nocapture nonnull %frame.ptr.resume) {
-  entry:
-    %index.addr = getelementptr %f.frame, %f.frame* %frame.ptr.resume, i64 0, i32 2
-    %index = load i32, i32* %0, align 4
-    %switch = icmp eq i32 %index, 0
-    br i1 %switch, label %resume, label %coro.start
+  define internal fastcc void @f.Resume(%f.Frame* %FramePtr) {
+  entry.Resume:
+    %index.addr = getelementptr inbounds %f.Frame, %f.Frame* %FramePtr, i64 0, i32 2
+    %index = load i8, i8* %index.addr, align 1
+    %switch = icmp eq i8 %index, 0
+    %n.addr = getelementptr inbounds %f.Frame, %f.Frame* %FramePtr, i64 0, i32 3
+    %n = load i32, i32* %n.addr, align 4
+    br i1 %switch, label %loop.resume, label %loop
 
-  coro.start:
-    ...
-    br label %exit
+  loop.resume:
+    %sub = xor i32 %n, -1
+    call void @print(i32 %sub)
+    br label %suspend
+  loop:
+    %inc = add nsw i32 %n, 1
+    store i32 %inc, i32* %n.addr, align 4
+    tail call void @print(i32 %inc)
+    br label %suspend
 
-  resume:
-    ...
-    br label %exit
-
-  exit:
-    %storemerge = phi i32 [ 1, %resume ], [ 0, %coro.start ]
-    store i32 %storemerge, i32* %index.addr, align 4
+  suspend:
+    %storemerge = phi i8 [ 0, %loop ], [ 1, %loop.resume ]
+    store i8 %storemerge, i8* %index.addr, align 1
     ret void
   }
 
@@ -364,11 +369,11 @@ a similar switch will be in the `f.destroy` function.
 
   Using suspend index in a coroutine state and having a switch in `f.resume` and
   `f.destroy` is one of the possible implementation strategies. We explored 
-  another option where a distinct `f.resume1`, `f.resume2`, etc are created for
-  every suspend point and instead of storing an index, the resume and destroy 
+  another option where a distinct `f.resume1`, `f.resume2`, etc. are created for
+  every suspend point, and instead of storing an index, the resume and destroy 
   function pointers are updated at every suspend. Early testing showed that the
-  former is easier on the optimizer than the latter so it is a strategy 
-  implemented at the moment.
+  current approach is easier on the optimizer than the latter so it is a 
+  lowering strategy implemented at the moment.
 
 Distinct Save and Suspend
 -------------------------
