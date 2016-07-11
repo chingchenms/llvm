@@ -521,8 +521,8 @@ Such a suspend point has two properties:
   undefined behavior. The only possible action for a coroutine at a final
   suspend point is destroying it via `coro.destroy`_ intrinsic.
 
-From the user perspective, final suspend point represents an idea of a coroutine
-reaching the end. From the compiler perspective it is an optimization opportunity
+From the user perspective, the final suspend point represents an idea of a coroutine
+reaching the end. From the compiler perspective, it is an optimization opportunity
 for reducing number of resume points (and therefore switch cases) in the resume
 function.
 
@@ -534,16 +534,14 @@ destroyed:
 
   define i32 @main() {
   entry:
-    %coro = call i8* @g()
-    br %while.cond
-  while.cond:
-    %done = call i1 @llvm.coro.done(i8* %coro)
-    br i1 %done, label %while.end, label %while.body
-  while.body:
-    call void @llvm.coro.resume(i8* %coro)
-    br label %while.cond
-  while.end:
-    call void @llvm.coro.destroy(i8* %coro)
+    %hdl = call i8* @f(i32 4)
+    br label %while
+  while:
+    call void @llvm.coro.resume(i8* %hdl)
+    %done = call i1 @llvm.coro.done(i8* %hdl)
+    br i1 %done, label %end, label %while
+  end:
+    call void @llvm.coro.destroy(i8* %hdl)
     ret i32 0
   }
 
