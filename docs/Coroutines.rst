@@ -275,16 +275,15 @@ thus skipping the deallocation code:
     %mem = call i8* @llvm.coro.free(i8* %frame)
     %tobool = icmp ne i8* %mem, null
     br i1 %tobool, label %if.then, label %if.end
-
   if.then:
     call void @CustomFree(i8* %mem)
     br label %if.end
-
   if.end:
     ...
 
-With allocations and deallocations described as above, after inlining and heap
-allocation elision optimization, the resulting main will end up looking like:
+With allocations and deallocations represented as described as above, after
+coroutine heap allocation elision optimization, the resulting main will end up 
+looking just like it was when we used `malloc` and `free`:
 
 .. code-block:: llvm
 
@@ -570,11 +569,10 @@ The argument is a coroutine handle to a suspended coroutine.
 Semantics:
 """"""""""
 
-When possible, the `coro.destroy` intrinsic is replaced with a
-direct call to coroutine destroy function. Otherwise it is replaced with an
-indirect call based on the function pointer for the destroy function stored 
-in the coroutine frame. Destroying a coroutine that is not suspended leads to
-undefined behavior.
+When possible, the `coro.destroy` intrinsic is replaced with a direct call to 
+the coroutine destroy function. Otherwise it is replaced with an indirect call 
+based on the function pointer for the destroy function stored in the coroutine
+frame. Destroying a coroutine that is not suspended leads to undefined behavior.
 
 .. _coro.resume:
 
@@ -588,8 +586,7 @@ undefined behavior.
 Overview:
 """""""""
 
-The '``llvm.coro.resume``' intrinsic resumes a suspended
-coroutine.
+The '``llvm.coro.resume``' intrinsic resumes a suspended coroutine.
 
 Arguments:
 """"""""""
@@ -599,11 +596,10 @@ The argument is a handle to a suspended coroutine.
 Semantics:
 """"""""""
 
-When possible, the `coro.resume` intrinsic is replaced with a
-direct call to coroutine resume function. Otherwise it is replaced with an
-indirect call based on the function pointer for the resume function stored 
-in the coroutine frame. Resuming a coroutine that is not suspended leads to
-undefined behavior.
+When possible, the `coro.resume` intrinsic is replaced with a direct call to the
+coroutine resume function. Otherwise it is replaced with an indirect call based 
+on the function pointer for the resume function stored in the coroutine frame. 
+Resuming a coroutine that is not suspended leads to undefined behavior.
 
 .. _coro.done:
 
@@ -617,8 +613,8 @@ undefined behavior.
 Overview:
 """""""""
 
-The '``llvm.coro.done``' intrinsic checks whether a suspended
-coroutine is at the final suspend point or not.
+The '``llvm.coro.done``' intrinsic checks whether a suspended coroutine is at 
+the final suspend point or not.
 
 Arguments:
 """"""""""
@@ -698,8 +694,8 @@ the coroutine structure. They should not be used outside of a coroutine.
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 ::
 
-    declare i32 @llvm.coro.size()
-    declare i64 @llvm.coro.size()
+    declare i32 @llvm.coro.size(i8*)
+    declare i64 @llvm.coro.size(i8*)
 
 Overview:
 """""""""
@@ -710,13 +706,15 @@ required to store a `coroutine frame`_.
 Arguments:
 """"""""""
 
-None.
+Before the coroutine frame is built, the argument must be `null`. After 
+coroutine frame is built, the argument is replaced with a pointer to a global
+private constant of the coroutine frame type.
 
 Semantics:
 """"""""""
 
 The `coro.size` intrinsic is lowered to a constant representing the size of
-the coroutine frame.
+the coroutine frame. 
 
 .. _coro.begin:
 
