@@ -117,7 +117,7 @@ The LLVM IR for this coroutine looks like this:
   entry:
     %size = call i32 @llvm.coro.size.i32(i8* null)
     %alloc = call i8* @malloc(i32 %size)
-    %hdl = call noalias i8* @llvm.coro.begin(i8* %alloc, i8* null, i32 0, i8* null, i8* null)
+    %hdl = call noalias i8* @llvm.coro.begin(i8* %alloc, i32 0, i8* null, i8* null)
     br label %loop
   loop:
     %n.val = phi i32 [ %n, %entry ], [ %inc, %loop ]
@@ -131,7 +131,7 @@ The LLVM IR for this coroutine looks like this:
     call void @free(i8* %mem)
     br label %suspend
   suspend:
-    call void @llvm.coro.end(i1 false)
+    call void @llvm.coro.end(i8* %hdl, i1 false)
     ret i8* %hdl
   }
 
@@ -253,17 +253,15 @@ when dynamic allocation is required, and non-null otherwise:
 
   entry:
     %elide = call i8* @llvm.coro.alloc()
-    %0 = icmp ne i8* %elide, null
-    br i1 %0, label %coro.begin, label %dyn.alloc
-
+    %need.dyn.alloc = icmp ne i8* %elide, null
+    br i1 %need.dyn.alloc, label %coro.begin, label %dyn.alloc
   dyn.alloc:
-    %frame.size = call i32 @llvm.coro.size()
-    %alloc = call i8* @CustomAlloc(i32 %frame.size)
+    %size = call i32 @llvm.coro.size.i32(i8* null)
+    %alloc = call i8* @CustomAlloc(i32 %size)
     br label %coro.begin
-
   coro.begin:
     %phi = phi i8* [ %elide, %entry ], [ %alloc, %dyn.alloc ]
-    %frame = call i8* @llvm.coro.begin(i8* %phi, %elide, i32 0, i8* null, i8* null)
+    %hdl = call noalias i8* @llvm.coro.begin(i8* %phi, i32 0, i8* null, i8* null)
 
 In the cleanup block, we will make freeing the coroutine frame conditional on
 `coro.free`_ intrinsic. If allocation is elided, `coro.free`_ returns `null`
@@ -272,10 +270,10 @@ thus skipping the deallocation code:
 .. code-block:: llvm
 
   cleanup:
-    %mem = call i8* @llvm.coro.free(i8* %frame)
-    %tobool = icmp ne i8* %mem, null
-    br i1 %tobool, label %if.then, label %if.end
-  if.then:
+    %mem = call i8* @llvm.coro.free(i8* %hdl)
+    %need.dyn.free = icmp ne i8* %mem, null
+    br i1 %need.dyn.free, label %dyn.free, label %if.end
+  dyn.free:
     call void @CustomFree(i8* %mem)
     br label %if.end
   if.end:
@@ -294,7 +292,6 @@ looking just like it was when we used `malloc` and `free`:
     call void @print(i32 6)
     ret i32 0
   }
-
 
 Multiple Suspend Points
 -----------------------
@@ -317,18 +314,19 @@ as the code in the previous section):
 
 .. code-block:: llvm
 
-  coro.start:
-      %n.val = phi i32 [ %n, %coro.begin ], [ %inc, %resume ]
-      call void @print(i32 %n.val)
-      %suspend1 = call i1 @llvm.coro.suspend(token none, i1 false)
-      br i1 %suspend1, label %resume, label %cleanup
-
-    resume:
-      %inc = add i32 %n.val, 1
-      %sub = sub nsw i32 0, %inc
-      call void @print(i32 %sub)
-      %suspend2 = call i1 @llvm.coro.suspend(token none, i1 false)
-      br i1 %suspend2, label %coro.start, label %cleanup
+loop:
+  %n.addr = phi i32 [ %n, %entry ], [ %inc, %loop.resume ]
+  call void @print(i32 %n.addr) #4
+  %2 = call i8 @llvm.coro.suspend(token none, i1 false)
+  switch i8 %2, label %suspend [i8 0, label %loop.resume
+                                i8 1, label %cleanup]
+loop.resume:
+  %inc = add nsw i32 %n.addr, 1
+  %sub = xor i32 %n.addr, -1
+  call void @print(i32 %sub)
+  %3 = call i8 @llvm.coro.suspend(token none, i1 false)
+  switch i8 %3, label %suspend [i8 0, label %loop
+                                i8 1, label %cleanup]
 
 In this case, the coroutine frame would include a suspend index that will indicate
 at which suspend point the coroutine needs to resume. The resume function will 
