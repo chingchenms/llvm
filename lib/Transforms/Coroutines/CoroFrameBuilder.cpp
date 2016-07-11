@@ -393,8 +393,11 @@ static StructType *buildFrameType(Function &F, CoroutineShape &Shape,
 }
 
 static bool materializable(Instruction& V) {
-  return isa<BitCastInst>(&V)
+  return isa<CastInst>(&V)
     || isa<GetElementPtrInst>(&V)
+    || isa<BinaryOperator>(&V)
+    || isa<CmpInst>(&V)
+    || isa<SelectInst>(&V)
     ;
 }
 

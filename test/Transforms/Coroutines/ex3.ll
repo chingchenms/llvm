@@ -24,11 +24,12 @@ cleanup:
   %mem = call i8* @llvm.coro.free(i8* %hdl)
   call void @free(i8* %mem)
   br label %suspend
-
 suspend:
   call void @llvm.coro.end(i8* %hdl, i1 false)
   ret i8* %hdl
 }
+
+; CHECK: %f.Frame = type { void (%f.Frame*)*, void (%f.Frame*)*, i8, i32 }
 
 ; CHECK-LABEL: @main
 define i32 @main() {
