@@ -912,7 +912,7 @@ First argument should refer to the coroutine handle of the enclosing coroutine.
 
 The second argument should be `true` if this coro.end is in the block that is 
 part of the unwind sequence leaving the coroutine body due to exception prior to
- the first reaching any suspend points, and `false` otherwise.
+the first reaching any suspend points, and `false` otherwise.
 
 Semantics:
 """"""""""
@@ -931,6 +931,7 @@ caller.
 A frontend is allowed to supply null as the first parameter, in this case 
 `coro-early` pass will replace the null with an appropriate coroutine handle
 value.
+
 .. _coro.suspend:
 .. _suspend points:
 
@@ -1092,7 +1093,7 @@ Areas Requiring Attention
 #. Design a convention that would make it possible to apply coroutine heap
    elision optimization across ABI boundaries.
 
-#. Cannot handle coroutines with inalloca parameters (used in x86 on Windows)
+#. Cannot handle coroutines with `inalloca` parameters (used in x86 on Windows)
 
 #. Alignment is ignored by coro.begin and coro.free intrinsics.
 
