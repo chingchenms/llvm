@@ -407,21 +407,24 @@ operation is finished.
 
 In this case, coroutine should be ready for resumption prior to a call to 
 `async_op1` and `async_op2`. The `coro.save`_ intrinsic is used to indicate a
-point when coroutine should be ready for resumption:
+point when coroutine should be ready for resumption (namely, when a resume index
+should be stored in the coroutine frame, so that it can be resumed at the 
+correct resume point):
 
 .. code-block:: llvm
 
   if.true:
-    %save1 = call token @llvm.coro.save()
-    call void async_op1(i8* %frame)
+    %save1 = call token @llvm.coro.save(i8* %hdl)
+    call void async_op1(i8* %hdl)
     %suspend1 = call i1 @llvm.coro.suspend(token %save1, i1 false)
-    br i1 %suspend1, label %resume1, label %cleanup
-
+    switch i8 %suspend1, label %suspend [i8 0, label %resume1
+                                         i8 1, label %cleanup]
   if.false:
-    %save2 = call token @llvm.coro.save()
-    call void async_op2(i8* %frame)
+    %save2 = call token @llvm.coro.save(i8* %hdl)
+    call void async_op2(i8* %hdl)
     %suspend2 = call i1 @llvm.coro.suspend(token %save2, i1 false)
-    br i1 %suspend2, label %resume2, label %cleanup
+    switch i8 %suspend1, label %suspend [i8 0, label %resume2
+                                         i8 1, label %cleanup]
 
 .. _coroutine promise:
 
@@ -442,29 +445,24 @@ store the current value produced by a coroutine.
   entry:
     %promise = alloca i32
     %pv = bitcast i32* %promise to i8*
-    %frame.size = call i32 @llvm.coro.size()
-    %alloc = call noalias i8* @malloc(i32 %frame.size)
-    %frame = call i8* @llvm.coro.begin(i8* %alloc, i32 0, i8* %pv, i8* null)
-    %first.return = call i1 @llvm.coro.fork()
-    br i1 %first.return, label %coro.return, label %coro.start
-
-  coro.start:
-    %n.val = phi i32 [ %n, %entry ], [ %inc, %resume ]
+    %size = call i32 @llvm.coro.size.i32(i8* null)
+    %alloc = call i8* @malloc(i32 %size)
+    %hdl = call noalias i8* @llvm.coro.begin(i8* %alloc, i32 0, i8* %pv, i8* null)
+    br label %loop
+  loop:
+    %n.val = phi i32 [ %n, %entry ], [ %inc, %loop ]
+    %inc = add nsw i32 %n.val, 1
     store i32 %n.val, i32* %promise
-    %suspend = call i1 @llvm.coro.suspend2(token none, i1 false)
-    br i1 %suspend, label %resume, label %cleanup
-
-  resume:
-    %inc = add i32 %n.val, 1
-    br label %coro.start
-
+    %0 = call i8 @llvm.coro.suspend(token none, i1 false)
+    switch i8 %0, label %suspend [i8 0, label %loop
+                                  i8 1, label %cleanup]
   cleanup:
-    %mem = call i8* @llvm.coro.free(i8* %frame)
+    %mem = call i8* @llvm.coro.free(i8* %hdl)
     call void @free(i8* %mem)
-    br label %coro.return
-
-  coro.return:
-    ret i8* %frame
+    br label %suspend
+  suspend:
+    call void @llvm.coro.end(i8* %hdl, i1 false)
+    ret i8* %hdl
   }
 
 A coroutine consumer can rely on the `coro.promise`_ intrinsic to access the
@@ -493,6 +491,19 @@ operation. Given an address of a coroutine promise, it obtains a coroutine handl
 This intrinsic is the only mechanism for a user code outside of the coroutine 
 to get access to the coroutine handle.
 
+After example in this section is compiled, result of the compilation will 
+exactly like the result of the very first example:
+
+.. code-block:: llvm
+
+  define i32 @main() {
+  entry:
+    tail call void @print(i32 4)
+    tail call void @print(i32 5)
+    tail call void @print(i32 6)
+    ret i32 0
+  }
+
 .. _final:
 .. _final suspend:
 
@@ -504,11 +515,11 @@ by setting the second argument of the `coro.suspend`_ intrinsic to `true`.
 Such a suspend point has two properties:
 
 * it is possible to check whether a suspended coroutine is at the final suspend
-  point via `coro.done` intrinsic;
+  point via `coro.done`_ intrinsic;
 
 * a resumption of a coroutine stopped at the final suspend point leads to 
   undefined behavior. The only possible action for a coroutine at a final
-  suspend point is destroying it via `coro.destroy` intrinsic.
+  suspend point is destroying it via `coro.destroy`_ intrinsic.
 
 From the user perspective, final suspend point represents an idea of a coroutine
 reaching the end. From the compiler perspective it is an optimization opportunity
