@@ -718,7 +718,7 @@ required to store a `coroutine frame`_.
 Arguments:
 """"""""""
 
-Before the coroutine frame is built, the argument must be `null`. After 
+Before the coroutine frame is built, the argument must be `null`. After the
 coroutine frame is built, the argument is replaced with a pointer to a global
 private constant of the coroutine frame type.
 
@@ -746,39 +746,30 @@ Arguments:
 """"""""""
 
 The first argument is a pointer to a block of memory in which coroutine frame
-will reside. This could be the result of an allocation function or the result of
-a call to a `coro.alloc`_ intrinsics representing a storage that can be used on a
-frame of the calling function.
+may use if memory for the coroutine frame needs to be allocated dynamically. 
 
-The second argument provides information on alignment of the memory returned by
-the allocation function and given to `coro.begin` by the first parameter. If this
-argument is 0, the memory is assumed to be aligned to 2 * sizeof(i8*).
+The second argument provides information on the alignment of the memory returned 
+by the allocation function and given to `coro.begin` by the first parameter. If 
+this argument is 0, the memory is assumed to be aligned to 2 * sizeof(i8*).
 This argument only accepts constants.
 
 The third argument, if not `null`, designates a particular alloca instruction to
 be a `coroutine promise`_.
 
-The fourth argument is a function pointer to a coroutine itself.
-If this argument is `null`, CoroEarly pass will replace it
-with an address of the enclosing function. 
-
-.. note::
-  Since `coro.begin` intrinsic is not lowered until late optimizer passes, 
-  `fnaddr` argument can be used to distinguish between `coro.begin` that 
-  describes a structure of a pre-split coroutine or a `coro.begin` belonging to 
-  a post-split coroutine that was inlined into a different function.
+The fourth argument is `null` before coroutine is split, and later replaced to
+point to a private global constant array containing function pointers to 
+outlined resume and destroy parts of the coroutine.
 
 Semantics:
 """"""""""
 
 Depending on the alignment requirements of the objects in the coroutine frame
 and/or on the codegen compactness reasons the pointer returned from `coro.begin` 
-may be at offset to the `%mem` argument. (This could be beneficial if instructions
-that express relative access to data can be more compactly encoded with small
-positive and negative offsets).
+may be at offset to the `%mem` argument. (This could be beneficial if 
+instructions that express relative access to data can be more compactly encoded 
+with small positive and negative offsets).
 
 Frontend should emit exactly one `coro.begin` intrinsic per coroutine.
-It should appear prior to `coro.fork`_ intrinsic.
 
 .. _coro.free:
 
@@ -791,9 +782,9 @@ It should appear prior to `coro.fork`_ intrinsic.
 Overview:
 """""""""
 
-The '``llvm.coro.free``' intrinsic returns a pointer to a block
-of memory where coroutine frame is stored or `null` if the allocation
-of the coroutine frame was elided.
+The '``llvm.coro.free``' intrinsic returns a pointer to a block of memory where 
+coroutine frame is stored or `null` if this instance of a coroutine did not use
+dynamically allocated memory.
 
 Arguments:
 """"""""""
@@ -801,8 +792,8 @@ Arguments:
 A pointer to the coroutine frame. This should be the same pointer that was 
 returned by prior `coro.begin` call.
 
-Example (allow heap allocation elision):
-""""""""""""""""""""""""""""""""""""""""
+Example (custom deallocation function):
+"""""""""""""""""""""""""""""""""""""""
 
 .. code-block:: llvm
 
@@ -810,16 +801,14 @@ Example (allow heap allocation elision):
     %mem = call i8* @llvm.coro.free(i8* %frame)
     %tobool = icmp ne i8* %mem, null
     br i1 %tobool, label %if.then, label %if.end
-
   if.then:
-    call void @free(i8* %mem)
+    call void @CustomFree(i8* %mem)
     br label %if.end
-
   if.end:
     ret void
 
-Example (no heap allocation elision):
-""""""""""""""""""""""""""""""""""""""""
+Example (standard deallocation functions):
+""""""""""""""""""""""""""""""""""""""""""
 
 .. code-block:: llvm
 
@@ -827,7 +816,6 @@ Example (no heap allocation elision):
     %mem = call i8* @llvm.coro.free(i8* %frame)
     call void @free(i8* %mem)
     ret void
-
 
 .. _coro.alloc:
 
@@ -840,9 +828,9 @@ Example (no heap allocation elision):
 Overview:
 """""""""
 
-The '``llvm.coro.alloc``' intrinsic returns an address of the 
-memory on the callers frame where coroutine frame of this coroutine can be 
-placed and `null` otherwise.
+The '``llvm.coro.alloc``' intrinsic returns an address of the memory on the 
+callers frame where coroutine frame of this coroutine can be placed or `null` 
+otherwise.
 
 Arguments:
 """"""""""
@@ -852,12 +840,13 @@ None
 Semantics:
 """"""""""
 
-If the coroutine is eligible for heap elision and the ramp function is inlined
-in its caller, this intrinsic is lowered to an alloca storing the coroutine frame.
-Otherwise, it is lowered to constant `null`.
+If the coroutine is eligible for heap elision , this intrinsic is lowered to an 
+alloca storing the coroutine frame. Otherwise, it is lowered to constant `null`.
+This intrinsic only needs to be used if a custom allocation function is used
+(i.e. a function not recognized by LLVM as a memory allocation function).
 
 Example:
-""""""""""
+""""""""
 
 .. code-block:: llvm
 
@@ -868,7 +857,7 @@ Example:
 
   coro.alloc:
     %frame.size = call i32 @llvm.coro.size()
-    %alloc = call i8* @malloc(i32 %frame.size)
+    %alloc = call i8* @MyAlloc(i32 %frame.size)
     br label %coro.begin
 
   coro.begin:
@@ -886,8 +875,8 @@ Example:
 Overview:
 """""""""
 
-The '``llvm.coro.frame``' intrinsic returns an address of the 
-coroutine frame.
+The '``llvm.coro.frame``' intrinsic returns an address of the coroutine frame of
+the enclosing coroutine.
 
 Arguments:
 """"""""""
@@ -899,37 +888,7 @@ Semantics:
 
 This intrinsic is lowered to refer to the `coro.begin`_ instruction. This is
 a frontend convenience intrinsic that makes it easier to refer to the
-coroutine frame. This intrinsic is not necessary for the llvm coroutine model 
-and can be removed.
-
-.. _coro.fork:
-
-'llvm.coro.fork' Intrinsic
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-::
-
-  declare i1 @llvm.coro.fork()
-
-Overview:
-"""""""""
-
-The '``llvm.coro.fork``' intrinsic is used to indicate where the
-control should transfer on the first suspension of the coroutine. 
-
-Arguments:
-""""""""""
-
-None
-
-Semantics:
-""""""""""
-The true branch of the the conditional branch consuming the boolean value 
-returned from this intrinsic indicates where the control should transfer on
-the first suspension of the coroutine.  
-In the ramp function, when suspend points are lowered,  every `coro.suspend` is
-replaced with a jump to the basic block designated by the true branch.
-
-The 'coro.fork` itself is always lowered to constant `false`.
+coroutine frame.
 
 .. _coro.end:
 
@@ -937,20 +896,23 @@ The 'coro.fork` itself is always lowered to constant `false`.
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 ::
 
-  declare void @llvm.coro.end()
+  declare void @llvm.coro.end(i8* hdl, i1 unwind)
 
 Overview:
 """""""""
 
-The '``llvm.coro.end``' marks the point where execution
-of the resume part of the coroutine should end and control returns back to 
-the caller.
+The '``llvm.coro.end``' marks the point where execution of the resume part of 
+the coroutine should end and control returns back to the caller.
 
 
 Arguments:
 """"""""""
 
-None
+First argument should refer to the coroutine handle of the enclosing coroutine.
+
+The second argument should be `true` if this coro.end is in the block that is 
+part of the unwind sequence leaving the coroutine body due to exception prior to
+ the first reaching any suspend points, and `false` otherwise.
 
 Semantics:
 """"""""""
@@ -966,6 +928,9 @@ the rest of the block containing `coro.end` instruction is discarded.
 In landing pads it is replaced with an appropriate instruction to unwind to 
 caller.
 
+A frontend is allowed to supply null as the first parameter, in this case 
+`coro-early` pass will replace the null with an appropriate coroutine handle
+value.
 .. _coro.suspend:
 .. _suspend points:
 
@@ -973,16 +938,16 @@ caller.
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 ::
 
-  declare i1 @llvm.coro.suspend(token %save, i1 %final)
+  declare i8 @llvm.coro.suspend(token %save, i1 %final)
 
 Overview:
 """""""""
 
-The '``llvm.coro.suspend``' marks the point where execution
-of the coroutine need to get suspended and control returned back to the caller.
-Conditional branch consuming the result of this intrinsic marks basic blocks
-where coroutine should proceed when resumed via `coro.resume` and `coro.destroy` 
-intrinsics if the coroutine is suspended at this particular suspend point.
+The '``llvm.coro.suspend``' marks the point where execution of the coroutine 
+need to get suspended and control returned back to the caller.
+Conditional branches consuming the result of this intrinsic lead to basic blocks
+where coroutine should proceed when suspended (-1), resumed (0) or destroyed 
+(1).
 
 Arguments:
 """"""""""
@@ -997,14 +962,36 @@ The second argument only accepts constants. If more than one suspend point is
 designated as final, the resume and destroy branches should lead to the same
 basic blocks.
 
+Example (normal suspend point):
+"""""""""""""""""""""""""""""""
+
+.. code-block:: llvm
+
+    %0 = call i8 @llvm.coro.suspend(token none, i1 false)
+    switch i8 %0, label %suspend [i8 0, label %resume
+                                  i8 1, label %cleanup]
+
+Example (final suspend point):
+""""""""""""""""""""""""""""""
+
+.. code-block:: llvm
+
+  while.end:
+    %s.final = call i8 @llvm.coro.suspend(token none, i1 true)
+    switch i8 %s.final, label %suspend [i8 0, label %trap
+                                        i8 1, label %cleanup]
+  trap: 
+    call void @llvm.trap()
+    unreachable
+
 Semantics:
 """"""""""
 
 If a coroutine that was suspended at the suspend point marked by this intrinsic
 is resumed via `coro.resume`_ the control will transfer to the basic block
-marked by the true branch of the conditional branch consuming the result of the
-`coro.suspend`. If it is resumed via `coro.destroy`_, it will proceed to the
-basic block indicated by the false branch.
+of the 0-case. If it is resumed via `coro.destroy`_, it will proceed to the
+basic block indicated by the 1-case. To suspend, coroutine proceed to the 
+default label.
 
 If suspend intrinsic is marked as final, it can consider the `true` branch
 unreachable and can perform optimizations that can take advantage of that fact.
@@ -1015,26 +1002,26 @@ unreachable and can perform optimizations that can take advantage of that fact.
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 ::
 
-  declare token @llvm.coro.save()
+  declare token @llvm.coro.save(i8* handle)
 
 Overview:
 """""""""
 
-The '``llvm.coro.save``' marks the point where a coroutine 
-is considered suspened (and thus eligible for resumption). Its return value 
-should be consumed by exactly one `coro.suspend` intrinsic.
+The '``llvm.coro.save``' marks the point where a coroutine need to update its 
+state to prepare for resumption to be considered suspended (and thus eligible 
+for resumption). 
 
 Arguments:
 """"""""""
 
-None
+First argument points to a coroutine handle of the enclosing coroutine.
 
 Semantics:
 """"""""""
 
 Whatever coroutine state changes are required to enable resumption of
-the coroutine from the corresponding suspend point should be done at the point of
-`coro.save` intrinsic.
+the coroutine from the corresponding suspend point should be done at the point 
+of `coro.save` intrinsic.
 
 Example:
 """"""""
@@ -1050,10 +1037,11 @@ to the coroutine:
 
 .. code-block:: llvm
 
-    %save = call token @llvm.coro.save()
-    call void async_op(i8* %frame)
-    %suspend = call i1 @llvm.coro.suspend(token %save, i1 false)
-    br i1 %suspend, label %resume, label %cleanup
+    %save1 = call token @llvm.coro.save(i8* %hdl)
+    call void async_op1(i8* %hdl)
+    %suspend1 = call i1 @llvm.coro.suspend(token %save1, i1 false)
+    switch i8 %suspend1, label %suspend [i8 0, label %resume1
+                                         i8 1, label %cleanup]
 
 Coroutine Transformation Passes
 ===============================
@@ -1064,32 +1052,21 @@ structure of the coroutine frame, but, otherwise not needed to be preserved to
 help later coroutine passes. This pass lowers `coro.frame`_, `coro.done`_, 
 `coro.promise`_ and `coro.from.promise`_ intrinsics.
 
-CoroInline
-----------
-Since coroutine transformation need to be done in the IPO order and inlining
-pre-split coroutine is undesirable, the CoroInline pass wraps the inliner pass
-to execute coroutine and inliner passes in the following order.
-
-#. Call sites in the function `F` are inlined as appropriate
-#. CoroElide pass is run on the function `F` to see if any coroutines were 
-   inlined and are eligible for coroutine frame elision optimization.
-#. If function `F` is a coroutine, resume and destroy parts are extracted into
-   `F.resume` and `F.destroy` functions by the CoroSplit pass. 
-
 .. _CoroSplit:
 
 CoroSplit
 ---------
-The pass CoroSplit extracts resume and destroy parts into separate functions.
+The pass CoroSplit buides coroutine frame and outlines resume and destroy parts 
+into separate functions.
 
 CoroElide
 ---------
 The pass CoroElide examines if the inlined coroutine is eligible for heap 
-allocation elision optimization. If so, it replaces `coro.alloc` intrinsic with
-an address of a coroutine frame placed on its caller and replaces
-`coro.free` intrinsics with `null` to remove the deallocation code. This pass
-also replaces `coro.resume` and `coro.destroy` intrinsics with direct calls to
-resume and destroy functions for a particular coroutine where possible.
+allocation elision optimization. If so, it replaces `coro.alloc` and 
+`coro.begin` intrinsic with an address of a coroutine frame placed on its caller
+and replaces `coro.free` intrinsics with `null` to remove the deallocation code. 
+This pass also replaces `coro.resume` and `coro.destroy` intrinsics with direct 
+calls to resume and destroy functions for a particular coroutine where possible.
 
 CoroCleanup
 -----------
@@ -1122,4 +1099,4 @@ Areas Requiring Attention
 #. Make required changes to make sure that coroutine optimizations work with
    LTO.
 
-#. Would coro.start be a better name than coro.fork?
+#. More tests, more tests, more tests
