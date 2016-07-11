@@ -76,7 +76,7 @@ coroutine:
 
 3. a coroutine destroy function that is invoked when the coroutine is destroyed.
 
-.. note:: Splitting out resume and destroy functions are just one of the 
+.. note:: Splitting out resume and destroy functions is just one of the 
    possible ways of lowering the coroutine. We chose it for initial 
    implementation as it matches closely the mental model and results in 
    reasonably nice code.

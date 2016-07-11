@@ -1,11 +1,24 @@
-RFC: LLVM Coroutines
+RFC: LLVM Coroutine Representation, Round 2
 
 Hi all:
 
-Below is a proposal to add experimental coroutine support to LLVM. Though this 
-proposal is motivated primarily by the desire to support C++ Coroutines [1], 
-the llvm representation is language neutral and can be used to support 
-coroutines in other languages as well. 
+Thank you very much for the feedback during the first round! Special thanks to
+Eli, Sanjoy, Hal and Chandler for their detailed public and private comments.
+The model is simpler now and the intrinsics have nice symmetry to them:
+coro.begin + coro.end, coro.alloc + coro.free. Compared to the previous RFC,
+coro.fork is gone, coro.init and coro.start are collapsed into one coro.begin,
+coro.suspend is three-way as opposed to two-way. coro.elide and coro.delete
+renamed coro.alloc and coro.free.
+
+All the changes implemented and tested. Full document, (nicely formatted by
+github is at: 
+
+  https://github.com/GorNishanov/llvm/blob/coro-rfc/docs/Coroutines.rst
+
+Below is a summary of a proposal to add coroutine support to LLVM. 
+The proposal is motivated primarily by the desire to support C++ Coroutines [1],
+however the llvm representation is language neutral and can be used 
+to support coroutines in other languages as well. 
 
 Clang + llvm coroutines allows you to take this code:
 
@@ -20,27 +33,54 @@ Clang + llvm coroutines allows you to take this code:
 		   return sum;
 		}
 
-And translated it down to this:
+And translate it down to this:
 
 		define i32 @main() #5 {
 		entry:
 		  ret i32 4950
 		}
 
+You can also use coroutines in plain C, by calling the builtins mapping to the
+intrinsics described by this proposal, so that your coroutine can look like:
+
+    #include "Inputs/coro.h"
+    void print(int v);
+
+    void* f(int n) {
+      CORO_BEGIN(malloc);
+
+      while (n-- > 0) {
+        print(n+1);
+        CORO_SUSPEND();
+      }
+
+      CORO_END(free);
+    }
+
+    // CHECK-LABEL: @main
+    int main() {
+      void* coro = f(4);
+      CORO_RESUME(coro);
+      CORO_RESUME(coro);
+      CORO_DESTROY(coro);
+    }
+
+https://github.com/GorNishanov/clang/blob/coro-rfc/test/Coroutines/coro.c
+https://github.com/GorNishanov/clang/blob/coro-rfc/test/Coroutines/Inputs/coro.h
+
 I prototyped llvm changes to support this proposal and extended clang coroutine 
 implementation [2] to emit proposed intrinsics to smoke test the proposed
-design and to get simple generator and async task style coroutines working. 
-See "More Attention Required" in the doc/Coroutines.rst for details on what 
-addition work is required beyond cleanup and bug fixes. 
+design. See "More Attention Required" in the doc/Coroutines.rst [4]for details
+on what additional work is required beyond cleanup and bug fixes. 
 
-I would like to start the discussion on the overall design, representation and 
-a roadmap to start upstreaming the changes with the intention to continue the 
-development in tree incrementally.
+I would like to continue the discussion on the overall design, representation 
+and a roadmap to start upstreaming the changes with the intention to continue 
+the development in tree incrementally.
 
 Roadmap:
 --------
 1) Get agreement on coroutine representation and overall direction (this mail).
-  .. repeat 1) until happy
+  .. repeat 1) until happy <=== ARE ARE HERE
 2) Get agreement on how coroutine transformation passes integrate into the 
    optimizer pipeline.
   .. repeat 2) until happy
@@ -52,33 +92,27 @@ Roadmap:
 
 Background
 ==========
-This representation is the result of several offline discussions with Richard,
-Reid, and David. All of the good came from the collective effort. All the
-yuckiness was sneaked in by me after those discussions.
-
-I'll start with a quick overview. 
-
 LLVM coroutines are functions that have one or more `suspend points`. 
 When a suspend point is reached, the execution of a coroutine is suspended and
 control is returned back to its caller. A suspended coroutine can be resumed 
-to continue execution from the last suspend point or be destroyed. 
+to continue execution from the last suspend point or it can be destroyed. 
 
-In the following example, function `f` (which may or may not be a coroutine itself)
-returns a handle to a suspended coroutine (**coroutine handle**) that is used 
-by `main` to resume the coroutine twice and then destroy it:
+In the following example, function `f` (which may or may not be a coroutine 
+itself) returns a handle to a suspended coroutine (**coroutine handle**) that is
+used by `main` to resume the coroutine twice and then destroy it:
 
 .. code-block:: llvm
 
   define i32 @main() {
   entry:
     %hdl = call i8* @f(i32 4)
-    call void @llvm.experimental.coro.resume(i8* %hdl)
-    call void @llvm.experimental.coro.resume(i8* %hdl)
-    call void @llvm.experimental.coro.destroy(i8* %hdl)
+    call void @llvm.coro.resume(i8* %hdl)
+    call void @llvm.coro.resume(i8* %hdl)
+    call void @llvm.coro.destroy(i8* %hdl)
     ret i32 0
   }
 
-In addition to the function stack frame which exists when a coroutine is executing, 
+In addition to the stack frame which exists when a coroutine is executing, 
 there is an additional region of storage that contains values that keep the 
 coroutine state when a coroutine is suspended. This region of storage
 is called **coroutine frame**. It is created when a coroutine is called and 
@@ -97,70 +131,66 @@ The coroutine resumption intrinsics get replaced with direct calls to those
 outlined functions where possible. Then inliner can inline much leaner and nicer
 coroutine or any of the outlined parts as desired.
 
-If we discover that the lifetime of a coroutine is fully enclosed in the lifetime
-of the caller, we remove dynamic allocation for coroutine frame and replace it 
-with an `alloca` on the caller's frame. 
+If we discover that the lifetime of a coroutine is fully enclosed in the 
+lifetime of its caller, we remove dynamic allocation for coroutine frame and 
+replace it with a static `alloca` on the caller's frame. 
 
 Please see doc/Coroutines.rst for more details:
 
-doc/Coroutines.rst: http://reviews.llvm.org/D21170  
-IR/Intrinsics.td:   http://reviews.llvm.org/D21169
+https://github.com/GorNishanov/llvm/blob/coro-rfc/docs/Coroutines.rst
 
 Concerns:
 =========
-(This section assumes that you looked at doc/Coroutins.rst and IR/Intrinsics.td)
+(This section assumes that you looked at doc/Coroutins.rst)
 
-Invoke like intrinsics via call + conditional branch:
------------------------------------------------------
+coro.begin: 4 arguments or 5?
+-----------------------------
 
-The `llvm.experimental.coro.fork` and `llvm.experimental.coro.suspend` 
-intrinsics model behavior somewhat similar to the invoke instruction. Namely, 
-they are used to show a normal continuation branch and an alternative branch. 
+Background: 
 
-They are used in the following pattern:
+For standard allocation functions recognized by LLVM, coroutine frame allocation
+code looks like:
 
-    %where.to = call i1 @llvm.experimental.coro.XXXX()
-    br i1 %where.to, label %normal, label %alternative
+  entry:
+    %size = call i32 @llvm.coro.size.i32(i8* null)
+    %alloc = call i8* @malloc(i32 %size)
+    %hdl = call noalias i8* @llvm.coro.begin(i8* %alloc, i32 0, i8* null, 
+                                                                i8* null)
 
-My concern is that this is somewhat fragile. After optimizations some code can 
-sneak in between the intrinsic and the branch and cause trouble. I am looking 
-for suggestions on how to make it more robust. One thought I had was to put some
-intrinsics at the beginning of the %normal and %alternative blocks so as to
-prevent code motion above them. Something like:
+To enable coroutine heap elision with custom allocation functions, `coro.alloc`
+intrinsic is used to exclude the allocation code when not needed.
 
-		...
-    %where.to = call i1 @llvm.experimental.coro.XXXX()
-    br i1 %where.to, label %normal, label %alternative
-  normal:
-  	<phi>
-  	call i1 @llvm.experimental.coro.normal();
-		...
-  alternative:
-  	<phi>
-  	call i1 @llvm.experimental.coro.alt();
-		...
+  entry:
+    %elide = call i8* @llvm.coro.alloc()
+    %0 = icmp ne i8* %elide, null
+    br i1 %0, label %coro.begin, label %coro.alloc
 
-After coro.xxx is lowered, coro.normal and coro.alt are removed.
+  coro.alloc:
+    %frame.size = call i32 @llvm.coro.size()
+    %alloc = call i8* @MyAlloc(i32 %frame.size)
+    br label %coro.begin
 
-Looking up outlined coroutine parts
------------------------------------
+  coro.begin:
+    %phi = phi i8* [ %elide, %entry ], [ %alloc, %coro.alloc ]
+    %frame = call i8* @llvm.coro.begin(i8* %phi, i32 0, i8* null, i8* null)
 
-Last parameter of the `llvm.experimental.coro.init" intrinsic is a pointer to
-a coroutine function. To get to the outlined parts, I get the name of that 
-function and glue ".resume", ".destroy" or ".cleanup" suffixes to it and then 
-look them up by name.
+When using a static alloca for coroutine frame, coro.begin and coro.alloc
+intrinsics are replaced with that very alloca (bitcasted to i8* to match the 
+type). 
 
-Probably a better alternative is for a coroutine f to create a constant 
-containing an array of pointers to f.resume, f.destroy and other parts of the 
-coroutine and use the last parameter to refer to that constant.
+To find a coro.alloc matching a particular coro.begin, I hunt through the %phi
+until I find definition of coro.alloc. Probably more robust implementation
+need to use alias analysis to check whether the %phi and %elide may alias.
 
-Other questions
----------------
+A simpler approach would be just to add another parameter to directly point to
+`coro.alloc`. With this change, coro.begin block above would look like:
 
-I have more questions about the best way of plugging in coroutine optimization
-passes into the PassManager, but, I will defer those for later discussion.
+  coro.begin:
+    %phi = phi i8* [ %elide, %entry ], [ %alloc, %coro.alloc ]
+    %frame = call i8* @llvm.coro.begin(i8* %phi, i8 %elide, i32 0, i8* null, 
+                                                 ^^^^^^^^^         i8* null)
 
-All the feedback and comments is greatly appreciated!!!
+All feedback and comments are greatly appreciated!!!
 
 Thank you,
 Gor
@@ -171,9 +201,4 @@ References:
 [1] http://open-std.org/JTC1/SC22/WG21/docs/papers/2016/p0057r4.pdf
 [2] http://llvmweekly.org/issue/95 (Coroutine support added to clang)
 [3] http://www.boost.org/doc/libs/1_61_0/libs/coroutine/doc/html/index.html
-
-Review Links:
-=============
-
-doc/Coroutines.rst: http://reviews.llvm.org/D21170  
-IR/Intrinsics.td:   http://reviews.llvm.org/D21169
+[4] https://github.com/GorNishanov/llvm/blob/coro-rfc/docs/Coroutines.rst
