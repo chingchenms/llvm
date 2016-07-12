@@ -19,7 +19,7 @@
 #include <llvm/Transforms/Utils/PromoteMemToReg.h>
 #include <llvm/IR/LegacyPassManager.h>
 #include <llvm/IR/Verifier.h>
-
+#include <llvm/IR/DebugInfoMetadata.h>
 #include <llvm/ADT/SmallVector.h>
 #include <llvm/IR/Function.h>
 #include <llvm/IR/InstIterator.h>
@@ -240,7 +240,8 @@ static CreateCloneResult createClone(Function &F, Twine Suffix,
 
   SmallVector<ReturnInst*, 4> Returns;
 
-  CloneFunctionInto(NewF, &F, VMap, false, Returns);
+  CloneFunctionInto(NewF, &F, VMap, true, Returns);
+  NewF->getSubprogram()->replaceUnit(F.getSubprogram()->getUnit());
 
   LLVMContext& C = NewF->getContext();
 
@@ -466,8 +467,8 @@ static void splitCoroutine(Function &F, CallGraph &CG, CallGraphSCC &SCC) {
   }
 
   auto ResumeEntry = createResumeEntryBlock(F, Shape);
-  auto ResumeClone = createClone(F, ".Resume", Shape, ResumeEntry, 0);
-  auto DestroyClone = createClone(F, ".Destroy", Shape, ResumeEntry, 1);
+  auto ResumeClone = createClone(F, ".resume", Shape, ResumeEntry, 0);
+  auto DestroyClone = createClone(F, ".destroy", Shape, ResumeEntry, 1);
 
   // we no longer need coro.end in F
   for (CoroEndInst* CE : Shape.CoroEnds)
@@ -478,7 +479,7 @@ static void splitCoroutine(Function &F, CallGraph &CG, CallGraphSCC &SCC) {
   postSplitCleanup(*DestroyClone.Fn);
 
   auto CleanupClone =
-      createCleanupClone(F, ".Cleanup", DestroyClone);
+      createCleanupClone(F, ".cleanup", DestroyClone);
 
   updateCoroInfo(F, Shape, { ResumeClone.Fn, DestroyClone.Fn, CleanupClone });
   replaceFrameSize(ResumeClone.Fn, Shape);
