@@ -240,8 +240,13 @@ static CreateCloneResult createClone(Function &F, Twine Suffix,
 
   SmallVector<ReturnInst*, 4> Returns;
 
-  CloneFunctionInto(NewF, &F, VMap, true, Returns);
-  NewF->getSubprogram()->replaceUnit(F.getSubprogram()->getUnit());
+  CloneFunctionInto(NewF, &F, VMap, /*ModuleLevelChanges=*/true, Returns);
+
+  // If we have debug info, update it. ModuleLevelChanges = true above, does
+  // the heavy lifting, we just need to repoint subprogram at the same
+  // DICompileUnit as the original function F.
+  if (DISubprogram* SP = F.getSubprogram())
+    NewF->getSubprogram()->replaceUnit(SP->getUnit());
 
   LLVMContext& C = NewF->getContext();
 
