@@ -149,6 +149,13 @@ bool lowerEarlyIntrinsics(Function& F) {
         if (cast<CoroBeginInst>(II)->getInfo().isPreSplit())
           F.addFnAttr(Attribute::Coroutine);
         break;
+      case Intrinsic::coro_param:
+        // TODO: add this to Intrinsics.td instead
+        for (int i = 1; i <= 2; ++i) {
+          II->addAttribute(i, Attribute::NoCapture);
+          II->addAttribute(i, Attribute::ReadNone);
+        }
+        break;
       case Intrinsic::coro_size:
         L.canonicalizeCoroSize(II);
         break;
