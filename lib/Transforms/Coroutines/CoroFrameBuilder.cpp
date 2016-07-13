@@ -28,6 +28,7 @@
 #include <llvm/IR/Function.h>
 #include <llvm/IR/InstIterator.h>
 #include <llvm/IR/IRBuilder.h>
+#include "llvm/IR/Dominators.h"
 #include <llvm/Support/Debug.h>
 #include <llvm/Support/circular_raw_ostream.h>
 #include <llvm/Transforms/Utils/BasicBlockUtils.h>
@@ -495,6 +496,48 @@ static void rewritePHIs(Function &F) {
     rewritePHIs(*BB);
 }
 
+// Move early uses of spilled variable after CoroBegin.
+// For example, if a parameter had address taken, we may end up with the code
+// like:
+//        define @f(i32 %n) {
+//          %n.addr = alloca i32
+//          store %n, %n.addr
+//          ...
+//          call @coro.begin
+//    we need to move the store after coro.begin
+static void fixupUses(Function &F, SpillInfo const &Spills,
+                      CoroBeginInst *CoroBegin) {
+  DominatorTree DT(F);
+  SmallVector<Instruction*, 8> NeedsMoving;
+
+  Value* CurrentValue = nullptr;
+
+  for (auto const &E : Spills) {
+    if (CurrentValue == E.def())
+      continue;
+
+    CurrentValue = E.def();
+
+    for (User* U: CurrentValue->users()) {
+      Instruction* I = cast<Instruction>(U);
+      if (DT.dominates(I, CoroBegin)) {
+        DEBUG({
+          for (User* UI : I->users())
+            assert(DT.dominates(CoroBegin, cast<Instruction>(UI)) &&
+                   "cannot move instruction"
+                   " since users are not dominated by CoroBegin");
+          dbgs() << "will move: " << *I << "\n";
+        });
+        NeedsMoving.push_back(I);
+      }
+    }
+  }
+
+  auto InsertPt = CoroBegin->getNextNode();
+  for (Instruction* I : NeedsMoving)
+    I->moveBefore(InsertPt);
+}
+
 void llvm::buildCoroutineFrame(Function &F, CoroutineShape& Shape) {
   Shape.PromiseAlloca = Shape.CoroBegin->getPromise();
   if (Shape.PromiseAlloca) {
@@ -557,6 +600,7 @@ void llvm::buildCoroutineFrame(Function &F, CoroutineShape& Shape) {
 
   std::sort(Spills.begin(), Spills.end());
   DEBUG(dump("Spills", Spills));
+  fixupUses(F, Spills, Shape.CoroBegin);
   Shape.FrameTy = buildFrameType(F, Shape, Spills);
   Shape.FramePtr = insertSpills(Spills, Shape);
 }

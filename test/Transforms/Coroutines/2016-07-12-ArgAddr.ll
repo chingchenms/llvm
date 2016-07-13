@@ -1,15 +1,15 @@
-; First example from Doc/Coroutines.rst (one block loop)
+; Need to move users of allocas that were moved into the coroutine frame after
+; coro.begin.
 ; RUN: opt < %s -O3 -S | FileCheck %s
 
 define nonnull i8* @f(i32 %n) {
 entry:
   %n.addr = alloca i32
-;  store i32 %n, i32* %n.addr ; BROKEN When Uncomment
+  store i32 %n, i32* %n.addr ; this needs to go after coro.begin
   %0 = tail call i32 @llvm.coro.size.i32(i8* null)
   %call = tail call i8* @malloc(i32 %0)
   %1 = tail call noalias nonnull i8* @llvm.coro.begin(i8* %call, i32 0, i8* null, i8* null)
   %2 = bitcast i32* %n.addr to i8*
-  store i32 %n, i32* %n.addr
   call void @ctor(i8* %2)
   br label %for.cond
 
