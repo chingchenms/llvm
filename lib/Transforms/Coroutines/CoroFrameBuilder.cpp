@@ -322,7 +322,7 @@ static Instruction* insertSpills(SpillInfo &Spills,
     if (CurrentBlock != E.userBlock()) {
       CurrentBlock = E.userBlock();
       CurrentReload =
-          CreateReload(CurrentBlock->getFirstNonPHI());
+          CreateReload(&*CurrentBlock->getFirstInsertionPt());
     }
 
     if (auto PN = dyn_cast<PHINode>(E.user())) {
@@ -429,7 +429,8 @@ static void rewriteMaterializableInstructions(IRBuilder<> &IRB,
     // if we have not seen this block, materialize the value
     if (CurrentBlock != E.userBlock()) {
       CurrentBlock = E.userBlock();
-      CurrentMaterialization = CloneInstruction(CurrentBlock->getFirstNonPHI());
+      CurrentMaterialization =
+          CloneInstruction(&*CurrentBlock->getFirstInsertionPt());
     }
 
     if (auto PN = dyn_cast<PHINode>(E.user())) {
@@ -548,7 +549,7 @@ void llvm::buildCoroutineFrame(Function &F, CoroutineShape& Shape) {
   for (CoroSuspendInst* CSI : Shape.CoroSuspends)
     splitAround(CSI->getCoroSave(), "CoroSave");
 
-  // Put CoroEnds into their own blocks.
+  // Put final CoroEnd into its own block.
   splitAround(Shape.CoroEnds.front(), "CoroEnd");
   rewritePHIs(F);
 
