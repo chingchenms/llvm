@@ -78,7 +78,7 @@ static void replaceWithConstant(Constant *Value,
   }
   
   // do constant propagation
-  CoroCommon::constantFoldUsers(Value);
+  CoroUtils::constantFoldUsers(Value);
 }
 
 static bool operandReferences(CallInst* CI, AllocaInst* Frame, AAResults& AA) {
@@ -115,7 +115,7 @@ static void elideHeapAllocations(CoroBeginInst *CoroBegin, Function *Resume,
   }
   Frame->insertBefore(vFrame);
 
-  CoroCommon::replaceCoroFree(CoroBegin, nullptr);
+  CoroUtils::replaceCoroFree(CoroBegin, nullptr);
   CoroBegin->replaceAllUsesWith(vFrame);
   CoroBegin->eraseFromParent();
 

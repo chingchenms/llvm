@@ -39,7 +39,7 @@
 #define DEBUG_TYPE "coro-suspend-crossing"
 
 using namespace llvm;
-using namespace llvm::CoroCommon;
+using namespace llvm::CoroUtils;
 
 enum { SmallVectorThreshold = 32 };
 // Provides two way mapping between the blocks and numbers

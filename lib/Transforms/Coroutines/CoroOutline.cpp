@@ -29,7 +29,7 @@
 #include <utility>
 
 using namespace llvm;
-using namespace llvm::CoroCommon;
+using namespace llvm::CoroUtils;
 
 #define DEBUG_TYPE "coro-outline"
 
@@ -61,7 +61,7 @@ void llvm::outlineCoroutineParts(Function &F, CallGraph &CG,
                                  CallGraphSCC &SCC) {
   CoroutineShape S(F);
 //  Module &M = *F.getParent();
-  CoroCommon::removeLifetimeIntrinsics(F); // for now
+  CoroUtils::removeLifetimeIntrinsics(F); // for now
   DEBUG(dbgs() << "Processing Coroutine: " << F.getName() << "\n");
   DEBUG(S.dump());
 

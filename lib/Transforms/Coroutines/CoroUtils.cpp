@@ -31,7 +31,7 @@
 using namespace llvm;
 using namespace llvm::legacy;
 
-void CoroCommon::replaceCoroFree(Value* FramePtr, Value* Replacement) {
+void CoroUtils::replaceCoroFree(Value* FramePtr, Value* Replacement) {
   SmallVector<CoroFreeInst*, 4> CoroFrees;
   for (User* U : FramePtr->users())
     if (auto CF = dyn_cast<CoroFreeInst>(U))
@@ -50,7 +50,7 @@ void CoroCommon::replaceCoroFree(Value* FramePtr, Value* Replacement) {
   }
 }
 
-void CoroCommon::removeLifetimeIntrinsics(Function &F) {
+void CoroUtils::removeLifetimeIntrinsics(Function &F) {
   for (auto it = inst_begin(F), end = inst_end(F); it != end;) {
     Instruction& I = *it++;
     if (auto II = dyn_cast<IntrinsicInst>(&I))
@@ -65,7 +65,7 @@ void CoroCommon::removeLifetimeIntrinsics(Function &F) {
   }
 }
 
-BasicBlock *CoroCommon::splitBlockIfNotFirst(Instruction *I,
+BasicBlock *CoroUtils::splitBlockIfNotFirst(Instruction *I,
                                              const Twine &Name) {
   auto BB = I->getParent();
   if (&*BB->begin() == I) {
@@ -94,7 +94,7 @@ static void UpdateCGN(CallGraph &CG, CallGraphNode *Node) {
     }
 }
 
-void CoroCommon::updateCallGraph(Function &Caller, ArrayRef<Function *> Funcs,
+void CoroUtils::updateCallGraph(Function &Caller, ArrayRef<Function *> Funcs,
   CallGraph &CG, CallGraphSCC &SCC) {
   auto CallerNode = CG[&Caller];
   CallerNode->removeAllCalledFunctions();
@@ -112,7 +112,7 @@ void CoroCommon::updateCallGraph(Function &Caller, ArrayRef<Function *> Funcs,
 }
 
 
-void CoroCommon::constantFoldUsers(Constant* Value) {
+void CoroUtils::constantFoldUsers(Constant* Value) {
   SmallPtrSet<Instruction*, 16> WorkList;
   for (User *U : Value->users())
     WorkList.insert(cast<Instruction>(U));

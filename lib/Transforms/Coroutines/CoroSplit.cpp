@@ -320,10 +320,10 @@ static Function *createCleanupClone(Function &F, Twine Suffix,
   Function *CleanupClone = CloneFunction(Destroy.Fn, VMap);
   CleanupClone->setName(F.getName() + Suffix);
 
-  CoroCommon::replaceCoroFree(Destroy.VFrame, Destroy.VFrame);
+  CoroUtils::replaceCoroFree(Destroy.VFrame, Destroy.VFrame);
 
   auto CleanupVFrame = cast<Value>(VMap[Destroy.VFrame]);
-  CoroCommon::replaceCoroFree(CleanupVFrame, nullptr);
+  CoroUtils::replaceCoroFree(CleanupVFrame, nullptr);
   return CleanupClone;
 }
 
@@ -371,7 +371,7 @@ static void handleNoSuspendCoroutine(CoroBeginInst *CoroBegin, Type *FrameTy) {
   AllocInst->replaceAllUsesWith(vFrame);
   AllocInst->eraseFromParent();
 
-  CoroCommon::replaceCoroFree(CoroBegin, nullptr);
+  CoroUtils::replaceCoroFree(CoroBegin, nullptr);
   CoroBegin->replaceAllUsesWith(vFrame);
   CoroBegin->eraseFromParent();
 }
@@ -451,7 +451,7 @@ static void simplifySuspendPoints(CoroutineShape& Shape) {
 
 static void splitCoroutine(Function &F, CallGraph &CG, CallGraphSCC &SCC) {
   LowerDbgDeclare(F);
-  CoroCommon::removeLifetimeIntrinsics(F);
+  CoroUtils::removeLifetimeIntrinsics(F);
   preSplitCleanup(F);
 
   // After split coroutine will be a normal function
@@ -467,7 +467,7 @@ static void splitCoroutine(Function &F, CallGraph &CG, CallGraphSCC &SCC) {
     preSplitCleanup(F);
     handleNoSuspendCoroutine(Shape.CoroBegin, Shape.FrameTy);
     postSplitCleanup(F);
-    CoroCommon::updateCallGraph(F, {}, CG, SCC);
+    CoroUtils::updateCallGraph(F, {}, CG, SCC);
     return;
   }
 
@@ -488,7 +488,7 @@ static void splitCoroutine(Function &F, CallGraph &CG, CallGraphSCC &SCC) {
 
   updateCoroInfo(F, Shape, { ResumeClone.Fn, DestroyClone.Fn, CleanupClone });
   replaceFrameSize(ResumeClone.Fn, Shape);
-  CoroCommon::updateCallGraph(
+  CoroUtils::updateCallGraph(
       F, {ResumeClone.Fn, DestroyClone.Fn, CleanupClone}, CG, SCC);
 }
 

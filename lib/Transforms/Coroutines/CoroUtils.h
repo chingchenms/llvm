@@ -33,7 +33,7 @@ class Constant;
 class CallGraph;
 class CallGraphSCC;
 
-namespace CoroCommon {
+namespace CoroUtils {
   void removeLifetimeIntrinsics(Function &F);
   void constantFoldUsers(Constant* Value);
   BasicBlock *splitBlockIfNotFirst(Instruction *I, const Twine &Name = "");
