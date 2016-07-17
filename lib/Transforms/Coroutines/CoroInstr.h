@@ -177,16 +177,20 @@ namespace llvm {
                  ? nullptr
                  : cast<AllocaInst>(Arg->stripPointerCasts());
     }
+
     void clearPromise() {
       Value* Arg = getArgOperand(kPromise);
       setArgOperand(kPromise, 
         ConstantPointerNull::get(Type::getInt8PtrTy(getContext())));
-      if (auto BC = dyn_cast<BitCastInst>(Arg)) {
-        if (BC->use_empty())
-          BC->eraseFromParent();
-        else
-          BC->moveBefore(getNextNode());
-      }
+      if (isa<AllocaInst>(Arg))
+        return;
+      assert((isa<BitCastInst>(Arg) || isa<GetElementPtrInst>(Arg)) &&
+             "unexpected instruction designating the promise");
+      auto Inst = cast<Instruction>(Arg);
+      if (Inst->use_empty())
+        Inst->eraseFromParent();
+      else
+        Inst->moveBefore(getNextNode());
     }
 
     ConstantInt *getAlignment() const {
