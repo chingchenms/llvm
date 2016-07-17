@@ -1,0 +1,142 @@
+RFC: Coroutine Optimization Passes
+
+Hi all:
+
+I've included below a brief description of coroutine related optimization 
+passes and some questions/thoughts related to them. Looking forward to your 
+feedback, comments and questions.
+
+Thank you!
+
+Roadmap:
+========
+1) Get agreement on coroutine representation and overall direction.
+  .. repeat 1) until happy
+
+  http://lists.llvm.org/pipermail/llvm-dev/2016-June/100838.html (Initial)
+  http://lists.llvm.org/pipermail/llvm-dev/2016-July/102133.html (Round 2)
+
+2) Get agreement on how coroutine transformation passes integrate into the
+   optimizer pipeline. (this mail) <=== WE ARE HERE
+  .. repeat 2) until happy
+
+3) update IR/Intrinsics.td + doc/Coroutines.rst + doc/LangRef.rst
+
+  https://github.com/GorNishanov/llvm/blob/coro-rfc/docs/Coroutines.rst
+
+4) trickle in coroutine transformation passes + tests in digestible chunks.
+5) get clang changes in (sometime after step 3).
+6) fix bugs / remove limitations / add functionality to coroutine passes
+ .. repeat 6) until happy
+
+Overview:
+=========
+LLVM coroutines are functions that have one or more `suspend points`.
+When a suspend point is reached, the execution of a coroutine is suspended and
+control is returned back to its caller. A suspended coroutine can be resumed
+to continue execution from the last suspend point or it can be destroyed.
+
+CoroSplit Pass: (CGSCC Pass @ new extension point EP_CGSCCOptimizerLate)
+---------------
+Overall idea is that a coroutine is presented to an llvm as an ordinary function
+with suspension points marked up with intrinsics.  We let the optimizer party
+on the coroutine as a single function for as long as possible. Shortly before 
+the coroutine is eligible to be inlined into its callers, we outline parts of 
+the coroutine that correspond to the code that needs to get executed after the 
+coroutine is resumed or destroyed. We also create a struct that will keep the 
+objects that need to persist across suspend points. This transformation is
+done by CoroSplit CGSCC pass run as a part of the IPO optimizations pipeline.
+
+CoroElide Pass: (Function Pass @ EP_ScalarOptimizerLate extension point)
+---------------
+The coroutine resumption intrinsics get replaced with direct calls to those 
+outlined functions where possible. Then inliner can inline much leaner and nicer
+coroutine or any of the outlined parts as desired.
+
+If we discover that the lifetime of a coroutine is fully enclosed in the 
+lifetime of the caller, we remove dynamic allocation of coroutine state and 
+replace it with an `alloca` on the caller's frame. 
+
+These optimizations are done by a function pass CoroElide run by the main IPO
+optimization at EP_ScalarOptimizerLate extension point.
+
+CoroEarly Pass: (Function Pass @ EP_EarlyAsPossible)
+---------------
+Pretty boring pass that lowers coroutine intrinsics that are not needed for 
+later coroutine passes.
+
+CoroCleanup Pass: (Function Pass @ EP_OptimizerLast)
+--------------
+Another boring pass that lowers all remaining coroutine intrinsics that were not
+processed by earlier coroutine passes.
+
+Questions / Concerns / Thoughts:
+================================
+
+Coroutine attribute or not.
+---------------------------
+I added a AttrKind::coroutine to flag the pre-split coroutine. The intention is 
+to lessen the impact of CoroSpit pass since it can simply check for an attribute
+to learn if there is any work to be done on a function or not. Without the 
+attribute, it would need to examine every functions body to see if it has an 
+llvm.coro.begin. On the other hand, three other coroutine passes have to look at
+every function body anyway to lower other coroutine related intrinsics, so we
+only saving a little. Another negative aspect of having this attribute is that
+there is a possibility of other passes checking if a function is a coroutine or 
+not a doing and doing something differently if it is. I'd like to avoid this 
+development and keep all coroutine logic in the coroutine passes and not affect
+other optimizations passes. Currently I am leaning towards removing this 
+attribute.
+
+Integration with CGSCC pipeline.
+--------------------------------
+
+As mentioned in the introduction, I would like to run entire IPO pipeline on
+pre-split coroutine, then, split it, add the new functions to the SCC and 
+repeat the pipeline on the updated SCC before proceeding to the next SCC.
+
+To facilitate that, CoroSplit pass ignores the coroutine the first time it sees 
+it, and requests restart of the pipeline and splits the coroutine when it sees 
+it the second time around. There are at least four different ways how I can 
+request a restart of the pipeline, and I would like to solicit your advice on 
+which one to pick. 
+
+Option 1: Force revisit of the SCC if there are any coroutine in it. This makes
+  CGPassManager aware of a coroutine attribute and keep restarting the pipeline
+  until no functions in SCC has coroutine attribute on them.
+
+  https://reviews.llvm.org/D21569 
+
+Option 2: Add a ref parameter bool& Devirt parameter to runSCC virtual method.
+  If a pass sets Devirt to true, it indicates to CGPassManager that the changes
+  were made that require restart of the pipeline. 
+
+  https://reviews.llvm.org/D21570
+
+Option 3: Similar to Option 2, but instead of an extra parameter to runSCC, I 
+  add another virtual function to CGSCC pass: 
+
+  virtual bool restartRequested() const { return false; }
+
+  a pass can override it and return true, if restart is required.
+
+Option 4: CoroSplit can add a fake indirect call to be replaced later with a 
+  direct call in a CoroElide function pass. CGPassManager::RefreshCallGraph will
+  detect devirtualization and restart the pipeline. Hacky, but, no changes to
+  CGPassManager required.
+
+Out of these four options, I have a slight preference for 2 or 3, but, I would 
+like to hear your opinion.
+
+Thoughts on ThinLTO and LTO
+===========================
+
+CoroEarly can run during regular compilation. CoroSplit, CoroEarly and 
+CoroCleanup would run during the link optimization step to take advantage of 
+more inlining opportunities.
+
+This is all for now.
+All the feedback and comments are greatly appreciated!!!
+
+Thank you,
+Gor
