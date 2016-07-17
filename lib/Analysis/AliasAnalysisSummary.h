@@ -35,7 +35,9 @@
 #ifndef LLVM_ANALYSIS_ALIASANALYSISSUMMARY_H
 #define LLVM_ANALYSIS_ALIASANALYSISSUMMARY_H
 
+#include "llvm/ADT/DenseMapInfo.h"
 #include "llvm/ADT/Optional.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/IR/CallSite.h"
 #include <bitset>
 
@@ -96,6 +98,9 @@ AliasAttrs getExternallyVisibleAttrs(AliasAttrs);
 // Function summary related stuffs
 //===----------------------------------------------------------------------===//
 
+/// The maximum number of arguments we can put into a summary.
+LLVM_CONSTEXPR static unsigned MaxSupportedArgsInSummary = 50;
+
 /// We use InterfaceValue to describe parameters/return value, as well as
 /// potential memory locations that are pointed to by parameters/return value,
 /// of a function.
@@ -109,11 +114,11 @@ struct InterfaceValue {
   unsigned DerefLevel;
 };
 
-inline bool operator==(InterfaceValue lhs, InterfaceValue rhs) {
-  return lhs.Index == rhs.Index && lhs.DerefLevel == rhs.DerefLevel;
+inline bool operator==(InterfaceValue LHS, InterfaceValue RHS) {
+  return LHS.Index == RHS.Index && LHS.DerefLevel == RHS.DerefLevel;
 }
-inline bool operator!=(InterfaceValue lhs, InterfaceValue rhs) {
-  return !(lhs == rhs);
+inline bool operator!=(InterfaceValue LHS, InterfaceValue RHS) {
+  return !(LHS == RHS);
 }
 
 /// We use ExternalRelation to describe an externally visible aliasing relations
@@ -129,12 +134,41 @@ struct ExternalAttribute {
   AliasAttrs Attr;
 };
 
+/// AliasSummary is just a collection of ExternalRelation and ExternalAttribute
+struct AliasSummary {
+  // RetParamRelations is a collection of ExternalRelations.
+  SmallVector<ExternalRelation, 8> RetParamRelations;
+
+  // RetParamAttributes is a collection of ExternalAttributes.
+  SmallVector<ExternalAttribute, 8> RetParamAttributes;
+};
+
 /// This is the result of instantiating InterfaceValue at a particular callsite
 struct InstantiatedValue {
   Value *Val;
   unsigned DerefLevel;
 };
 Optional<InstantiatedValue> instantiateInterfaceValue(InterfaceValue, CallSite);
+
+inline bool operator==(InstantiatedValue LHS, InstantiatedValue RHS) {
+  return LHS.Val == RHS.Val && LHS.DerefLevel == RHS.DerefLevel;
+}
+inline bool operator!=(InstantiatedValue LHS, InstantiatedValue RHS) {
+  return !(LHS == RHS);
+}
+inline bool operator<(InstantiatedValue LHS, InstantiatedValue RHS) {
+  return std::less<Value *>()(LHS.Val, RHS.Val) ||
+         (LHS.Val == RHS.Val && LHS.DerefLevel < RHS.DerefLevel);
+}
+inline bool operator>(InstantiatedValue LHS, InstantiatedValue RHS) {
+  return RHS < LHS;
+}
+inline bool operator<=(InstantiatedValue LHS, InstantiatedValue RHS) {
+  return !(RHS < LHS);
+}
+inline bool operator>=(InstantiatedValue LHS, InstantiatedValue RHS) {
+  return !(LHS < RHS);
+}
 
 /// This is the result of instantiating ExternalRelation at a particular
 /// callsite
@@ -153,6 +187,25 @@ struct InstantiatedAttr {
 Optional<InstantiatedAttr> instantiateExternalAttribute(ExternalAttribute,
                                                         CallSite);
 }
+
+template <> struct DenseMapInfo<cflaa::InstantiatedValue> {
+  static inline cflaa::InstantiatedValue getEmptyKey() {
+    return cflaa::InstantiatedValue{DenseMapInfo<Value *>::getEmptyKey(),
+                                    DenseMapInfo<unsigned>::getEmptyKey()};
+  }
+  static inline cflaa::InstantiatedValue getTombstoneKey() {
+    return cflaa::InstantiatedValue{DenseMapInfo<Value *>::getTombstoneKey(),
+                                    DenseMapInfo<unsigned>::getTombstoneKey()};
+  }
+  static unsigned getHashValue(const cflaa::InstantiatedValue &IV) {
+    return DenseMapInfo<std::pair<Value *, unsigned>>::getHashValue(
+        std::make_pair(IV.Val, IV.DerefLevel));
+  }
+  static bool isEqual(const cflaa::InstantiatedValue &LHS,
+                      const cflaa::InstantiatedValue &RHS) {
+    return LHS.Val == RHS.Val && LHS.DerefLevel == RHS.DerefLevel;
+  }
+};
 }
 
 #endif

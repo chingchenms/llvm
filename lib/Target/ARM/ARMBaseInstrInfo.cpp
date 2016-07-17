@@ -290,11 +290,11 @@ MachineInstr *ARMBaseInstrInfo::convertToThreeAddress(
 }
 
 // Branch analysis.
-bool
-ARMBaseInstrInfo::AnalyzeBranch(MachineBasicBlock &MBB,MachineBasicBlock *&TBB,
-                                MachineBasicBlock *&FBB,
-                                SmallVectorImpl<MachineOperand> &Cond,
-                                bool AllowModify) const {
+bool ARMBaseInstrInfo::analyzeBranch(MachineBasicBlock &MBB,
+                                     MachineBasicBlock *&TBB,
+                                     MachineBasicBlock *&FBB,
+                                     SmallVectorImpl<MachineOperand> &Cond,
+                                     bool AllowModify) const {
   TBB = nullptr;
   FBB = nullptr;
 
@@ -360,9 +360,9 @@ ARMBaseInstrInfo::AnalyzeBranch(MachineBasicBlock &MBB,MachineBasicBlock *&TBB,
       if (AllowModify) {
         MachineBasicBlock::iterator DI = std::next(I);
         while (DI != MBB.end()) {
-          MachineInstr *InstToDelete = DI;
+          MachineInstr &InstToDelete = *DI;
           ++DI;
-          InstToDelete->eraseFromParent();
+          InstToDelete.eraseFromParent();
         }
       }
     }
@@ -648,8 +648,9 @@ unsigned ARMBaseInstrInfo::GetInstSizeInBytes(const MachineInstr &MI) const {
   case ARM::Int_eh_sjlj_longjmp:
     return 16;
   case ARM::tInt_eh_sjlj_longjmp:
-  case ARM::tInt_WIN_eh_sjlj_longjmp:
     return 10;
+  case ARM::tInt_WIN_eh_sjlj_longjmp:
+    return 12;
   case ARM::Int_eh_sjlj_setjmp:
   case ARM::Int_eh_sjlj_setjmp_nofp:
     return 20;
@@ -1226,12 +1227,11 @@ unsigned ARMBaseInstrInfo::isLoadFromStackSlotPostFE(const MachineInstr &MI,
 
 /// \brief Expands MEMCPY to either LDMIA/STMIA or LDMIA_UPD/STMID_UPD
 /// depending on whether the result is used.
-void ARMBaseInstrInfo::expandMEMCPY(MachineBasicBlock::iterator MBBI) const {
+void ARMBaseInstrInfo::expandMEMCPY(MachineBasicBlock::iterator MI) const {
   bool isThumb1 = Subtarget.isThumb1Only();
   bool isThumb2 = Subtarget.isThumb2();
   const ARMBaseInstrInfo *TII = Subtarget.getInstrInfo();
 
-  MachineInstr *MI = MBBI;
   DebugLoc dl = MI->getDebugLoc();
   MachineBasicBlock *BB = MI->getParent();
 
@@ -1274,7 +1274,7 @@ void ARMBaseInstrInfo::expandMEMCPY(MachineBasicBlock::iterator MBBI) const {
     STM.addReg(Reg, RegState::Kill);
   }
 
-  BB->erase(MBBI);
+  BB->erase(MI);
 }
 
 
@@ -4132,9 +4132,9 @@ void ARMBaseInstrInfo::expandLoadStackGuardBase(MachineBasicBlock::iterator MI,
   if (Subtarget.isGVIndirectSymbol(GV)) {
     MIB = BuildMI(MBB, MI, DL, get(LoadOpc), Reg);
     MIB.addReg(Reg, RegState::Kill).addImm(0);
-    unsigned Flag = MachineMemOperand::MOLoad | MachineMemOperand::MOInvariant;
+    auto Flags = MachineMemOperand::MOLoad | MachineMemOperand::MOInvariant;
     MachineMemOperand *MMO = MBB.getParent()->getMachineMemOperand(
-        MachinePointerInfo::getGOT(*MBB.getParent()), Flag, 4, 4);
+        MachinePointerInfo::getGOT(*MBB.getParent()), Flags, 4, 4);
     MIB.addMemOperand(MMO);
     AddDefaultPred(MIB);
   }

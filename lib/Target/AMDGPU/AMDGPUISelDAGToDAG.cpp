@@ -129,6 +129,7 @@ private:
   bool SelectSMRDBufferImm(SDValue Addr, SDValue &Offset) const;
   bool SelectSMRDBufferImm32(SDValue Addr, SDValue &Offset) const;
   bool SelectSMRDBufferSgpr(SDValue Addr, SDValue &Offset) const;
+  bool SelectMOVRELOffset(SDValue Index, SDValue &Base, SDValue &Offset) const;
   bool SelectVOP3Mods(SDValue In, SDValue &Src, SDValue &SrcMods) const;
   bool SelectVOP3NoMods(SDValue In, SDValue &Src, SDValue &SrcMods) const;
   bool SelectVOP3Mods0(SDValue In, SDValue &Src, SDValue &SrcMods,
@@ -1187,6 +1188,30 @@ bool AMDGPUDAGToDAGISel::SelectSMRDBufferSgpr(SDValue Addr,
   bool Imm;
   return SelectSMRDOffset(Addr, Offset, Imm) && !Imm &&
          !isa<ConstantSDNode>(Offset);
+}
+
+bool AMDGPUDAGToDAGISel::SelectMOVRELOffset(SDValue Index,
+                                            SDValue &Base,
+                                            SDValue &Offset) const {
+  SDLoc DL(Index);
+
+  if (CurDAG->isBaseWithConstantOffset(Index)) {
+    SDValue N0 = Index.getOperand(0);
+    SDValue N1 = Index.getOperand(1);
+    ConstantSDNode *C1 = cast<ConstantSDNode>(N1);
+
+    // (add n0, c0)
+    Base = N0;
+    Offset = CurDAG->getTargetConstant(C1->getZExtValue(), DL, MVT::i32);
+    return true;
+  }
+
+  if (isa<ConstantSDNode>(Index))
+    return false;
+
+  Base = Index;
+  Offset = CurDAG->getTargetConstant(0, DL, MVT::i32);
+  return true;
 }
 
 SDNode *AMDGPUDAGToDAGISel::getS_BFE(unsigned Opcode, const SDLoc &DL,

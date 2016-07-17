@@ -54,6 +54,16 @@ INITIALIZE_PASS_DEPENDENCY(AAResultsWrapperPass)
 INITIALIZE_PASS_END(MemorySSAWrapperPass, "memoryssa", "Memory SSA", false,
                     true)
 
+INITIALIZE_PASS_BEGIN(MemorySSAPrinterLegacyPass, "print-memoryssa",
+                      "Memory SSA Printer", false, false)
+INITIALIZE_PASS_DEPENDENCY(MemorySSAWrapperPass)
+INITIALIZE_PASS_END(MemorySSAPrinterLegacyPass, "print-memoryssa",
+                    "Memory SSA Printer", false, false)
+
+static cl::opt<bool>
+    VerifyMemorySSA("verify-memoryssa", cl::init(false), cl::Hidden,
+                    cl::desc("Verify MemorySSA in legacy printer pass."));
+
 namespace llvm {
 /// \brief An assembly annotator class to print Memory SSA information in
 /// comments.
@@ -894,6 +904,26 @@ void MemoryAccess::dump() const {
   dbgs() << "\n";
 }
 
+char MemorySSAPrinterLegacyPass::ID = 0;
+
+MemorySSAPrinterLegacyPass::MemorySSAPrinterLegacyPass() : FunctionPass(ID) {
+  initializeMemorySSAPrinterLegacyPassPass(*PassRegistry::getPassRegistry());
+}
+
+void MemorySSAPrinterLegacyPass::getAnalysisUsage(AnalysisUsage &AU) const {
+  AU.setPreservesAll();
+  AU.addRequired<MemorySSAWrapperPass>();
+  AU.addPreserved<MemorySSAWrapperPass>();
+}
+
+bool MemorySSAPrinterLegacyPass::runOnFunction(Function &F) {
+  auto &MSSA = getAnalysis<MemorySSAWrapperPass>().getMSSA();
+  MSSA.print(dbgs());
+  if (VerifyMemorySSA)
+    MSSA.verifyMemorySSA();
+  return false;
+}
+
 char MemorySSAAnalysis::PassID;
 
 MemorySSA MemorySSAAnalysis::run(Function &F, AnalysisManager<Function> &AM) {
@@ -1222,7 +1252,7 @@ MemoryAccess *MemorySSA::CachingWalker::getClobberingMemoryAccess(
 
   // Conservatively, fences are always clobbers, so don't perform the walk if we
   // hit a fence.
-  if (isa<FenceInst>(I))
+  if (!ImmutableCallSite(I) && I->isFenceLike())
     return StartingUseOrDef;
 
   UpwardsMemoryQuery Q;
@@ -1257,15 +1287,17 @@ MemorySSA::CachingWalker::getClobberingMemoryAccess(const Instruction *I) {
   // access, since we only map BB's to PHI's. So, this must be a use or def.
   auto *StartingAccess = cast<MemoryUseOrDef>(MSSA->getMemoryAccess(I));
 
-  // We can't sanely do anything with a FenceInst, they conservatively
+  bool IsCall = bool(ImmutableCallSite(I));
+
+  // We can't sanely do anything with a fences, they conservatively
   // clobber all memory, and have no locations to get pointers from to
-  // try to disambiguate
-  if (isa<FenceInst>(I))
+  // try to disambiguate.
+  if (!IsCall && I->isFenceLike())
     return StartingAccess;
 
   UpwardsMemoryQuery Q;
   Q.OriginalAccess = StartingAccess;
-  Q.IsCall = bool(ImmutableCallSite(I));
+  Q.IsCall = IsCall;
   if (!Q.IsCall)
     Q.StartingLoc = MemoryLocation::get(I);
   Q.Inst = I;

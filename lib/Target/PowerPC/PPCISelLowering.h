@@ -65,6 +65,14 @@ namespace llvm {
       ///
       XXSPLT,
 
+      /// XXINSERT - The PPC VSX insert instruction
+      ///
+      XXINSERT,
+
+      /// VECSHL - The PPC VSX shift left instruction
+      ///
+      VECSHL,
+
       /// The CMPB instruction (takes two operands of i32 or i64).
       CMPB,
 
@@ -311,6 +319,10 @@ namespace llvm {
       /// of outputs.
       XXSWAPD,
 
+      /// An SDNode for swaps that are not associated with any loads/stores
+      /// and thereby have no chain.
+      SWAP_NO_CHAIN,
+
       /// QVFPERM = This corresponds to the QPX qvfperm instruction.
       QVFPERM,
 
@@ -415,6 +427,16 @@ namespace llvm {
     /// specifies a splat of a single element that is suitable for input to
     /// VSPLTB/VSPLTH/VSPLTW.
     bool isSplatShuffleMask(ShuffleVectorSDNode *N, unsigned EltSize);
+
+    /// isXXINSERTWMask - Return true if this VECTOR_SHUFFLE can be handled by
+    /// the XXINSERTW instruction introduced in ISA 3.0. This is essentially any
+    /// shuffle of v4f32/v4i32 vectors that just inserts one element from one
+    /// vector into the other. This function will also set a couple of
+    /// output parameters for how much the source vector needs to be shifted and
+    /// what byte number needs to be specified for the instruction to put the
+    /// element in the desired location of the target vector.
+    bool isXXINSERTWMask(ShuffleVectorSDNode *N, unsigned &ShiftElts,
+                         unsigned &InsertAtByte, bool &Swap, bool IsLE);
 
     /// getVSPLTImmediate - Return the appropriate VSPLT* immediate to splat the
     /// specified isSplatShuffleMask VECTOR_SHUFFLE mask.
@@ -770,7 +792,7 @@ namespace llvm {
 
     SDValue EmitTailCallLoadFPAndRetAddr(SelectionDAG &DAG, int SPDiff,
                                          SDValue Chain, SDValue &LROpOut,
-                                         SDValue &FPOpOut, bool isDarwinABI,
+                                         SDValue &FPOpOut,
                                          const SDLoc &dl) const;
 
     SDValue LowerRETURNADDR(SDValue Op, SelectionDAG &DAG) const;
@@ -783,18 +805,12 @@ namespace llvm {
     SDValue LowerSETCC(SDValue Op, SelectionDAG &DAG) const;
     SDValue LowerINIT_TRAMPOLINE(SDValue Op, SelectionDAG &DAG) const;
     SDValue LowerADJUST_TRAMPOLINE(SDValue Op, SelectionDAG &DAG) const;
-    SDValue LowerVASTART(SDValue Op, SelectionDAG &DAG,
-                         const PPCSubtarget &Subtarget) const;
-    SDValue LowerVAARG(SDValue Op, SelectionDAG &DAG,
-                       const PPCSubtarget &Subtarget) const;
-    SDValue LowerVACOPY(SDValue Op, SelectionDAG &DAG,
-                        const PPCSubtarget &Subtarget) const;
-    SDValue LowerSTACKRESTORE(SDValue Op, SelectionDAG &DAG,
-                                const PPCSubtarget &Subtarget) const;
-    SDValue LowerGET_DYNAMIC_AREA_OFFSET(SDValue Op, SelectionDAG &DAG,
-                                         const PPCSubtarget &Subtarget) const;
-    SDValue LowerDYNAMIC_STACKALLOC(SDValue Op, SelectionDAG &DAG,
-                                      const PPCSubtarget &Subtarget) const;
+    SDValue LowerVASTART(SDValue Op, SelectionDAG &DAG) const;
+    SDValue LowerVAARG(SDValue Op, SelectionDAG &DAG) const;
+    SDValue LowerVACOPY(SDValue Op, SelectionDAG &DAG) const;
+    SDValue LowerSTACKRESTORE(SDValue Op, SelectionDAG &DAG) const;
+    SDValue LowerGET_DYNAMIC_AREA_OFFSET(SDValue Op, SelectionDAG &DAG) const;
+    SDValue LowerDYNAMIC_STACKALLOC(SDValue Op, SelectionDAG &DAG) const;
     SDValue LowerLOAD(SDValue Op, SelectionDAG &DAG) const;
     SDValue LowerSTORE(SDValue Op, SelectionDAG &DAG) const;
     SDValue LowerTRUNCATE(SDValue Op, SelectionDAG &DAG) const;
@@ -823,7 +839,7 @@ namespace llvm {
                             const SDLoc &dl, SelectionDAG &DAG,
                             SmallVectorImpl<SDValue> &InVals) const;
     SDValue FinishCall(CallingConv::ID CallConv, const SDLoc &dl,
-                       bool isTailCall, bool isVarArg, bool IsPatchPoint,
+                       bool isTailCall, bool isVarArg, bool isPatchPoint,
                        bool hasNest, SelectionDAG &DAG,
                        SmallVector<std::pair<unsigned, SDValue>, 8> &RegsToPass,
                        SDValue InFlag, SDValue Chain, SDValue CallSeqStart,
@@ -877,7 +893,7 @@ namespace llvm {
 
     SDValue LowerCall_Darwin(SDValue Chain, SDValue Callee,
                              CallingConv::ID CallConv, bool isVarArg,
-                             bool isTailCall, bool IsPatchPoint,
+                             bool isTailCall, bool isPatchPoint,
                              const SmallVectorImpl<ISD::OutputArg> &Outs,
                              const SmallVectorImpl<SDValue> &OutVals,
                              const SmallVectorImpl<ISD::InputArg> &Ins,
@@ -886,7 +902,7 @@ namespace llvm {
                              ImmutableCallSite *CS) const;
     SDValue LowerCall_64SVR4(SDValue Chain, SDValue Callee,
                              CallingConv::ID CallConv, bool isVarArg,
-                             bool isTailCall, bool IsPatchPoint,
+                             bool isTailCall, bool isPatchPoint,
                              const SmallVectorImpl<ISD::OutputArg> &Outs,
                              const SmallVectorImpl<SDValue> &OutVals,
                              const SmallVectorImpl<ISD::InputArg> &Ins,
@@ -895,7 +911,7 @@ namespace llvm {
                              ImmutableCallSite *CS) const;
     SDValue LowerCall_32SVR4(SDValue Chain, SDValue Callee,
                              CallingConv::ID CallConv, bool isVarArg,
-                             bool isTailCall, bool IsPatchPoint,
+                             bool isTailCall, bool isPatchPoint,
                              const SmallVectorImpl<ISD::OutputArg> &Outs,
                              const SmallVectorImpl<SDValue> &OutVals,
                              const SmallVectorImpl<ISD::InputArg> &Ins,

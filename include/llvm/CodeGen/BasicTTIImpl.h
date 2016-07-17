@@ -105,6 +105,11 @@ public:
 
   /// \name Scalar TTI Implementations
   /// @{
+  bool allowsMisalignedMemoryAccesses(unsigned BitWidth, unsigned AddressSpace,
+                                      unsigned Alignment, bool *Fast) const {
+    MVT M = MVT::getIntegerVT(BitWidth);
+    return getTLI()->allowsMisalignedMemoryAccesses(M, AddressSpace, Alignment, Fast);
+  }
 
   bool hasBranchDivergence() { return false; }
 
@@ -150,6 +155,11 @@ public:
   bool isTypeLegal(Type *Ty) {
     EVT VT = getTLI()->getValueType(DL, Ty);
     return getTLI()->isTypeLegal(VT);
+  }
+
+  int getGEPCost(Type *PointeeType, const Value *Ptr,
+                 ArrayRef<const Value *> Operands) {
+    return BaseT::getGEPCost(PointeeType, Ptr, Operands);
   }
 
   unsigned getIntrinsicCost(Intrinsic::ID IID, Type *RetTy,
