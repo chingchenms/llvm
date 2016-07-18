@@ -485,13 +485,20 @@ static void rewritePHIs(BasicBlock &BB) {
   }
 }
 
+static bool hasAllocInstEdge(PHINode* PN) {
+  for (Value* V : PN->incoming_values())
+    if (isa<CoroAllocInst>(V)) return true;
+  return false;
+}
+
 static void rewritePHIs(Function &F) {
   SmallVector<BasicBlock*, 8> WorkList;
 
   for (BasicBlock& BB : F)
     if (auto PN = dyn_cast<PHINode>(&BB.front()))
       if (PN->getNumIncomingValues() > 1)
-        WorkList.push_back(&BB);
+        if (!hasAllocInstEdge(PN))
+          WorkList.push_back(&BB);
 
   for (BasicBlock* BB : WorkList)
     rewritePHIs(*BB);

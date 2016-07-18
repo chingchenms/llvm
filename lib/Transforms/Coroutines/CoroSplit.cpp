@@ -106,36 +106,7 @@ static BasicBlock* createResumeEntryBlock(Function& F, CoroutineShape& Shape) {
   return NewEntry;
 }
 
-static void preSplitCleanup(Function& F) {
-  removeUnreachableBlocks(F);
-  llvm::legacy::FunctionPassManager FPM(F.getParent());
-
-  FPM.add(createSCCPPass());
-  FPM.add(createCFGSimplificationPass());
-  FPM.add(createSROAPass());
-  FPM.add(createEarlyCSEPass());
-
-  FPM.doInitialization();
-  FPM.run(F);
-  FPM.doFinalization();
-}
-
-static void postSplitCleanup(Function& F) {
-  removeUnreachableBlocks(F);
-  llvm::legacy::FunctionPassManager FPM(F.getParent());
-
-  FPM.add(createVerifierPass());
-  FPM.add(createSCCPPass());
-  FPM.add(createCFGSimplificationPass());
-  //FPM.add(createSROAPass());
-  //FPM.add(createEarlyCSEPass());
-  //  FPM.add(createInstructionCombiningPass());
-  //FPM.add(createCFGSimplificationPass());
-
-  FPM.doInitialization();
-  FPM.run(F);
-  FPM.doFinalization();
-}
+static void postSplitCleanup(Function &F) { removeUnreachableBlocks(F); }
 
 template <typename T>
 ArrayRef<Instruction *>
@@ -458,7 +429,6 @@ static void simplifySuspendPoints(CoroutineShape& Shape) {
 static void splitCoroutine(Function &F, CallGraph &CG, CallGraphSCC &SCC) {
   LowerDbgDeclare(F);
   CoroUtils::removeLifetimeIntrinsics(F);
-  preSplitCleanup(F);
   removeFnAttr(F, CORO_ATTR_STR);
 
   CoroutineShape Shape(F);
@@ -469,7 +439,6 @@ static void splitCoroutine(Function &F, CallGraph &CG, CallGraphSCC &SCC) {
   // If there is no suspend points, no split required, just remove
   // the allocation and deallocation blocks, they are not needed
   if (Shape.CoroSuspends.empty()) {
-    preSplitCleanup(F);
     handleNoSuspendCoroutine(Shape.CoroBegin, Shape.FrameTy);
     postSplitCleanup(F);
     CoroUtils::updateCallGraph(F, {}, CG, SCC);
