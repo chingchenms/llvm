@@ -29,6 +29,8 @@
 #define CORO_ATTR_VALUE_NOT_READY_FOR_SPLIT "0"
 #define CORO_ATTR_VALUE_READY_FOR_SPLIT "1"
 
+#define CORO_DEVIRT_TRIGGER_FN "coro.devirt.trigger"
+
 namespace llvm {
 
 class Function;
@@ -44,6 +46,7 @@ namespace CoroUtils {
   void updateCallGraph(Function &Caller, ArrayRef<Function *> Funcs,
     CallGraph &CG, CallGraphSCC &SCC);
   void replaceCoroFree(Value* FramePtr, Value* Replacement);
+  CallInst* makeSubFnCall(Value* Arg, int Index, Instruction* InsertPt);
 }
 
 /// Holds all structural Coroutine Intrinsics for a particular function.

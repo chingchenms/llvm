@@ -130,7 +130,12 @@ static bool replaceIndirectCalls(CoroBeginInst *CoroBegin, AAResults& AA) {
 
   for (auto U : CoroBegin->users())
     if (auto II = dyn_cast<CoroSubFnInst>(U))
-      (II->getIndex() == 0 ? ResumeAddr : DestroyAddr).push_back(II);
+      switch (II->getIndex()) {
+      case 0: ResumeAddr.push_back(II); break;
+      case 1: DestroyAddr.push_back(II); break;
+      default:
+        llvm_unreachable("unexpected coro.subfn.addr constant");
+      }
 
   if (ResumeAddr.empty() && DestroyAddr.empty())
     return false;
@@ -148,9 +153,29 @@ static bool replaceIndirectCalls(CoroBeginInst *CoroBegin, AAResults& AA) {
   return true;
 }
 
+static bool replaceDevirtTrigger(Function& F) {
+  SmallVector<CoroSubFnInst*, 1> DevirtAddr;
+  for (auto& I : instructions(F))
+    if (auto SubFn = dyn_cast<CoroSubFnInst>(&I))
+      if (SubFn->getIndex() == -1)
+        DevirtAddr.push_back(SubFn);
+
+  if (DevirtAddr.empty())
+    return false;
+
+  Module& M = *F.getParent();
+  Function* DevirtFn = M.getFunction(CORO_DEVIRT_TRIGGER_FN);
+  assert(DevirtFn && "coro.devirt.fn not found");
+  replaceWithConstant(DevirtFn, DevirtAddr);
+
+  return true;
+}
+
 bool CoroElide::runOnFunction(Function &F) {
   bool changed = false;
-  AAResults& AA = getAnalysis<AAResultsWrapperPass>().getAAResults();
+
+  if (F.hasFnAttribute(CORO_ATTR_STR))
+    changed = replaceDevirtTrigger(F);
 
   // Collect all coro inits
   SmallVector<CoroBeginInst*, 4> CoroBegins;
@@ -159,6 +184,10 @@ bool CoroElide::runOnFunction(Function &F) {
       if (CB->getInfo().postSplit())
         CoroBegins.push_back(CB);
 
+  if (CoroBegins.empty())
+    return changed;
+
+  AAResults& AA = getAnalysis<AAResultsWrapperPass>().getAAResults();
   for (auto CB : CoroBegins)
     changed |= replaceIndirectCalls(CB, AA);
 

@@ -86,18 +86,7 @@ void Lowerer::replaceCoroPromise(IntrinsicInst *Intrin, bool from) {
 }
 
 void Lowerer::lowerResumeOrDestroy(IntrinsicInst* II, unsigned Index) {
-  auto IndexVal = ConstantInt::get(Type::getInt8Ty(C), Index);
-  auto Fn = Intrinsic::getDeclaration(&M, Intrinsic::coro_subfn_addr);
-
-  SmallVector<Value*, 2> Args{ II->getArgOperand(0), IndexVal };
-  auto Call = CallInst::Create(Fn, Args, "", II);
-
-  auto FTy = FunctionType::get(Type::getVoidTy(C), Type::getInt8PtrTy(C),
-                               /*isVarArg=*/false);
-  auto Bitcast = new BitCastInst(Call, FTy->getPointerTo(), "", II);
-
-  auto Indirect = CallInst::Create(Bitcast, II->getArgOperand(0), "");
-  Indirect->setCallingConv(CallingConv::Fast);
+  auto Indirect = CoroUtils::makeSubFnCall(II->getArgOperand(0), Index, II);
   ReplaceInstWithInst(II, Indirect);
 }
 

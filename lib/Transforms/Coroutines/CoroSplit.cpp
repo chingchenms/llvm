@@ -497,9 +497,41 @@ static void splitCoroutine(Function &F, CallGraph &CG, CallGraphSCC &SCC) {
       F, {ResumeClone.Fn, DestroyClone.Fn, CleanupClone}, CG, SCC);
 }
 
-static void makeReadyForSplit(Function& F) {
-  // TODO: insert fake function
+static void makeReadyForSplit(Function& F, CallGraph& CG) {
+  Module& M = *F.getParent();
+  Function* DevirtFn = M.getFunction(CORO_DEVIRT_TRIGGER_FN);
+  assert(DevirtFn && "coro.devirt.trigger function not found");
+
   F.addFnAttr(CORO_ATTR_STR, CORO_ATTR_VALUE_READY_FOR_SPLIT);
+
+  for (Instruction& I: instructions(F))
+    if (auto CB = dyn_cast<CoroBeginInst>(&I))
+      if (CB->getInfo().isPreSplit()) {
+        auto InsertPt = CB->getNextNode();
+        auto IndirectCall = CoroUtils::makeSubFnCall(CB, -1, InsertPt);
+        IndirectCall->insertBefore(InsertPt);
+        CG[&F]->addCalledFunction(IndirectCall, CG.getCallsExternalNode());
+        return;
+      }
+  llvm_unreachable("No coro.begin in pre-split coroutine");
+}
+
+static void createDevirtTriggerFunc(CallGraph& CG) {
+  Module& M = CG.getModule();
+  if (M.getFunction(CORO_DEVIRT_TRIGGER_FN))
+    return;
+
+  LLVMContext& C = M.getContext();
+  auto FnTy = FunctionType::get(Type::getVoidTy(C), Type::getInt8PtrTy(C),
+                                /*IsVarArgs=*/false);
+  Function *DevirtFn =
+      Function::Create(FnTy, GlobalValue::LinkageTypes::PrivateLinkage,
+                       CORO_DEVIRT_TRIGGER_FN, &M);
+  DevirtFn->setCallingConv(CallingConv::Fast);
+  auto Entry = BasicBlock::Create(C, "entry", DevirtFn);
+  ReturnInst::Create(C, Entry);
+
+  CG.getOrInsertFunction(DevirtFn);
 }
 
 //===----------------------------------------------------------------------===//
@@ -512,13 +544,11 @@ namespace {
     static char ID; // Pass identification, replacement for typeid
     CoroSplit() : CallGraphSCCPass(ID) {}
 
-    bool needToRestart;
     bool Run = false;
     
-    bool restartRequested() const override { return needToRestart; }
-
     bool doInitialization(CallGraph& CG) override {
       Run = CG.getModule().getNamedValue(CoroBeginInst::getIntrinsicName());
+      createDevirtTriggerFunc(CG);
       return CallGraphSCCPass::doInitialization(CG);
     }
 
@@ -526,32 +556,27 @@ namespace {
       if (!Run)
         return false;
 
-      CallGraph &CG = getAnalysis<CallGraphWrapperPass>().getCallGraph();
-      needToRestart = false;
-
       // find coroutines for processing
       SmallVector<Function*, 4> Coroutines;
       for (CallGraphNode *CGN : SCC)
         if (auto F = CGN->getFunction())
-          if (F->hasFnAttribute(CORO_ATTR_STR)) {
-            Attribute Attr = F->getFnAttribute(CORO_ATTR_STR);
-            StringRef Value = Attr.getValueAsString();
-            if (Value == CORO_ATTR_VALUE_NOT_READY_FOR_SPLIT) {
-              makeReadyForSplit(*F);
-              needToRestart = true;
-              continue;
-            }
-            assert(Value == CORO_ATTR_VALUE_READY_FOR_SPLIT &&
-                   "Unexpected corountie attribute value");
+          if (F->hasFnAttribute(CORO_ATTR_STR))
             Coroutines.push_back(F);
-          }
 
       if (Coroutines.empty())
-        return needToRestart;
+        return false;
 
-      for (Function* F : Coroutines)
+      CallGraph &CG = getAnalysis<CallGraphWrapperPass>().getCallGraph();
+
+      for (Function* F: Coroutines) {
+        Attribute Attr = F->getFnAttribute(CORO_ATTR_STR);
+        StringRef Value = Attr.getValueAsString();
+        if (Value == CORO_ATTR_VALUE_NOT_READY_FOR_SPLIT) {
+          makeReadyForSplit(*F, CG);
+          continue;
+        }
         splitCoroutine(*F, CG, SCC);
-
+      }
       return true;
     }
   };

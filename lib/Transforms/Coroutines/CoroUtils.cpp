@@ -50,6 +50,26 @@ void CoroUtils::replaceCoroFree(Value* FramePtr, Value* Replacement) {
   }
 }
 
+CallInst *llvm::CoroUtils::makeSubFnCall(Value *Arg, int Index,
+                                            Instruction *InsertPt) {
+  Module& M = *InsertPt->getModule();
+  LLVMContext& C = M.getContext();
+  auto IndexVal = ConstantInt::get(Type::getInt8Ty(C), Index);
+  auto Fn = Intrinsic::getDeclaration(&M, Intrinsic::coro_subfn_addr);
+
+  SmallVector<Value *, 2> Args{Arg, IndexVal};
+  auto Call = CallInst::Create(Fn, Args, "", InsertPt);
+
+  auto FTy = FunctionType::get(Type::getVoidTy(C), Type::getInt8PtrTy(C),
+                               /*isVarArg=*/false);
+  auto Bitcast = new BitCastInst(Call, FTy->getPointerTo(), "", InsertPt);
+
+  auto Indirect = CallInst::Create(Bitcast, Arg, "");
+  Indirect->setCallingConv(CallingConv::Fast);
+
+  return Indirect;
+}
+
 void CoroUtils::removeLifetimeIntrinsics(Function &F) {
   for (auto it = inst_begin(F), end = inst_end(F); it != end;) {
     Instruction& I = *it++;

@@ -124,15 +124,7 @@ bool CGPassManager::RunPassOnSCC(Pass *P, CallGraphSCC &CurSCC,
 
     {
       TimeRegion PassTimer(getPassTimer(CGSP));
-      if (CGSP->runOnSCC(CurSCC)) {
-        Changed = true;
-
-        if (CGSP->restartRequested()) {
-          DEBUG(dbgs() << "  CGSCCPASSMGR: Pipeline restart requested by '"
-            << CGSP->getPassName() << "'\n");
-          DevirtualizedCall = true;
-        }
-      }
+      Changed = CGSP->runOnSCC(CurSCC);
     }
     
     // After the CGSCCPass is done, when assertions are enabled, use
