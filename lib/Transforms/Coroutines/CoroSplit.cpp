@@ -30,6 +30,12 @@ using namespace llvm;
 
 #define DEBUG_TYPE "coro-split"
 
+// FIXME: add this to llvm::Function
+static void removeFnAttr(Function& F, StringRef Kind) {
+  F.setAttributes(F.getAttributes().removeAttribute(
+    F.getContext(), AttributeSet::FunctionIndex, CORO_ATTR_STR));
+}
+
 static BasicBlock* createResumeEntryBlock(Function& F, CoroutineShape& Shape) {
   LLVMContext& C = F.getContext();
   auto NewEntry = BasicBlock::Create(C, "resume.entry", &F);
@@ -453,6 +459,7 @@ static void splitCoroutine(Function &F, CallGraph &CG, CallGraphSCC &SCC) {
   LowerDbgDeclare(F);
   CoroUtils::removeLifetimeIntrinsics(F);
   preSplitCleanup(F);
+  removeFnAttr(F, CORO_ATTR_STR);
 
   CoroutineShape Shape(F);
 
@@ -490,49 +497,11 @@ static void splitCoroutine(Function &F, CallGraph &CG, CallGraphSCC &SCC) {
       F, {ResumeClone.Fn, DestroyClone.Fn, CleanupClone}, CG, SCC);
 }
 
-#define kReadyForSplitStr "coro.ready.for.split"
-
-static bool handleCoroutine(Function& F, CallGraph &CG, CallGraphSCC &SCC) {
-  if (F.hasFnAttribute(kReadyForSplitStr)) {
-    splitCoroutine(F, CG, SCC);
-    return false; // no restart needed
-  }
-
-  F.addFnAttr(kReadyForSplitStr);
-  return true;
+static void makeReadyForSplit(Function& F) {
+  // TODO: insert fake function
+  F.addFnAttr(CORO_ATTR_STR, CORO_ATTR_VALUE_READY_FOR_SPLIT);
 }
 
-static bool makeReadyForSplit(Function& F) {
-  for (auto& I : instructions(F))
-    if (auto CB = dyn_cast<CoroBeginInst>(&I))
-      if (CB->getInfo().isPreSplit()) {
-        F.addFnAttr(kReadyForSplitStr);
-        return true;
-      }
-  return false;
-}
-
-#if 0
-static bool handleCoroutine(Function& F, CallGraph &CG, CallGraphSCC &SCC) {
-  for (auto& I : instructions(F)) {
-    if (auto CB = dyn_cast<CoroBeginInst>(&I)) {
-      auto Info = CB->getInfo();
-      // this coro.begin belongs to inlined post-split coroutine we called
-      if (Info.postSplit())
-        continue;
-
-      if (Info.needToOutline()) {
-        outlineCoroutineParts(F, CG, SCC);
-        return true; // restart needed
-      }
-
-      splitCoroutine(F, CG, SCC);
-      return false; // restart not needed
-    }
-  }
-  llvm_unreachable("Coroutine without defininig coro.begin");
-}
-#endif
 //===----------------------------------------------------------------------===//
 //                              Top Level Driver
 //===----------------------------------------------------------------------===//
@@ -544,18 +513,19 @@ namespace {
     CoroSplit() : CallGraphSCCPass(ID) {}
 
     bool needToRestart;
-    bool Run;
+    bool Run = false;
     
     bool restartRequested() const override { return needToRestart; }
 
-    bool doInitialization(Module& M) override {
-      Run = M.getNamedValue("llvm.coro.begin");
-      return CallGraphSCCPass::doInitialization(M);
+    bool doInitialization(CallGraph& CG) override {
+      Run = CG.getModule().getNamedValue(CoroBeginInst::getIntrinsicName());
+      return CallGraphSCCPass::doInitialization(CG);
     }
 
     bool runOnSCC(CallGraphSCC &SCC) override {
       if (!Run)
         return false;
+
       CallGraph &CG = getAnalysis<CallGraphWrapperPass>().getCallGraph();
       needToRestart = false;
 
@@ -563,10 +533,18 @@ namespace {
       SmallVector<Function*, 4> Coroutines;
       for (CallGraphNode *CGN : SCC)
         if (auto F = CGN->getFunction())
-          if (F->hasFnAttribute(kReadyForSplitStr))
+          if (F->hasFnAttribute(CORO_ATTR_STR)) {
+            Attribute Attr = F->getFnAttribute(CORO_ATTR_STR);
+            StringRef Value = Attr.getValueAsString();
+            if (Value == CORO_ATTR_VALUE_NOT_READY_FOR_SPLIT) {
+              makeReadyForSplit(*F);
+              needToRestart = true;
+              continue;
+            }
+            assert(Value == CORO_ATTR_VALUE_READY_FOR_SPLIT &&
+                   "Unexpected corountie attribute value");
             Coroutines.push_back(F);
-          else
-            needToRestart |= makeReadyForSplit(*F);
+          }
 
       if (Coroutines.empty())
         return needToRestart;
@@ -576,7 +554,6 @@ namespace {
 
       return true;
     }
-
   };
 }
 

@@ -25,6 +25,10 @@
 
 #define CORO_USE_INDEX_FOR_DONE 0
 
+#define CORO_ATTR_STR "coroutine.presplit"
+#define CORO_ATTR_VALUE_NOT_READY_FOR_SPLIT "0"
+#define CORO_ATTR_VALUE_READY_FOR_SPLIT "1"
+
 namespace llvm {
 
 class Function;

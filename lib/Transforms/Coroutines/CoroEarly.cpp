@@ -138,6 +138,11 @@ bool Lowerer::lowerEarlyIntrinsics(Function& F) {
       switch (II->getIntrinsicID()) {
       default:
         continue;
+      case Intrinsic::coro_begin:
+        if (auto CB = cast<CoroBeginInst>(II))
+          if (CB->getInfo().isPreSplit())
+            F.addFnAttr(CORO_ATTR_STR, CORO_ATTR_VALUE_NOT_READY_FOR_SPLIT);
+        break;
       case Intrinsic::coro_resume:
         lowerResumeOrDestroy(II, 0);
         break;
