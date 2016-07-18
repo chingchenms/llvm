@@ -454,8 +454,6 @@ static void splitCoroutine(Function &F, CallGraph &CG, CallGraphSCC &SCC) {
   CoroUtils::removeLifetimeIntrinsics(F);
   preSplitCleanup(F);
 
-  // After split coroutine will be a normal function
-  F.removeFnAttr(Attribute::Coroutine); 
   CoroutineShape Shape(F);
 
   simplifySuspendPoints(Shape);
@@ -504,6 +502,16 @@ static bool handleCoroutine(Function& F, CallGraph &CG, CallGraphSCC &SCC) {
   return true;
 }
 
+static bool makeReadyForSplit(Function& F) {
+  for (auto& I : instructions(F))
+    if (auto CB = dyn_cast<CoroBeginInst>(&I))
+      if (CB->getInfo().isPreSplit()) {
+        F.addFnAttr(kReadyForSplitStr);
+        return true;
+      }
+  return false;
+}
+
 #if 0
 static bool handleCoroutine(Function& F, CallGraph &CG, CallGraphSCC &SCC) {
   for (auto& I : instructions(F)) {
@@ -536,10 +544,18 @@ namespace {
     CoroSplit() : CallGraphSCCPass(ID) {}
 
     bool needToRestart;
+    bool Run;
     
     bool restartRequested() const override { return needToRestart; }
 
+    bool doInitialization(Module& M) override {
+      Run = M.getNamedValue("llvm.coro.begin");
+      return CallGraphSCCPass::doInitialization(M);
+    }
+
     bool runOnSCC(CallGraphSCC &SCC) override {
+      if (!Run)
+        return false;
       CallGraph &CG = getAnalysis<CallGraphWrapperPass>().getCallGraph();
       needToRestart = false;
 
@@ -547,14 +563,16 @@ namespace {
       SmallVector<Function*, 4> Coroutines;
       for (CallGraphNode *CGN : SCC)
         if (auto F = CGN->getFunction())
-          if (F->hasFnAttribute(Attribute::Coroutine))
+          if (F->hasFnAttribute(kReadyForSplitStr))
             Coroutines.push_back(F);
+          else
+            needToRestart |= makeReadyForSplit(*F);
 
       if (Coroutines.empty())
-        return false;
+        return needToRestart;
 
       for (Function* F : Coroutines)
-        needToRestart |= handleCoroutine(*F, CG, SCC);
+        splitCoroutine(*F, CG, SCC);
 
       return true;
     }

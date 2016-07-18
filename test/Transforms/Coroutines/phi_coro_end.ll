@@ -1,7 +1,7 @@
 ; Verify that we correctly handle suspend when the coro.end block contains phi
 ; RUN: opt < %s -O2 -S | FileCheck %s
 
-define i8* @f(i32 %n) coroutine {
+define i8* @f(i32 %n) {
 entry:
   %hdl = call i8* @llvm.coro.begin(i8* null, i32 0, i8* null, i8* null)
   %0 = call i8 @llvm.coro.suspend(token none, i1 false)

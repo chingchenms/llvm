@@ -166,7 +166,6 @@ enum Kind {
   kw_inalloca,
   kw_cold,
   kw_convergent,
-    kw_coroutine,
   kw_dereferenceable,
   kw_dereferenceable_or_null,
   kw_inaccessiblememonly,

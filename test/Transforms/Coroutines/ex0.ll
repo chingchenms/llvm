@@ -1,7 +1,7 @@
 ; First example from Doc/Coroutines.rst (two block loop)
 ; RUN: opt < %s -O3 -S | FileCheck %s
 
-define i8* @f(i32 %n) coroutine {
+define i8* @f(i32 %n) {
 entry:
   %size = call i32 @llvm.coro.size.i32(i8* null)
   %alloc = call i8* @malloc(i32 %size)

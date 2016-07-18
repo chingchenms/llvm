@@ -5,7 +5,7 @@
 
 @g = global i32 0, align 4
 
-define i8* @f() coroutine {
+define i8* @f() {
 entry:
   %i = alloca i32
   %0 = tail call i32 @llvm.coro.size.i32(i8* null)

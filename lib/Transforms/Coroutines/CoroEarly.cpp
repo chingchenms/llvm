@@ -145,10 +145,6 @@ bool lowerEarlyIntrinsics(Function& F) {
       switch (II->getIntrinsicID()) {
       default:
         continue;
-      case Intrinsic::coro_begin:
-        if (cast<CoroBeginInst>(II)->getInfo().isPreSplit())
-          F.addFnAttr(Attribute::Coroutine);
-        break;
       case Intrinsic::coro_param:
         // TODO: add this to Intrinsics.td instead
         for (int i = 1; i <= 2; ++i) {
@@ -189,17 +185,7 @@ struct CoroEarly : public FunctionPass {
   static char ID; // Pass identification, replacement for typeid
   CoroEarly() : FunctionPass(ID) {}
 
-  bool runOnFunction(Function &F) override {
-    bool changed = lowerEarlyIntrinsics(F);
-    if (!F.hasFnAttribute(Attribute::Coroutine))
-      return changed;
-
-    Shape.buildFrom(F);
-
-    return changed;
-  }
-
-  CoroutineShape Shape;
+  bool runOnFunction(Function &F) override { return lowerEarlyIntrinsics(F); }
 };
 }
 

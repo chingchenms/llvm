@@ -581,8 +581,6 @@ static uint64_t getAttrKindEncoding(Attribute::AttrKind Kind) {
     return bitc::ATTR_KIND_BY_VAL;
   case Attribute::Convergent:
     return bitc::ATTR_KIND_CONVERGENT;
-  case Attribute::Coroutine:
-    return bitc::ATTR_KIND_COROUTINE;
   case Attribute::InAlloca:
     return bitc::ATTR_KIND_IN_ALLOCA;
   case Attribute::Cold:
