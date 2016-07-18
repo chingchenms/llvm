@@ -613,7 +613,8 @@ def int_coro_size : Intrinsic<[llvm_anyint_ty], [llvm_ptr_ty], [IntrNoMem]>;
 def int_coro_save : Intrinsic<[llvm_token_ty], [llvm_ptr_ty], []>;
 def int_coro_suspend : Intrinsic<[llvm_i8_ty], [llvm_token_ty, llvm_i1_ty], []>;
 
-def int_coro_param : Intrinsic<[llvm_i1_ty], [llvm_ptr_ty, llvm_ptr_ty], [IntrReadMem]>;
+def int_coro_param : Intrinsic<[llvm_i1_ty], [llvm_ptr_ty, llvm_ptr_ty], 
+[IntrReadMem, ReadNone<0>,NoCapture<0>, ReadNone<1>,NoCapture<1>]>;
 
 def int_coro_resume : Intrinsic<[], [llvm_ptr_ty], [Throws]>;
 def int_coro_destroy : Intrinsic<[], [llvm_ptr_ty], [Throws]>;

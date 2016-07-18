@@ -30,7 +30,7 @@ using namespace llvm;
 #define DEBUG_TYPE "coro-early"
 
 // Keeps data common to all lowering functions.
-struct Lowerer {
+class Lowerer {
   Module& M;
   LLVMContext& C;
   IRBuilder<> Builder;
@@ -39,8 +39,8 @@ struct Lowerer {
 
   PointerType* AnyResumeFnPtrTy;
 
-  Lowerer(Function &F)
-      : M(*F.getParent()), C(F.getContext()), Builder(C),
+  Lowerer(Module &M)
+      : M(M), C(M.getContext()), Builder(C),
         Int8Ty(Type::getInt8Ty(C)), Int8PtrTy(Int8Ty->getPointerTo()),
         AnyResumeFnPtrTy(FunctionType::get(Type::getVoidTy(C), Int8PtrTy,
                                            /*isVarArg=*/false)
@@ -49,7 +49,10 @@ struct Lowerer {
   void replaceCoroPromise(IntrinsicInst *Intrin, bool from = false);
   void lowerResumeOrDestroy(IntrinsicInst* II, unsigned Index);
   void lowerCoroDone(IntrinsicInst* II);
-  void canonicalizeCoroSize(IntrinsicInst* II);
+public:
+  ~Lowerer(){}
+  static std::unique_ptr<Lowerer> createIfNeeded(Module& M);
+  bool lowerEarlyIntrinsics(Function& F);
 };
 
 void Lowerer::replaceCoroPromise(IntrinsicInst *Intrin, bool from) {
@@ -127,53 +130,45 @@ void Lowerer::lowerCoroDone(IntrinsicInst* II) {
   II->eraseFromParent();
 }
 
-void Lowerer::canonicalizeCoroSize(IntrinsicInst* II) {
-  Value* Arg = II->getArgOperand(0);
-  if (isa<ConstantPointerNull>(Arg))
-    return;
-  II->setArgOperand(0, ConstantPointerNull::get(Int8PtrTy));
-  if (Arg->user_empty())
-    cast<Instruction>(Arg)->eraseFromParent();
-}
-
 // TODO: handle invoke coro.resume and coro.destroy
-bool lowerEarlyIntrinsics(Function& F) {
-  Lowerer L(F);
+bool Lowerer::lowerEarlyIntrinsics(Function& F) {
   bool changed = false;
   for (auto IB = inst_begin(F), IE = inst_end(F); IB != IE;) 
     if (auto II = dyn_cast<IntrinsicInst>(&*IB++)) {
       switch (II->getIntrinsicID()) {
       default:
         continue;
-      case Intrinsic::coro_param:
-        // TODO: add this to Intrinsics.td instead
-        for (int i = 1; i <= 2; ++i) {
-          II->addAttribute(i, Attribute::NoCapture);
-          II->addAttribute(i, Attribute::ReadNone);
-        }
-        break;
-      case Intrinsic::coro_size:
-        L.canonicalizeCoroSize(II);
-        break;
       case Intrinsic::coro_resume:
-        L.lowerResumeOrDestroy(II, 0);
+        lowerResumeOrDestroy(II, 0);
         break;
       case Intrinsic::coro_destroy:
-        L.lowerResumeOrDestroy(II, 1);
+        lowerResumeOrDestroy(II, 1);
         break;
       case Intrinsic::coro_done:
-        L.lowerCoroDone(II);
+        lowerCoroDone(II);
         break;
       case Intrinsic::coro_promise:
-        L.replaceCoroPromise(II);
+        replaceCoroPromise(II);
         break;
       case Intrinsic::coro_from_promise:
-        L.replaceCoroPromise(II, /*from=*/true);
+        replaceCoroPromise(II, /*from=*/true);
         break;
       }
       changed = true;
     }
   return changed;
+}
+
+std::unique_ptr<Lowerer> Lowerer::createIfNeeded(Module& M) {
+  if (M.getNamedValue(CoroBeginInst::getIntrinsicName()) ||
+    M.getNamedValue(CoroResumeInst::getIntrinsicName()) ||
+    M.getNamedValue(CoroDestroyInst::getIntrinsicName()) ||
+    M.getNamedValue(CoroDoneInst::getIntrinsicName()) ||
+    M.getNamedValue(CoroPromiseInst::getIntrinsicName()) ||
+    M.getNamedValue(CoroFromPromiseInst::getIntrinsicName()))
+    return std::unique_ptr<Lowerer>(new Lowerer(M));
+
+  return{};
 }
 
 //===----------------------------------------------------------------------===//
@@ -185,7 +180,19 @@ struct CoroEarly : public FunctionPass {
   static char ID; // Pass identification, replacement for typeid
   CoroEarly() : FunctionPass(ID) {}
 
-  bool runOnFunction(Function &F) override { return lowerEarlyIntrinsics(F); }
+  std::unique_ptr<Lowerer> L;
+
+  bool doInitialization(Module& M) override {
+    L = Lowerer::createIfNeeded(M);
+    return false;
+  }
+
+  bool runOnFunction(Function &F) override { 
+    if (!L)
+      return false;
+
+    return L->lowerEarlyIntrinsics(F); 
+  }
 };
 }
 
