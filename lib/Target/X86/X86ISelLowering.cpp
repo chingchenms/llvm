@@ -187,7 +187,7 @@ X86TargetLowering::X86TargetLowering(const X86TargetMachine &TM,
   setOperationAction(ISD::SINT_TO_FP       , MVT::i8   , Promote);
 
   if (!Subtarget.useSoftFloat()) {
-    // SSE has no i16 to fp conversion, only i32
+    // SSE has no i16 to fp conversion, only i32.
     if (X86ScalarSSEf32) {
       setOperationAction(ISD::SINT_TO_FP     , MVT::i16  , Promote);
       // f32 and f64 cases are Legal, f80 case is not
@@ -3804,6 +3804,7 @@ static bool isTargetShuffle(unsigned Opcode) {
   case X86ISD::MOVSD:
   case X86ISD::UNPCKL:
   case X86ISD::UNPCKH:
+  case X86ISD::VBROADCAST:
   case X86ISD::VPERMILPI:
   case X86ISD::VPERMILPV:
   case X86ISD::VPERM2X128:
@@ -4920,6 +4921,15 @@ static bool getTargetShuffleMask(SDNode *N, MVT VT, bool AllowSentinelZero,
     DecodeZeroMoveLowMask(VT, Mask);
     IsUnary = true;
     break;
+  case X86ISD::VBROADCAST: {
+    // We only decode broadcasts of same-sized vectors at the moment.
+    if (N->getOperand(0).getValueType() == VT) {
+      DecodeVectorBroadcast(VT, Mask);
+      IsUnary = true;
+      break;
+    }
+    return false;
+  }
   case X86ISD::VPERMILPV: {
     IsUnary = true;
     SDValue MaskNode = N->getOperand(1);
@@ -8803,9 +8813,9 @@ static SDValue lowerVectorShuffleAsPermuteAndUnpack(const SDLoc &DL, MVT VT,
 
   bool UnpackLo = NumLoInputs >= NumHiInputs;
 
-  auto TryUnpack = [&](MVT UnpackVT, int Scale) {
-    SmallVector<int, 16> V1Mask(Mask.size(), -1);
-    SmallVector<int, 16> V2Mask(Mask.size(), -1);
+  auto TryUnpack = [&](int ScalarSize, int Scale) {
+    SmallVector<int, 16> V1Mask((unsigned)Size, -1);
+    SmallVector<int, 16> V2Mask((unsigned)Size, -1);
 
     for (int i = 0; i < Size; ++i) {
       if (Mask[i] < 0)
@@ -8837,6 +8847,7 @@ static SDValue lowerVectorShuffleAsPermuteAndUnpack(const SDLoc &DL, MVT VT,
     V2 = DAG.getVectorShuffle(VT, DL, V2, DAG.getUNDEF(VT), V2Mask);
 
     // Cast the inputs to the type we will use to unpack them.
+    MVT UnpackVT = MVT::getVectorVT(MVT::getIntegerVT(ScalarSize), Size / Scale);
     V1 = DAG.getBitcast(UnpackVT, V1);
     V2 = DAG.getBitcast(UnpackVT, V2);
 
@@ -8848,15 +8859,10 @@ static SDValue lowerVectorShuffleAsPermuteAndUnpack(const SDLoc &DL, MVT VT,
 
   // We try each unpack from the largest to the smallest to try and find one
   // that fits this mask.
-  int OrigNumElements = VT.getVectorNumElements();
   int OrigScalarSize = VT.getScalarSizeInBits();
-  for (int ScalarSize = 64; ScalarSize >= OrigScalarSize; ScalarSize /= 2) {
-    int Scale = ScalarSize / OrigScalarSize;
-    int NumElements = OrigNumElements / Scale;
-    MVT UnpackVT = MVT::getVectorVT(MVT::getIntegerVT(ScalarSize), NumElements);
-    if (SDValue Unpack = TryUnpack(UnpackVT, Scale))
+  for (int ScalarSize = 64; ScalarSize >= OrigScalarSize; ScalarSize /= 2)
+    if (SDValue Unpack = TryUnpack(ScalarSize, ScalarSize / OrigScalarSize))
       return Unpack;
-  }
 
   // If none of the unpack-rooted lowerings worked (or were profitable) try an
   // initial unpack.
@@ -9993,6 +9999,7 @@ static SDValue lowerV8I16VectorShuffle(const SDLoc &DL, ArrayRef<int> Mask,
           lowerVectorShuffleAsBitBlend(DL, MVT::v8i16, V1, V2, Mask, DAG))
     return BitBlend;
 
+  // Try to lower by permuting the inputs into an unpack instruction.
   if (SDValue Unpack = lowerVectorShuffleAsPermuteAndUnpack(DL, MVT::v8i16, V1,
                                                             V2, Mask, DAG))
     return Unpack;
@@ -15003,9 +15010,32 @@ unsigned X86TargetLowering::combineRepeatedFPDivisors() const {
   return 2;
 }
 
+/// Create a BT (Bit Test) node - Test bit \p BitNo in \p Src and set condition
+/// according to equal/not-equal condition code \p CC.
+static SDValue getBitTestCondition(SDValue Src, SDValue BitNo, ISD::CondCode CC,
+                                   const SDLoc &dl, SelectionDAG &DAG) {
+  // If Src is i8, promote it to i32 with any_extend.  There is no i8 BT
+  // instruction.  Since the shift amount is in-range-or-undefined, we know
+  // that doing a bittest on the i32 value is ok.  We extend to i32 because
+  // the encoding for the i16 version is larger than the i32 version.
+  // Also promote i16 to i32 for performance / code size reason.
+  if (Src.getValueType() == MVT::i8 || Src.getValueType() == MVT::i16)
+    Src = DAG.getNode(ISD::ANY_EXTEND, dl, MVT::i32, Src);
+
+  // If the operand types disagree, extend the shift amount to match.  Since
+  // BT ignores high bits (like shifts) we can use anyextend.
+  if (Src.getValueType() != BitNo.getValueType())
+    BitNo = DAG.getNode(ISD::ANY_EXTEND, dl, Src.getValueType(), BitNo);
+
+  SDValue BT = DAG.getNode(X86ISD::BT, dl, MVT::i32, Src, BitNo);
+  X86::CondCode Cond = CC == ISD::SETEQ ? X86::COND_AE : X86::COND_B;
+  return DAG.getNode(X86ISD::SETCC, dl, MVT::i8,
+                     DAG.getConstant(Cond, dl, MVT::i8), BT);
+}
+
 /// Result of 'and' is compared against zero. Change to a BT node if possible.
-SDValue X86TargetLowering::LowerToBT(SDValue And, ISD::CondCode CC,
-                                     const SDLoc &dl, SelectionDAG &DAG) const {
+static SDValue LowerAndToBT(SDValue And, ISD::CondCode CC,
+                            const SDLoc &dl, SelectionDAG &DAG) {
   SDValue Op0 = And.getOperand(0);
   SDValue Op1 = And.getOperand(1);
   if (Op0.getOpcode() == ISD::TRUNCATE)
@@ -15048,27 +15078,35 @@ SDValue X86TargetLowering::LowerToBT(SDValue And, ISD::CondCode CC,
     }
   }
 
-  if (LHS.getNode()) {
-    // If LHS is i8, promote it to i32 with any_extend.  There is no i8 BT
-    // instruction.  Since the shift amount is in-range-or-undefined, we know
-    // that doing a bittest on the i32 value is ok.  We extend to i32 because
-    // the encoding for the i16 version is larger than the i32 version.
-    // Also promote i16 to i32 for performance / code size reason.
-    if (LHS.getValueType() == MVT::i8 ||
-        LHS.getValueType() == MVT::i16)
-      LHS = DAG.getNode(ISD::ANY_EXTEND, dl, MVT::i32, LHS);
+  if (LHS.getNode())
+    return getBitTestCondition(LHS, RHS, CC, dl, DAG);
 
-    // If the operand types disagree, extend the shift amount to match.  Since
-    // BT ignores high bits (like shifts) we can use anyextend.
-    if (LHS.getValueType() != RHS.getValueType())
-      RHS = DAG.getNode(ISD::ANY_EXTEND, dl, LHS.getValueType(), RHS);
+  return SDValue();
+}
 
-    SDValue BT = DAG.getNode(X86ISD::BT, dl, MVT::i32, LHS, RHS);
-    X86::CondCode Cond = CC == ISD::SETEQ ? X86::COND_AE : X86::COND_B;
-    return DAG.getNode(X86ISD::SETCC, dl, MVT::i8,
-                       DAG.getConstant(Cond, dl, MVT::i8), BT);
-  }
+// Convert (truncate (srl X, N) to i1) to (bt X, N)
+static SDValue LowerTruncateToBT(SDValue Op, ISD::CondCode CC,
+                                 const SDLoc &dl, SelectionDAG &DAG) {
 
+  assert(Op.getOpcode() == ISD::TRUNCATE && Op.getValueType() == MVT::i1 &&
+         "Expected TRUNCATE to i1 node");
+
+  if (Op.getOperand(0).getOpcode() != ISD::SRL)
+    return SDValue();
+
+  SDValue ShiftRight = Op.getOperand(0);
+  return getBitTestCondition(ShiftRight.getOperand(0), ShiftRight.getOperand(1),
+                             CC, dl, DAG);
+}
+
+/// Result of 'and' or 'trunc to i1' is compared against zero.
+/// Change to a BT node if possible.
+SDValue X86TargetLowering::LowerToBT(SDValue Op, ISD::CondCode CC,
+                                     const SDLoc &dl, SelectionDAG &DAG) const {
+  if (Op.getOpcode() == ISD::AND)
+    return LowerAndToBT(Op, CC, dl, DAG);
+  if (Op.getOpcode() == ISD::TRUNCATE && Op.getValueType() == MVT::i1)
+    return LowerTruncateToBT(Op, CC, dl, DAG);
   return SDValue();
 }
 
@@ -15599,8 +15637,8 @@ SDValue X86TargetLowering::LowerSETCC(SDValue Op, SelectionDAG &DAG) const {
   // Lower (X & (1 << N)) == 0 to BT(X, N).
   // Lower ((X >>u N) & 1) != 0 to BT(X, N).
   // Lower ((X >>s N) & 1) != 0 to BT(X, N).
-  if (Op0.getOpcode() == ISD::AND && Op0.hasOneUse() &&
-      isNullConstant(Op1) &&
+  // Lower (trunc (X >> N) to i1) to BT(X, N).
+  if (Op0.hasOneUse() && isNullConstant(Op1) &&
       (CC == ISD::SETEQ || CC == ISD::SETNE)) {
     if (SDValue NewSetCC = LowerToBT(Op0, CC, dl, DAG)) {
       if (VT == MVT::i1) {
@@ -16791,9 +16829,8 @@ SDValue X86TargetLowering::LowerBRCOND(SDValue Op, SelectionDAG &DAG) const {
     // Look pass the truncate if the high bits are known zero.
     Cond = getCondAfterTruncWithZeroHighBitsInput(Cond, DAG);
 
-    // We know the result of AND is compared against zero. Try to match
-    // it to BT.
-    if (Cond.getOpcode() == ISD::AND && Cond.hasOneUse()) {
+    // We know the result is compared against zero. Try to match it to BT.
+    if (Cond.hasOneUse()) {
       if (SDValue NewSetCC = LowerToBT(Cond, ISD::SETNE, dl, DAG)) {
         CC = NewSetCC.getOperand(0);
         Cond = NewSetCC.getOperand(1);
