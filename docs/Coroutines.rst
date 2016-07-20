@@ -10,18 +10,6 @@ Coroutines in LLVM
   This is a work in progress. Compatibility across LLVM releases is not 
   guaranteed.
 
-.. Status
-.. ======
-
-.. This document describes a set of experimental extensions to LLVM. Use
-.. with caution.  Because the intrinsics have experimental status,
-.. compatibility across LLVM releases is not guaranteed. These intrinsics
-.. are added to support C++ Coroutines (P0057_), though they are general enough 
-.. to be used to implement coroutines in other languages as well.
-.. as to experiment with C++ coroutine alternatives other than P0057.
-
-.. _P0057: http://www.open-std.org/jtc1/sc22/wg21/docs/papers/2016/p0057r4.pdf
-
 Introduction
 ============
 
