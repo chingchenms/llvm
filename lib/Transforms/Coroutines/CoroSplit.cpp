@@ -106,7 +106,21 @@ static BasicBlock* createResumeEntryBlock(Function& F, CoroutineShape& Shape) {
   return NewEntry;
 }
 
-static void postSplitCleanup(Function &F) { removeUnreachableBlocks(F); }
+static void postSplitCleanup(Function &F) { 
+  removeUnreachableBlocks(F); 
+  llvm::legacy::FunctionPassManager FPM(F.getParent());
+
+  FPM.add(createVerifierPass());
+  FPM.add(createSCCPPass());
+  FPM.add(createCFGSimplificationPass());
+  FPM.add(createEarlyCSEPass());
+  FPM.add(createInstructionCombiningPass());
+  FPM.add(createCFGSimplificationPass());
+
+  FPM.doInitialization();
+  FPM.run(F);
+  FPM.doFinalization();
+}
 
 template <typename T>
 ArrayRef<Instruction *>
@@ -437,7 +451,7 @@ static void splitCoroutine(Function &F, CallGraph &CG, CallGraphSCC &SCC) {
   buildCoroutineFrame(F, Shape);
 
   // If there is no suspend points, no split required, just remove
-  // the allocation and deallocation blocks, they are not needed
+  // the allocation and deallocation blocks, they are not needed.
   if (Shape.CoroSuspends.empty()) {
     handleNoSuspendCoroutine(Shape.CoroBegin, Shape.FrameTy);
     postSplitCleanup(F);

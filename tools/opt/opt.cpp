@@ -337,8 +337,6 @@ void initializePollyPasses(llvm::PassRegistry &Registry);
 }
 #endif
 
-bool fCoroutines = true;
-
 //===----------------------------------------------------------------------===//
 // main for opt
 //
@@ -382,10 +380,6 @@ int main(int argc, char **argv) {
   initializeGlobalMergePass(Registry);
   initializeInterleavedAccessPass(Registry);
   initializeUnreachableBlockElimLegacyPassPass(Registry);
-
-  if (Coroutines) {
-    initializeCoroutines(Registry);
-  }
 
 #ifdef LINK_POLLY_INTO_TOOLS
   polly::initializePollyPasses(Registry);
