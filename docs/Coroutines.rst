@@ -117,7 +117,7 @@ The `entry` block establishes the coroutine frame. The `coro.size`_ intrinsic is
 lowered to a constant representing the size required for the coroutine frame. 
 The `coro.begin`_ intrinsic initializes the coroutine frame and returns the 
 coroutine handle. The first parameter of `coro.begin` is given a block of memory 
-to be used if the coroutine frame need to be allocated dynamically.
+to be used if the coroutine frame needs to be allocated dynamically.
 
 The `cleanup` block destroys the coroutine frame. The `coro.free`_ intrinsic, 
 given the coroutine handle, returns a pointer of the memory block to be freed or
@@ -127,7 +127,7 @@ call to the `coro.destroy`_ intrinsic.
 
 The `suspend` block contains code to be executed when coroutine runs to 
 completion or suspended. The `coro.end`_ intrinsic marks the point where 
-coroutine needs to return control back to the caller if it is not an initial 
+a coroutine needs to return control back to the caller if it is not an initial 
 invocation of the coroutine. 
 
 The `loop` blocks represents the body of the coroutine. The `coro.suspend`_ 
@@ -721,15 +721,15 @@ The first argument is a pointer to a block of memory in which coroutine frame
 may use if memory for the coroutine frame needs to be allocated dynamically. 
 
 The second argument provides information on the alignment of the memory returned 
-by the allocation function and given to `coro.begin` by the first parameter. If 
+by the allocation function and given to `coro.begin` by the first argument. If 
 this argument is 0, the memory is assumed to be aligned to 2 * sizeof(i8*).
 This argument only accepts constants.
 
 The third argument, if not `null`, designates a particular alloca instruction to
 be a `coroutine promise`_.
 
-The fourth argument is `null` before coroutine is split, and later replaced to
-point to a private global constant array containing function pointers to 
+The fourth argument is `null` before coroutine is split, and later is replaced 
+to point to a private global constant array containing function pointers to 
 outlined resume and destroy parts of the coroutine.
 
 Semantics:
@@ -756,7 +756,7 @@ Overview:
 
 The '``llvm.coro.free``' intrinsic returns a pointer to a block of memory where 
 coroutine frame is stored or `null` if this instance of a coroutine did not use
-dynamically allocated memory.
+dynamically allocated memory for its coroutine frame.
 
 Arguments:
 """"""""""
@@ -771,8 +771,8 @@ Example (custom deallocation function):
 
   cleanup:
     %mem = call i8* @llvm.coro.free(i8* %frame)
-    %tobool = icmp ne i8* %mem, null
-    br i1 %tobool, label %if.then, label %if.end
+    %mem_not_null = icmp ne i8* %mem, null
+    br i1 %mem_not_null, label %if.then, label %if.end
   if.then:
     call void @CustomFree(i8* %mem)
     br label %if.end
@@ -882,7 +882,7 @@ the coroutine should end and control returns back to the caller.
 Arguments:
 """"""""""
 
-First argument should refer to the coroutine handle of the enclosing coroutine.
+The first argument should refer to the coroutine handle of the enclosing coroutine.
 
 The second argument should be `true` if this coro.end is in the block that is 
 part of the unwind sequence leaving the coroutine body due to exception prior to
@@ -989,7 +989,7 @@ for resumption).
 Arguments:
 """"""""""
 
-First argument points to a coroutine handle of the enclosing coroutine.
+The first argument points to a coroutine handle of the enclosing coroutine.
 
 Semantics:
 """"""""""
