@@ -495,10 +495,10 @@ Such a suspend point has two properties:
   undefined behavior. The only possible action for a coroutine at a final
   suspend point is destroying it via `coro.destroy`_ intrinsic.
 
-From the user perspective, the final suspend point represents an idea of a coroutine
-reaching the end. From the compiler perspective, it is an optimization opportunity
-for reducing number of resume points (and therefore switch cases) in the resume
-function.
+From the user perspective, the final suspend point represents an idea of a 
+coroutine reaching the end. From the compiler perspective, it is an optimization
+opportunity for reducing number of resume points (and therefore switch cases) in
+the resume function.
 
 The following is an example of a function that keeps resuming the coroutine
 until the final suspend point is reached after which point the coroutine is 
@@ -517,6 +517,41 @@ destroyed:
   end:
     call void @llvm.coro.destroy(i8* %hdl)
     ret i32 0
+  }
+
+Usually, final suspend point is a frontend injected suspend point that does not
+correspond to any explicitly authored suspend point of the high level language.
+For example, for a Python generator that has only one suspend point:
+
+.. code-block:: python
+
+  def coroutine(n):
+    for i in range(n):
+      yield i
+
+Python frontend would inject two more suspend points, so that the actual code
+looks like this:
+
+.. code-block:: C
+
+  void* coroutine(int n) {
+    int current_value; 
+    <designate current_value to be coroutine promise>
+    <SUSPEND> // injected suspend point, so that the coroutine starts suspended
+    for (int i = 0; i < n; ++i) {
+      current_value = i; <SUSPEND>; // corresponds to "yield i"
+    }
+    <SUSPEND final=true> // injected final suspend point
+  }
+
+and python iterator `__next__` would look like:
+
+.. code-block:: C++
+
+  int __next__(void* hdl) {
+    coro.resume(hdl);
+    if (coro.done(hdl)) throw StopIteration();
+    return *(int*)coro.promise(hdl);
   }
 
 Intrinsics
