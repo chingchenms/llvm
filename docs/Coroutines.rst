@@ -840,10 +840,12 @@ None
 Semantics:
 """"""""""
 
-If the coroutine is eligible for heap elision , this intrinsic is lowered to an 
+If the coroutine is eligible for heap elision, this intrinsic is lowered to an 
 alloca storing the coroutine frame. Otherwise, it is lowered to constant `null`.
 This intrinsic only needs to be used if a custom allocation function is used
-(i.e. a function not recognized by LLVM as a memory allocation function).
+(i.e. a function not recognized by LLVM as a memory allocation function) and the
+language rules allow for custom allocation / deallocation to be elided when not
+needed.
 
 Example:
 """"""""
@@ -1044,6 +1046,89 @@ to the coroutine:
     switch i8 %suspend1, label %suspend [i8 0, label %resume1
                                          i8 1, label %cleanup]
 
+.. _coro.param:
+
+'llvm.coro.param' Intrinsic
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+::
+
+  declare i1 @llvm.coro.param(i8* original, i8* copy)
+
+Overview:
+"""""""""
+
+The '``llvm.coro.param``' is used by the frontend to mark up the code used to
+construct and destruct copies of the parameters. If the optimizer discovers that
+a particular parameter copy is not used after any suspends, it can remove the
+construction and destruction of the copy by replacing corresponding coro.param
+with `i1 false` and replacing any use of the `copy` with the `original`.
+
+Arguments:
+""""""""""
+
+The first argument points to an `alloca` storing the value of a parameter to a 
+coroutine. 
+
+The second argument points to an `alloca` storing the value of the copy of that
+parameter.
+
+Semantics:
+""""""""""
+
+The optimizer is free to always replace this intrinsic with `i1 true`.
+
+The optimizer is also allowed to replace it with `i1 false` provided that the 
+parameter copy is only used prior to control flow reaching any of the suspend
+points. The code that would be DCE'd if the `coro.param` is replaced with 
+`i1 false` is not considered to be a use of the parameter copy.
+
+The frontend can emit this intrinsic if its language rules allow for this 
+optimization.
+
+Example:
+""""""""
+Consider the following example. A coroutine takes two parameters `a` and `b`
+that has a destructor and a move constructor.
+
+.. code-block:: C++
+
+  struct A { ~A(); A(A&&); bool foo(); void bar(); };
+
+  task<int> f(A a, A b) {
+    if (a.foo())
+      return 42;
+
+    a.bar();
+    co_await read_async(); // introduces suspend point
+    b.bar();
+  }
+
+Note that, uses of `b` is used after a suspend point and thus must be copied
+into a coroutine frame, whereas `a` does not have to, since it never used 
+after suspend.
+
+A frontend can create parameter copies for `a` and `b` as follows:
+
+.. code-block:: C++
+
+  task<int> f(A a', A b') {
+    a = alloca A;
+    b = alloca A;
+    // move parameters to its copies
+    if (coro.param(a', a)) A::A(a, A&& a');
+    if (coro.param(b', b)) A::A(b, A&& b');
+    ...
+    // destroy parameters copies
+    if (coro.param(a', a)) A::~A(a);
+    if (coro.param(b', b)) A::~A(b);
+  }
+
+The optimizer can replace coro.param(a',a) with `i1 false` and replace all uses
+of `a` with `a'`, since it is not used after suspend.
+
+The optimizer must replace coro.param(b', b) with `i1 true`, since `b` is used
+after suspend and therefore, it has to reside in the coroutine frame.
+
 Coroutine Transformation Passes
 ===============================
 CoroEarly
@@ -1074,10 +1159,21 @@ CoroCleanup
 This pass runs late to lower all coroutine related intrinsics not replaced by
 earlier passes.
 
+Upstreaming sequence (rough plan)
+=================================
+#. Add documentation. <= we are here
+#. Add coroutine intrinsics.
+#. Add empty coroutine passes.
+#. Add coroutine devirtualization + tests.
+#. Add CGSCC restart trigger + tests.
+#. Add coroutine heap elision + tests.
+#. Add custom allocation heap elision + tests.
+#. Add coroutine splitting logic + tests.
+#. Add simple coroutine frame builder + tests.
+#. Add the rest of the logic + tests. (Maybe split further as needed).
+
 Areas Requiring Attention
 =========================
-#. Debug information is not supported at the moment.
-
 #. A coroutine frame is bigger than it could be. Adding stack packing and stack 
    coloring like optimization on the coroutine frame will result in tighter
    coroutine frames.
@@ -1087,13 +1183,13 @@ Areas Requiring Attention
    allocas.
 
 #. The CoroElide optimization pass relies on coroutine ramp function to be
-   inlined. It would be beneficial to split the ramp function further to increase 
-   the chance that it will get inlined into its caller.
+   inlined. It would be beneficial to split the ramp function further to 
+   increase the chance that it will get inlined into its caller.
 
 #. Design a convention that would make it possible to apply coroutine heap
    elision optimization across ABI boundaries.
 
-#. Cannot handle coroutines with `inalloca` parameters (used in x86 on Windows)
+#. Cannot handle coroutines with `inalloca` parameters (used in x86 on Windows).
 
 #. Alignment is ignored by coro.begin and coro.free intrinsics.
 
