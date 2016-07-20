@@ -20,11 +20,6 @@ When a suspend point is reached, the execution of a coroutine is suspended and
 control is returned back to its caller. A suspended coroutine can be resumed 
 to continue execution from the last suspend point or it can be destroyed. 
 
-..  In the following example function `f` returns
-    a handle to a suspended coroutine (**coroutine handle**) that can be passed 
-    to `coro.resume`_ and `coro.destroy`_ intrinsics to resume and destroy the 
-    coroutine respectively.
-
 In the following example, we call function `f` (which may or may not be a 
 coroutine itself) that returns a handle to a suspended coroutine 
 (**coroutine handle**) that is used by `main` to resume the coroutine twice and
@@ -69,11 +64,6 @@ coroutine:
    implementation as it matches closely the mental model and results in 
    reasonably nice code.
 
-..
-  This is not the only way of lowering the coroutine intrinsics. Another 
-  alternative is to split the coroutine ever further into an individual functions
-  for every suspend point.
-
 Coroutines by Example
 =====================
 
@@ -103,7 +93,7 @@ The LLVM IR for this coroutine looks like this:
 
   define i8* @f(i32 %n) {
   entry:
-    %size = call i32 @llvm.coro.size.i32(i8* null)
+    %size = call i32 @llvm.coro.size.i32()
     %alloc = call i8* @malloc(i32 %size)
     %hdl = call noalias i8* @llvm.coro.begin(i8* %alloc, i32 0, i8* null, i8* null)
     br label %loop
@@ -215,8 +205,6 @@ Whereas function `f.destroy` will contain the cleanup code for the coroutine:
     ret void
   }
 
-.. This transformation is performed by `coro-split` LLVM pass.
-
 Avoiding Heap Allocations
 -------------------------
  
@@ -244,7 +232,7 @@ when dynamic allocation is required, and non-null otherwise:
     %need.dyn.alloc = icmp ne i8* %elide, null
     br i1 %need.dyn.alloc, label %coro.begin, label %dyn.alloc
   dyn.alloc:
-    %size = call i32 @llvm.coro.size.i32(i8* null)
+    %size = call i32 @llvm.coro.size.i32()
     %alloc = call i8* @CustomAlloc(i32 %size)
     br label %coro.begin
   coro.begin:
@@ -320,8 +308,6 @@ In this case, the coroutine frame would include a suspend index that will
 indicate at which suspend point the coroutine needs to resume. The resume 
 function will use an index to jump to an appropriate basic block and will look 
 as follows:
-
-.. start with a switch as follows:
 
 .. code-block:: llvm
 
@@ -433,7 +419,7 @@ store the current value produced by a coroutine.
   entry:
     %promise = alloca i32
     %pv = bitcast i32* %promise to i8*
-    %size = call i32 @llvm.coro.size.i32(i8* null)
+    %size = call i32 @llvm.coro.size.i32()
     %alloc = call i8* @malloc(i32 %size)
     %hdl = call noalias i8* @llvm.coro.begin(i8* %alloc, i32 0, i8* %pv, i8* null)
     br label %loop
@@ -694,8 +680,8 @@ the coroutine structure. They should not be used outside of a coroutine.
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 ::
 
-    declare i32 @llvm.coro.size(i8*)
-    declare i64 @llvm.coro.size(i8*)
+    declare i32 @llvm.coro.size()
+    declare i64 @llvm.coro.size()
 
 Overview:
 """""""""
@@ -706,9 +692,7 @@ required to store a `coroutine frame`_.
 Arguments:
 """"""""""
 
-Before the coroutine frame is built, the argument must be `null`. After the
-coroutine frame is built, the argument is replaced with a pointer to a global
-private constant of the coroutine frame type.
+None
 
 Semantics:
 """"""""""
