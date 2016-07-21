@@ -651,7 +651,7 @@ or on a coroutine that is not suspended leads to undefined behavior.
 
 ::
 
-      declare i8* @llvm.coro.promise(i8* <handle>, i32 <alignment>, i1 <from>)
+      declare i8* @llvm.coro.promise(i8* <ptr>, i32 <alignment>, i1 <from>)
 
 Overview:
 """""""""
