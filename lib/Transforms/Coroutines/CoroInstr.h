@@ -186,24 +186,19 @@ namespace llvm {
 
   /// This represents the llvm.coro.done instruction.
   class LLVM_LIBRARY_VISIBILITY CoroPromiseInst : public IntrinsicInst {
+    enum { kFrame, kAlign, kFrom };
   public:
+    bool isFromPromise() const {
+      return cast<Constant>(getArgOperand(kFrom))->isOneValue();
+    }
+    int64_t getAlignment() const {
+      return cast<ConstantInt>(getArgOperand(kAlign))->getSExtValue();
+    }
+
     static StringRef getIntrinsicName() { return "llvm.coro.promise"; }
     // Methods to support type inquiry through isa, cast, and dyn_cast:
     static inline bool classof(const IntrinsicInst *I) {
       return I->getIntrinsicID() == Intrinsic::coro_promise;
-    }
-    static inline bool classof(const Value *V) {
-      return isa<IntrinsicInst>(V) && classof(cast<IntrinsicInst>(V));
-    }
-  };
-
-  /// This represents the llvm.coro.done instruction.
-  class LLVM_LIBRARY_VISIBILITY CoroFromPromiseInst : public IntrinsicInst {
-  public:
-    static StringRef getIntrinsicName() { return "llvm.coro.from.promise"; }
-    // Methods to support type inquiry through isa, cast, and dyn_cast:
-    static inline bool classof(const IntrinsicInst *I) {
-      return I->getIntrinsicID() == Intrinsic::coro_from_promise;
     }
     static inline bool classof(const Value *V) {
       return isa<IntrinsicInst>(V) && classof(cast<IntrinsicInst>(V));

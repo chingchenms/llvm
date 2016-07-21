@@ -23,7 +23,8 @@
 #include "llvm/ADT/StringSwitch.h"
 #include "llvm/IR/InstIterator.h"
 #include "llvm/IR/IRBuilder.h"
-#include <llvm/Transforms/Utils/BasicBlockUtils.h>
+#include "llvm/Transforms/Utils/BasicBlockUtils.h"
+#include "llvm/Support/MathExtras.h"
 
 using namespace llvm;
 
@@ -46,7 +47,7 @@ class Lowerer {
                                            /*isVarArg=*/false)
                              ->getPointerTo()) {}
 
-  void replaceCoroPromise(IntrinsicInst *Intrin, bool from = false);
+  void replaceCoroPromise(CoroPromiseInst *Intrin);
   void lowerResumeOrDestroy(IntrinsicInst* II, unsigned Index);
   void lowerCoroDone(IntrinsicInst* II);
 public:
@@ -55,31 +56,22 @@ public:
   bool lowerEarlyIntrinsics(Function& F);
 };
 
-void Lowerer::replaceCoroPromise(IntrinsicInst *Intrin, bool from) {
+void Lowerer::replaceCoroPromise(CoroPromiseInst *Intrin) {
   Value *Operand = Intrin->getArgOperand(0);
-  auto PromisePtr = cast<PointerType>(
-    from ? Operand->getType() : Intrin->getFunctionType()->getReturnType());
-  auto PromiseType = PromisePtr->getElementType();
+  int64_t Alignement = Intrin->getAlignment();
 
   // FIXME: this should be queried from FrameBuilding layer, not here
   auto SampleStruct = StructType::get(C, 
-      {AnyResumeFnPtrTy, AnyResumeFnPtrTy, Int8Ty, PromiseType});
+      {AnyResumeFnPtrTy, AnyResumeFnPtrTy, Int8Ty});
   const DataLayout &DL = M.getDataLayout();
-  const int64_t Offset = DL.getStructLayout(SampleStruct)->getElementOffset(3);
-
-  Value* Replacement = nullptr;
+  int64_t Offset = alignTo(
+      DL.getStructLayout(SampleStruct)->getElementOffset(2) + 1, Alignement);
+  if (Intrin->isFromPromise())
+    Offset = -Offset;
 
   Builder.SetInsertPoint(Intrin);
-  if (from) {
-    auto BCI = Builder.CreateBitCast(Operand, Int8PtrTy);
-    auto Gep = Builder.CreateConstInBoundsGEP1_32(Int8Ty, BCI, -Offset);
-    Replacement = Gep;
-  }
-  else {
-    auto Gep = Builder.CreateConstInBoundsGEP1_32(Int8Ty, Operand, Offset);
-    auto BCI = Builder.CreateBitCast(Gep, PromisePtr);
-    Replacement = BCI;
-  }
+  Value *Replacement =
+      Builder.CreateConstInBoundsGEP1_32(Int8Ty, Operand, Offset);
 
   Intrin->replaceAllUsesWith(Replacement);
   Intrin->eraseFromParent();
@@ -142,10 +134,7 @@ bool Lowerer::lowerEarlyIntrinsics(Function& F) {
         lowerCoroDone(II);
         break;
       case Intrinsic::coro_promise:
-        replaceCoroPromise(II);
-        break;
-      case Intrinsic::coro_from_promise:
-        replaceCoroPromise(II, /*from=*/true);
+        replaceCoroPromise(cast<CoroPromiseInst>(II));
         break;
       }
       changed = true;
@@ -158,8 +147,7 @@ std::unique_ptr<Lowerer> Lowerer::createIfNeeded(Module& M) {
     M.getNamedValue(CoroResumeInst::getIntrinsicName()) ||
     M.getNamedValue(CoroDestroyInst::getIntrinsicName()) ||
     M.getNamedValue(CoroDoneInst::getIntrinsicName()) ||
-    M.getNamedValue(CoroPromiseInst::getIntrinsicName()) ||
-    M.getNamedValue(CoroFromPromiseInst::getIntrinsicName()))
+    M.getNamedValue(CoroPromiseInst::getIntrinsicName()) )
     return std::unique_ptr<Lowerer>(new Lowerer(M));
 
   return{};

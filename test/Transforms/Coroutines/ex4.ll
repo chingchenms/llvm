@@ -29,7 +29,8 @@ suspend:
 define i32 @main() {
 entry:
   %hdl = call i8* @f(i32 4)
-  %promise.addr = call i32* @llvm.coro.promise.p0i32(i8* %hdl)
+  %promise.addr.raw = call i8* @llvm.coro.promise(i8* %hdl, i32 4, i1 false)
+  %promise.addr = bitcast i8* %promise.addr.raw to i32*
   %val0 = load i32, i32* %promise.addr
   call void @print(i32 %val0)
   call void @llvm.coro.resume(i8* %hdl)
@@ -47,7 +48,7 @@ entry:
 ; CHECK-NEXT: ret i32 0
 }
 
-declare i32* @llvm.coro.promise.p0i32(i8*)
+declare i8* @llvm.coro.promise(i8*, i32, i1)
 declare i8* @malloc(i32)
 declare void @free(i8*)
 declare void @print(i32)
