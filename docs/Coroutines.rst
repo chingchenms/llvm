@@ -716,7 +716,7 @@ the coroutine structure. They should not be used outside of a coroutine.
 ::
 
     declare i32 @llvm.coro.size.i32()
-    declare i64 @llvm.coro.size.i32()
+    declare i64 @llvm.coro.size.i64()
 
 Overview:
 """""""""
