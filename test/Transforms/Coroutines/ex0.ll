@@ -3,7 +3,7 @@
 
 define i8* @f(i32 %n) {
 entry:
-  %size = call i32 @llvm.coro.size.i32(i8* null)
+  %size = call i32 @llvm.coro.size.i32()
   %alloc = call i8* @malloc(i32 %size)
   %hdl = call i8* @llvm.coro.begin(i8* %alloc, i32 0, i8* null, i8* null)
   br label %loop
@@ -44,7 +44,7 @@ entry:
 
 declare i8* @llvm.coro.alloc()
 declare i8* @llvm.coro.free(i8*)
-declare i32 @llvm.coro.size.i32(i8*)
+declare i32 @llvm.coro.size.i32()
 declare i8  @llvm.coro.suspend(token, i1)
 declare void @llvm.coro.resume(i8*)
 declare void @llvm.coro.destroy(i8*)

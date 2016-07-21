@@ -318,12 +318,11 @@ static Function *createCleanupClone(Function &F, Twine Suffix,
   return CleanupClone;
 }
 
-static void replaceFrameSize(Function* ResumeFn, CoroutineShape& Shape) {
-  LLVMContext& C = ResumeFn->getContext();
-  auto BC = ConstantFolder().CreateBitCast(ResumeFn, Type::getInt8PtrTy(C));
-  for (auto CoroSize : Shape.CoroSizes)
-    CoroSize->setArgOperand(0, BC);
-#if 0
+static void replaceFrameSize(CoroutineShape& Shape) {
+  if (Shape.CoroSizes.empty())
+    return;
+
+  // In the same functon all coro.sizes should have the same result type.
   auto SizeIntrin = Shape.CoroSizes.back();
   Module* M = SizeIntrin->getModule();
   const DataLayout &DL = M->getDataLayout();
@@ -331,7 +330,6 @@ static void replaceFrameSize(Function* ResumeFn, CoroutineShape& Shape) {
   auto SizeConstant = ConstantInt::get(SizeIntrin->getType(), Size);
 
   replaceAndRemove(toArrayRef(Shape.CoroSizes), SizeConstant);
-#endif
 }
 
 static void updateCoroInfo(Function& F, CoroutineShape &Shape,
@@ -471,11 +469,14 @@ static void splitCoroutine(Function &F, CallGraph &CG, CallGraphSCC &SCC) {
   postSplitCleanup(*ResumeClone.Fn);
   postSplitCleanup(*DestroyClone.Fn);
 
+  // TODO: Optimize coroutine frame even more based on the cleaned up
+  // resume and destroy bodies.
+  replaceFrameSize(Shape);
+
   auto CleanupClone =
       createCleanupClone(F, ".cleanup", DestroyClone);
 
   updateCoroInfo(F, Shape, { ResumeClone.Fn, DestroyClone.Fn, CleanupClone });
-  replaceFrameSize(ResumeClone.Fn, Shape);
   CoroUtils::updateCallGraph(
       F, {ResumeClone.Fn, DestroyClone.Fn, CleanupClone}, CG, SCC);
 }

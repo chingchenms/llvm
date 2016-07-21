@@ -1,9 +1,9 @@
 ; Fifth example from Doc/Coroutines.rst (final suspend)
 ; RUN: opt < %s -O2 -S | FileCheck %s
 
-define i8* @f(i32 %n) local_unnamed_addr #0 {
+define i8* @f(i32 %n) {
 entry:
-  %size = call i32 @llvm.coro.size.i32(i8* null)
+  %size = call i32 @llvm.coro.size.i32()
   %alloc = call i8* @malloc(i32 %size)
   %hdl = call noalias i8* @llvm.coro.begin(i8* %alloc, i32 0, i8* null, i8* null)
   br label %while.cond
@@ -39,7 +39,7 @@ declare void @print(i32)
 declare void @llvm.trap()
 declare void @free(i8* nocapture)
 
-declare i32 @llvm.coro.size.i32(i8*)
+declare i32 @llvm.coro.size.i32()
 declare i8* @llvm.coro.begin(i8*, i32, i8*, i8*)
 declare token @llvm.coro.save(i8*)
 declare i8 @llvm.coro.suspend(token, i1)
@@ -47,7 +47,7 @@ declare i8* @llvm.coro.free(i8*)
 declare void @llvm.coro.end(i8*, i1)
 
 ; CHECK-LABEL: @main
-define i32 @main() local_unnamed_addr {
+define i32 @main() {
 entry:
   %hdl = call i8* @f(i32 4)
   br label %while

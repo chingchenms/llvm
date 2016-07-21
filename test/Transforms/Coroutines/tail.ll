@@ -8,7 +8,7 @@
 define i8* @f() {
 entry:
   %i = alloca i32
-  %0 = tail call i32 @llvm.coro.size.i32(i8* null)
+  %0 = tail call i32 @llvm.coro.size.i32()
   %call = tail call i8* @malloc(i32 %0)
   %1 = tail call i8* @llvm.coro.begin(i8* %call, i32 0, i8* null, i8* null)
   br label %for.cond
@@ -41,7 +41,7 @@ coro_Suspend:                                     ; preds = %for.cond, %coro_Cle
 }
 
 declare i8* @malloc(i32)
-declare i32 @llvm.coro.size.i32(i8*)
+declare i32 @llvm.coro.size.i32()
 declare i8* @llvm.coro.begin(i8*, i32, i8*, i8*)
 declare void @print(i32*)
 declare token @llvm.coro.save(i8*)

@@ -32,7 +32,6 @@ entry:
 
 declare i8* @llvm.coro.alloc()
 declare i8* @llvm.coro.free(i8*)
-declare i32 @llvm.coro.size.i32(i8*)
 declare i8  @llvm.coro.suspend(token, i1)
 declare void @llvm.coro.resume(i8*)
 declare void @llvm.coro.destroy(i8*)

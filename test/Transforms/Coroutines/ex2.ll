@@ -7,7 +7,7 @@ entry:
   %need.dyn.alloc = icmp ne i8* %elide, null
   br i1 %need.dyn.alloc, label %coro.begin, label %dyn.alloc
 dyn.alloc:
-  %size = call i32 @llvm.coro.size.i32(i8* null)
+  %size = call i32 @llvm.coro.size.i32()
   %alloc = call i8* @CustomAlloc(i32 %size)
   br label %coro.begin
 coro.begin:
@@ -52,7 +52,7 @@ declare void @CustomFree(i8*)
 declare void @print(i32)
 
 declare i8* @llvm.coro.alloc()
-declare i32 @llvm.coro.size.i32(i8*) #3
+declare i32 @llvm.coro.size.i32()
 declare i8* @llvm.coro.begin(i8*, i32, i8*, i8*)
 declare i8 @llvm.coro.suspend(token, i1)
 declare i8* @llvm.coro.free(i8*)
