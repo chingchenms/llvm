@@ -715,8 +715,8 @@ the coroutine structure. They should not be used outside of a coroutine.
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 ::
 
-    declare i32 @llvm.coro.size()
-    declare i64 @llvm.coro.size()
+    declare i32 @llvm.coro.size.i32()
+    declare i64 @llvm.coro.size.i32()
 
 Overview:
 """""""""
@@ -741,7 +741,7 @@ the coroutine frame.
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 ::
 
-  declare i8* @llvm.coro.begin(i8* %mem, i32 %align, i8* %promise, i8* %fnaddr)
+  declare i8* @llvm.coro.begin(i8* <mem>, i32 <align>, i8* <promise>, i8* <fnaddr>)
 
 Overview:
 """""""""
@@ -784,7 +784,7 @@ Frontend should emit exactly one `coro.begin` intrinsic per coroutine.
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 ::
 
-  declare i8* @llvm.coro.free(i8* %frame)
+  declare i8* @llvm.coro.free(i8* <frame>)
 
 Overview:
 """""""""
@@ -905,7 +905,7 @@ coroutine frame.
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 ::
 
-  declare void @llvm.coro.end(i8* hdl, i1 unwind)
+  declare void @llvm.coro.end(i8* <handle>, i1 <unwind>)
 
 Overview:
 """""""""
@@ -948,7 +948,7 @@ value.
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 ::
 
-  declare i8 @llvm.coro.suspend(token %save, i1 %final)
+  declare i8 @llvm.coro.suspend(token <save>, i1 <final>)
 
 Overview:
 """""""""
@@ -1012,7 +1012,7 @@ unreachable and can perform optimizations that can take advantage of that fact.
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 ::
 
-  declare token @llvm.coro.save(i8* handle)
+  declare token @llvm.coro.save(i8* <handle>)
 
 Overview:
 """""""""
@@ -1059,7 +1059,7 @@ to the coroutine:
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 ::
 
-  declare i1 @llvm.coro.param(i8* original, i8* copy)
+  declare i1 @llvm.coro.param(i8* <original>, i8* <copy>)
 
 Overview:
 """""""""
