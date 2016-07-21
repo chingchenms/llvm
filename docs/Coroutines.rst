@@ -447,7 +447,8 @@ coroutine promise.
   define i32 @main() {
   entry:
     %hdl = call i8* @f(i32 4)
-    %promise.addr = call i32* @llvm.coro.promise.p0i32(i8* %hdl)
+    %promise.addr.raw = call i8* @llvm.coro.promise(i8* %hdl, i32 4, i1 false)
+    %promise.addr = bitcast i8* %promise.addr.raw to i32*
     %val0 = load i32, i32* %promise.addr
     call void @print(i32 %val0)
     call void @llvm.coro.resume(i8* %hdl)
@@ -459,11 +460,6 @@ coroutine promise.
     call void @llvm.coro.destroy(i8* %hdl)
     ret i32 0
   }
-
-There is also an intrinsic `coro.from.promise`_ that performs a reverse
-operation. Given an address of a coroutine promise, it obtains a coroutine handle. 
-This intrinsic is the only mechanism for a user code outside of the coroutine 
-to get access to the coroutine handle.
 
 After example in this section is compiled, result of the compilation will 
 exactly like the result of the very first example:
@@ -551,7 +547,7 @@ and python iterator `__next__` would look like:
   int __next__(void* hdl) {
     coro.resume(hdl);
     if (coro.done(hdl)) throw StopIteration();
-    return *(int*)coro.promise(hdl);
+    return *(int*)coro.promise(hdl, 4, false);
   }
 
 Intrinsics
@@ -655,18 +651,31 @@ or on a coroutine that is not suspended leads to undefined behavior.
 
 ::
 
-      declare <type>* @llvm.coro.promise.p0<type>(i8* <handle>)
+      declare i8* @llvm.coro.promise(i8* <handle>, i32 <alignment>, i1 <from>)
 
 Overview:
 """""""""
 
-The '``llvm.coro.promise``' intrinsic returns a pointer to a 
-`coroutine promise`_.
+The '``llvm.coro.promise``' intrinsic obtains a pointer to a 
+`coroutine promise`_ given a coroutine handle and vice versa.
 
 Arguments:
 """"""""""
 
-The argument is a handle to a coroutine.
+The first argument is a handle to a coroutine if `from` is false. Otherwise, 
+it is a pointer to a coroutine promise.
+
+The second argument is an alignment requirements of the promise. 
+If a frontend designated `%promise = alloca i32` as a promise, the alignment 
+argument to `coro.promise` should be the alignment of `i32` on the target 
+platform. If a frontend designated `%promise = alloca i32, align 16` as a 
+promise, the alignment argument should be 16.
+This argument only accepts constants.
+
+The third argument is a boolean indicating a direction of the transformation.
+If `from` is true, the intrinsic returns a coroutine handle given a pointer 
+to a promise. If `from` is false, the intrinsics return a pointer to a promise 
+from a coroutine handle. This argument only accepts constants.
 
 Semantics:
 """"""""""
@@ -676,31 +685,34 @@ leads to undefined behavior. It is possible to read and modify coroutine
 promise of the coroutine which is currently executing. The coroutine author and
 a coroutine user are responsible to makes sure there is no data races.
 
-.. _coro.from.promise:
+Example:
+""""""""
 
-'llvm.coro.from.promise' Intrinsic
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.. code-block:: llvm
 
-::
+  define i8* @f(i32 %n) {
+  entry:
+    %promise = alloca i32
+    %pv = bitcast i32* %promise to i8*
+    ...
+    ; the third argument to coro.begin points to the coroutine promise.
+    %hdl = call noalias i8* @llvm.coro.begin(i8* %alloc, i32 0, i8* %pv, i8* null)
+    ...
+    store i32 42, i32* %promise ; store something into the promise
+    ...
+    ret i8* %hdl
+  }
 
-    declare i8* @llvm.coro.from.promise.p0<type>(<type>* <handle>)
-
-Overview:
-"""""""""
-
-The '``llvm.coro.from.promise``' intrinsic returns a coroutine
-handle given the coroutine promise.
-
-Arguments:
-""""""""""
-
-An address of a coroutine promise.
-
-Semantics:
-""""""""""
-
-Using this intrinsic on a coroutine that does not have a coroutine promise
-results in undefined behavior.
+  define i32 @main() {
+  entry:
+    %hdl = call i8* @f(i32 4) ; starts the coroutine and returns its handle
+    %promise.addr.raw = call i8* @llvm.coro.promise(i8* %hdl, i32 4, i1 false)
+    %promise.addr = bitcast i8* %promise.addr.raw to i32*    
+    %val = load i32, i32* %promise.addr ; load a value from the promise
+    call void @print(i32 %val)
+    call void @llvm.coro.destroy(i8* %hdl)
+    ret i32 0
+  }
 
 .. _coroutine intrinsics:
 
@@ -1143,7 +1155,7 @@ CoroEarly
 The pass CoroEarly lowers coroutine intrinsics that hide the details of the
 structure of the coroutine frame, but, otherwise not needed to be preserved to
 help later coroutine passes. This pass lowers `coro.frame`_, `coro.done`_, 
-`coro.promise`_ and `coro.from.promise`_ intrinsics.
+and `coro.promise`_ intrinsics.
 
 .. _CoroSplit:
 
