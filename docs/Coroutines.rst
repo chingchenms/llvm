@@ -1180,8 +1180,8 @@ earlier passes.
 
 Upstreaming sequence (rough plan)
 =================================
-#. Add documentation. <= we are here
-#. Add coroutine intrinsics.
+#. Add documentation.
+#. Add coroutine intrinsics. <= we are here
 #. Add empty coroutine passes.
 #. Add coroutine devirtualization + tests.
 #. Add CGSCC restart trigger + tests.

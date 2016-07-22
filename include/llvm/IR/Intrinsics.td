@@ -603,9 +603,9 @@ def int_experimental_gc_relocate : Intrinsic<[llvm_any_ty],
 // Coroutine Structure Intrinsics.
 
 def int_coro_alloc : Intrinsic<[llvm_ptr_ty], [], [IntrNoMem]>;
-def int_coro_begin : Intrinsic<[llvm_ptr_ty],
-                               [llvm_ptr_ty, llvm_i32_ty,
-                                            llvm_ptr_ty, llvm_ptr_ty], []>;
+def int_coro_begin : Intrinsic<[llvm_ptr_ty], [llvm_ptr_ty, llvm_i32_ty,
+                                llvm_ptr_ty, llvm_ptr_ty], []>;
+
 def int_coro_free : Intrinsic<[llvm_ptr_ty], [llvm_ptr_ty], [IntrNoMem]>;
 def int_coro_end : Intrinsic<[], [llvm_ptr_ty, llvm_i1_ty], []>;
 
@@ -624,8 +624,8 @@ def int_coro_param : Intrinsic<[llvm_i1_ty], [llvm_ptr_ty, llvm_ptr_ty],
 def int_coro_resume : Intrinsic<[], [llvm_ptr_ty], [Throws]>;
 def int_coro_destroy : Intrinsic<[], [llvm_ptr_ty], [Throws]>;
 def int_coro_done : Intrinsic<[llvm_i1_ty], [llvm_ptr_ty], [IntrReadMem]>;
-def int_coro_promise : Intrinsic<[llvm_ptr_ty], 
-								 [llvm_ptr_ty, llvm_i32_ty, llvm_i1_ty],
+def int_coro_promise : Intrinsic<[llvm_ptr_ty],
+                                 [llvm_ptr_ty, llvm_i32_ty, llvm_i1_ty],
                                  [IntrNoMem]>;
 
 // Coroutine Lowering Intrinsics. Used internally by coroutine passes.
