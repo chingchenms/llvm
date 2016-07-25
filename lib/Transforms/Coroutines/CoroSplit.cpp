@@ -114,7 +114,7 @@ static void postSplitCleanup(Function &F) {
   FPM.add(createSCCPPass());
   FPM.add(createCFGSimplificationPass());
   FPM.add(createEarlyCSEPass());
-  FPM.add(createInstructionCombiningPass());
+//  FPM.add(createInstructionCombiningPass());
   FPM.add(createCFGSimplificationPass());
 
   FPM.doInitialization();
