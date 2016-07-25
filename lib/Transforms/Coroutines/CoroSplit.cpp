@@ -502,7 +502,7 @@ static void makeReadyForSplit(Function& F, CallGraph& CG) {
   llvm_unreachable("No coro.begin in pre-split coroutine");
 }
 
-static void createDevirtTriggerFunc(CallGraph& CG) {
+static void createDevirtTriggerFunc(CallGraph& CG, CallGraphSCC &SCC) {
   Module& M = CG.getModule();
   if (M.getFunction(CORO_DEVIRT_TRIGGER_FN))
     return;
@@ -517,7 +517,11 @@ static void createDevirtTriggerFunc(CallGraph& CG) {
   auto Entry = BasicBlock::Create(C, "entry", DevirtFn);
   ReturnInst::Create(C, Entry);
 
-  CG.getOrInsertFunction(DevirtFn);
+  auto Node = CG.getOrInsertFunction(DevirtFn);
+
+  SmallVector<CallGraphNode*, 8> Nodes(SCC.begin(), SCC.end());
+  Nodes.push_back(Node);
+  SCC.initialize(&*Nodes.begin(), &*Nodes.end());
 }
 
 //===----------------------------------------------------------------------===//
@@ -534,7 +538,6 @@ namespace {
 
     bool doInitialization(CallGraph& CG) override {
       Run = CG.getModule().getNamedValue(CoroBeginInst::getIntrinsicName());
-      createDevirtTriggerFunc(CG);
       return CallGraphSCCPass::doInitialization(CG);
     }
 
@@ -553,6 +556,7 @@ namespace {
         return false;
 
       CallGraph &CG = getAnalysis<CallGraphWrapperPass>().getCallGraph();
+      createDevirtTriggerFunc(CG, SCC);
 
       for (Function* F: Coroutines) {
         Attribute Attr = F->getFnAttribute(CORO_ATTR_STR);
