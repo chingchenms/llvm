@@ -61,7 +61,7 @@ void Lowerer::replaceCoroPromise(CoroPromiseInst *Intrin) {
   int64_t Alignement = Intrin->getAlignment();
 
   // FIXME: this should be queried from FrameBuilding layer, not here
-  auto SampleStruct = StructType::get(C, 
+  auto SampleStruct = StructType::get(C,
       {AnyResumeFnPtrTy, AnyResumeFnPtrTy, Int8Ty});
   const DataLayout &DL = M.getDataLayout();
   int64_t Offset = alignTo(
@@ -86,7 +86,7 @@ void Lowerer::lowerCoroDone(IntrinsicInst* II) {
   Value *Operand = II->getArgOperand(0);
 #if CORO_USE_INDEX_FOR_DONE
 // FIXME: this should be queried from FrameBuilding layer, not here
-  auto FrameTy = StructType::get(C, 
+  auto FrameTy = StructType::get(C,
       {AnyResumeFnPtrTy, AnyResumeFnPtrTy, Int8Ty});
   PointerType* FramePtrTy = FrameTy->getPointerTo();
 
@@ -114,15 +114,18 @@ void Lowerer::lowerCoroDone(IntrinsicInst* II) {
 // TODO: handle invoke coro.resume and coro.destroy
 bool Lowerer::lowerEarlyIntrinsics(Function& F) {
   bool changed = false;
-  for (auto IB = inst_begin(F), IE = inst_end(F); IB != IE;) 
+  for (auto IB = inst_begin(F), IE = inst_end(F); IB != IE;)
     if (auto II = dyn_cast<IntrinsicInst>(&*IB++)) {
       switch (II->getIntrinsicID()) {
       default:
         continue;
       case Intrinsic::coro_begin:
-        if (auto CB = cast<CoroBeginInst>(II))
-          if (CB->getInfo().isPreSplit())
+        if (auto CB = cast<CoroBeginInst>(II)) {
+          if (CB->getInfo().isPreSplit()) {
             F.addFnAttr(CORO_ATTR_STR, CORO_ATTR_VALUE_NOT_READY_FOR_SPLIT);
+            CB->setCannotDuplicate();
+          }
+        }
         break;
       case Intrinsic::coro_resume:
         lowerResumeOrDestroy(II, 0);
@@ -169,11 +172,11 @@ struct CoroEarly : public FunctionPass {
     return false;
   }
 
-  bool runOnFunction(Function &F) override { 
+  bool runOnFunction(Function &F) override {
     if (!L)
       return false;
 
-    return L->lowerEarlyIntrinsics(F); 
+    return L->lowerEarlyIntrinsics(F);
   }
 };
 }

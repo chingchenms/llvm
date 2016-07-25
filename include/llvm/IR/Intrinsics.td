@@ -604,8 +604,8 @@ def int_experimental_gc_relocate : Intrinsic<[llvm_any_ty],
 
 def int_coro_alloc : Intrinsic<[llvm_ptr_ty], [], [IntrNoMem]>;
 def int_coro_begin : Intrinsic<[llvm_ptr_ty], [llvm_ptr_ty, llvm_i32_ty,
-                                llvm_ptr_ty, llvm_ptr_ty], [IntrNoDuplicate,
-                                ReadNone<0>, ReadNone<2>, ReadOnly<3>,
+                                llvm_ptr_ty, llvm_ptr_ty],
+                               [ReadNone<0>, ReadNone<2>, ReadOnly<3>,
                                 NoCapture<0>, NoCapture<2>, NoCapture<3>]>;
 
 def int_coro_free : Intrinsic<[llvm_ptr_ty], [llvm_ptr_ty],

@@ -50,7 +50,7 @@ static BasicBlock* createResumeEntryBlock(Function& F, CoroutineShape& Shape) {
   auto Switch =
       Builder.CreateSwitch(Index, UnreachBB, Shape.CoroSuspends.size());
   Shape.ResumeSwitch = Switch;
- 
+
 #if CORO_USE_INDEX_FOR_DONE
   int SuspendIndex = -1;
 #else
@@ -106,8 +106,8 @@ static BasicBlock* createResumeEntryBlock(Function& F, CoroutineShape& Shape) {
   return NewEntry;
 }
 
-static void postSplitCleanup(Function &F) { 
-  removeUnreachableBlocks(F); 
+static void postSplitCleanup(Function &F) {
+  removeUnreachableBlocks(F);
   llvm::legacy::FunctionPassManager FPM(F.getParent());
 
   FPM.add(createVerifierPass());
@@ -174,7 +174,7 @@ static void replaceUnwindCoroEnds(ArrayRef<CoroEndInst *> Ends,
     else {
       llvm_unreachable("coro.end not at the beginning of the EHpad");
     }
-    // move coro-end and the rest of the instructions to a block that 
+    // move coro-end and the rest of the instructions to a block that
     // will be now unreachable and remove the useless branch
     BB->splitBasicBlock(NewE);
     BB->getTerminator()->eraseFromParent();
@@ -261,7 +261,7 @@ static CreateCloneResult createClone(Function &F, Twine Suffix,
   BranchInst::Create(SwitchBB, Entry);
   Entry->setName("entry" + Suffix);
 
-  // Clear all predecessors of the new entry block. 
+  // Clear all predecessors of the new entry block.
   auto Switch = cast<SwitchInst>(VMap[Shape.ResumeSwitch]);
   Entry->replaceAllUsesWith(Switch->getDefaultDest());
 
@@ -287,7 +287,7 @@ static CreateCloneResult createClone(Function &F, Twine Suffix,
     handleFinalSuspend(Builder, NewFramePtr, Shape, Switch, IsDestroy);
   }
 
-  // Replace coro suspend with the appropriate resume index. 
+  // Replace coro suspend with the appropriate resume index.
   auto NewValue = Builder.getInt8(FnIndex);
   replaceAndRemove(Shape.CoroSuspends, NewValue, &VMap);
 
@@ -444,6 +444,8 @@ static void splitCoroutine(Function &F, CallGraph &CG, CallGraphSCC &SCC) {
   removeFnAttr(F, CORO_ATTR_STR);
 
   CoroutineShape Shape(F);
+  Shape.CoroBegin->removeAttribute(AttributeSet::FunctionIndex,
+                                   Attribute::NoDuplicate);
 
   simplifySuspendPoints(Shape);
   buildCoroutineFrame(F, Shape);
@@ -529,7 +531,7 @@ namespace {
     CoroSplit() : CallGraphSCCPass(ID) {}
 
     bool Run = false;
-    
+
     bool doInitialization(CallGraph& CG) override {
       Run = CG.getModule().getNamedValue(CoroBeginInst::getIntrinsicName());
       createDevirtTriggerFunc(CG);
