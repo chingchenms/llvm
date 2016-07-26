@@ -438,6 +438,11 @@ static void simplifySuspendPoints(CoroutineShape& Shape) {
   S.resize(N);
 }
 
+static void removeCoroEnds(CoroutineShape& Shape) {
+  for (CoroEndInst* CE : Shape.CoroEnds)
+    CE->eraseFromParent();
+}
+
 static void splitCoroutine(Function &F, CallGraph &CG, CallGraphSCC &SCC) {
   LowerDbgDeclare(F);
   CoroUtils::removeLifetimeIntrinsics(F);
@@ -454,6 +459,7 @@ static void splitCoroutine(Function &F, CallGraph &CG, CallGraphSCC &SCC) {
   // the allocation and deallocation blocks, they are not needed.
   if (Shape.CoroSuspends.empty()) {
     handleNoSuspendCoroutine(Shape.CoroBegin, Shape.FrameTy);
+    removeCoroEnds(Shape);
     postSplitCleanup(F);
     CoroUtils::updateCallGraph(F, {}, CG, SCC);
     return;
@@ -464,8 +470,7 @@ static void splitCoroutine(Function &F, CallGraph &CG, CallGraphSCC &SCC) {
   auto DestroyClone = createClone(F, ".destroy", Shape, ResumeEntry, 1);
 
   // we no longer need coro.end in F
-  for (CoroEndInst* CE : Shape.CoroEnds)
-    CE->eraseFromParent();
+  removeCoroEnds(Shape);
 
   postSplitCleanup(F);
   postSplitCleanup(*ResumeClone.Fn);

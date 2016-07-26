@@ -9,7 +9,7 @@
 /// \file
 ///
 // This file defines classes that make it really easy to deal with coroutine
-// intrinsic functions with the isa/dyncast family of functions.  In particular, 
+// intrinsic functions with the isa/dyncast family of functions.  In particular,
 // this allows you to do things like:
 //
 //     if (CoroInitInst *CI = dyn_cast<CoroInitInst>(Inst))
@@ -234,12 +234,13 @@ namespace llvm {
         for (Value *V : PN->incoming_values())
           if (auto CA = dyn_cast<CoroAllocInst>(V))
             return CA;
-      return nullptr;
+//      return nullptr;
+      llvm_unreachable("coro.begin must refer to coro.alloc");
     }
 
     Value *getMem() const { return getArgOperand(kMem); }
 
-    AllocaInst *getPromise() const { 
+    AllocaInst *getPromise() const {
       Value* Arg = getArgOperand(kPromise);
       return isa<ConstantPointerNull>(Arg)
                  ? nullptr
@@ -248,7 +249,7 @@ namespace llvm {
 
     void clearPromise() {
       Value* Arg = getArgOperand(kPromise);
-      setArgOperand(kPromise, 
+      setArgOperand(kPromise,
         ConstantPointerNull::get(Type::getInt8PtrTy(getContext())));
       if (isa<AllocaInst>(Arg))
         return;
