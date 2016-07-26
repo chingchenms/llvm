@@ -602,11 +602,11 @@ def int_experimental_gc_relocate : Intrinsic<[llvm_any_ty],
 
 // Coroutine Structure Intrinsics.
 
-def int_coro_alloc : Intrinsic<[llvm_ptr_ty], [], [IntrNoMem]>;
+def int_coro_alloc : Intrinsic<[llvm_ptr_ty], [], []>;
 def int_coro_begin : Intrinsic<[llvm_ptr_ty], [llvm_ptr_ty, llvm_i32_ty,
                                 llvm_ptr_ty, llvm_ptr_ty],
                                [WriteOnly<0>, ReadNone<2>, ReadOnly<3>,
-                                NoCapture<0>, NoCapture<2>, NoCapture<3>]>;
+                                NoCapture<0>, NoCapture<3>]>;
 
 def int_coro_free : Intrinsic<[llvm_ptr_ty], [llvm_ptr_ty],
                               [IntrArgMemOnly, ReadOnly<0>, NoCapture<0>]>;

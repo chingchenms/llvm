@@ -7,7 +7,7 @@
 //
 //===----------------------------------------------------------------------===//
 //
-// This file implements coro-elide pass that replaces dynamic allocation 
+// This file implements coro-elide pass that replaces dynamic allocation
 // of coroutine frame with alloca and replaces calls to @llvm.coro.resume and
 // @llvm.coro.destroy with direct calls to coroutine sub-functions
 // see ./Coroutines.rst for details
@@ -64,7 +64,7 @@ static void replaceWithConstant(Constant *Value,
   if (Users.empty())
     return;
 
-  // All intrinsics in Users list should have the same type  
+  // All intrinsics in Users list should have the same type
   auto IntrTy = Users.front()->getType();
   auto ValueTy = Value->getType();
   if (ValueTy != IntrTy) {
@@ -76,7 +76,7 @@ static void replaceWithConstant(Constant *Value,
     I->replaceAllUsesWith(Value);
     I->eraseFromParent();
   }
-  
+
   // do constant propagation
   CoroUtils::constantFoldUsers(Value);
 }
@@ -96,24 +96,32 @@ static void removeTailCalls(AllocaInst* Frame, AAResults& AA) {
         Call->setTailCall(false);
 }
 
-static void elideHeapAllocations(CoroBeginInst *CoroBegin, Function *Resume,
-                                 AAResults &AA) {
+// Given a resume function @f.resume(%f.frame* %frame),
+// returns %f.frame type.
+static Type* getFrameType(Function* Resume) {
   auto ArgType = Resume->getArgumentList().front().getType();
-  auto FrameTy = cast<PointerType>(ArgType)->getElementType();
+  return cast<PointerType>(ArgType)->getElementType();
+}
+
+// Finds first non alloca instruction in the entry block of a function.
+static Instruction* getFirstNonAllocaInTheEntryBlock(Function* F) {
+  for (Instruction& I : F->getEntryBlock())
+    if (!isa<AllocaInst>(&I))
+      return &I;
+  llvm_unreachable("no terminator in the entry block");
+}
+
+static void elideHeapAllocations(CoroBeginInst *CoroBegin, Type *FrameTy,
+                                 CoroAllocInst *AllocInst, AAResults &AA) {
   LLVMContext& C = CoroBegin->getContext();
+  auto InsertPt = getFirstNonAllocaInTheEntryBlock(CoroBegin->getFunction());
 
-  auto Frame = new AllocaInst(FrameTy, "");
-  auto vFrame = new BitCastInst(Frame, Type::getInt8PtrTy(C), "vFrame");
+  auto Frame = new AllocaInst(FrameTy, "", InsertPt);
+  auto vFrame =
+      new BitCastInst(Frame, Type::getInt8PtrTy(C), "vFrame", InsertPt);
 
-  if (auto AllocInst = CoroBegin->getAlloc()) {
-    vFrame->insertBefore(AllocInst);
-    AllocInst->replaceAllUsesWith(vFrame);
-    AllocInst->eraseFromParent();
-  }
-  else {
-    vFrame->insertBefore(CoroBegin);
-  }
-  Frame->insertBefore(vFrame);
+  AllocInst->replaceAllUsesWith(vFrame);
+  AllocInst->eraseFromParent();
 
   CoroUtils::replaceCoroFree(CoroBegin, nullptr);
   CoroBegin->replaceAllUsesWith(vFrame);
@@ -143,12 +151,23 @@ static bool replaceIndirectCalls(CoroBeginInst *CoroBegin, AAResults& AA) {
   ConstantArray* Resumers = CoroBegin->getInfo().Resumers;
 
   auto ResumeAddrConstant = ConstantFolder().CreateExtractValue(Resumers, 0);
+  auto DestroyAddrConstant = ConstantFolder().CreateExtractValue(Resumers, 1);
   auto CleanupAddrConstant = ConstantFolder().CreateExtractValue(Resumers, 2);
 
   replaceWithConstant(ResumeAddrConstant, ResumeAddr);
-  replaceWithConstant(CleanupAddrConstant, DestroyAddr);
-  if (!DestroyAddr.empty())
-    elideHeapAllocations(CoroBegin, cast<Function>(ResumeAddrConstant), AA);
+
+  if (DestroyAddr.empty())
+    return true;
+
+  auto AllocInst = CoroBegin->getAlloc();
+
+  replaceWithConstant(AllocInst ? CleanupAddrConstant : DestroyAddrConstant,
+    DestroyAddr);
+
+  if (AllocInst) {
+    auto FrameTy = getFrameType(cast<Function>(ResumeAddrConstant));
+    elideHeapAllocations(CoroBegin, FrameTy, AllocInst, AA);
+  }
 
   return true;
 }
