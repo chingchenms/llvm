@@ -5,14 +5,21 @@ define i8* @f(i32 %n) {
 entry:
   %promise = alloca i32
   %pv = bitcast i32* %promise to i8*
+  %elide = call i8* @llvm.coro.alloc()
+  %need.dyn.alloc = icmp ne i8* %elide, null
+  br i1 %need.dyn.alloc, label %coro.begin, label %dyn.alloc
+dyn.alloc:
   %size = call i32 @llvm.coro.size.i32()
   %alloc = call i8* @malloc(i32 %size)
-  %hdl = call noalias i8* @llvm.coro.begin(i8* %alloc, i32 0, i8* %pv, i8* null)
+  br label %coro.begin
+coro.begin:
+  %phi = phi i8* [ %elide, %entry ], [ %alloc, %dyn.alloc ]
+  %hdl = call noalias i8* @llvm.coro.begin(i8* %phi, i32 0, i8* %pv, i8* null)
   br label %loop
 loop:
-  %n.val = phi i32 [ %n, %entry ], [ %inc, %loop ]
+  %n.val = phi i32 [ %n, %coro.begin ], [ %inc, %loop ]
   %inc = add nsw i32 %n.val, 1
-  store i32 %n.val, i32* %promise ; storing the result in the promise
+  store i32 %n.val, i32* %promise
   %0 = call i8 @llvm.coro.suspend(token none, i1 false)
   switch i8 %0, label %suspend [i8 0, label %loop
                                 i8 1, label %cleanup]
@@ -41,7 +48,6 @@ entry:
   call void @print(i32 %val2)
   call void @llvm.coro.destroy(i8* %hdl)
   ret i32 0
-; CHECK: entry:
 ; CHECK:      call void @print(i32 4)
 ; CHECK-NEXT: call void @print(i32 5)
 ; CHECK-NEXT: call void @print(i32 6)

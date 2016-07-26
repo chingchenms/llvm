@@ -215,15 +215,9 @@ RAII idiom and is suitable for allocation elision optimization which avoid
 dynamic allocation by storing the coroutine frame as a static `alloca` in its 
 caller.
 
-If a coroutine uses allocation and deallocation functions that are known to
-LLVM, unused calls to `malloc` and calls to `free` with `null` argument will be
-removed as dead code. However, if custom allocation functions are used, the
-`coro.alloc` and `coro.free` intrinsics can be used to enable removal of custom
-allocation and deallocation code when coroutine does not require dynamic
-allocation of the coroutine frame.
-
 In the entry block, we will call `coro.alloc`_ intrinsic that will return `null`
-when dynamic allocation is required, and non-null otherwise:
+when dynamic allocation is required, and an address of an alloca on the caller's
+frame if dynamic allocation can be elided.
 
 .. code-block:: llvm
 
@@ -256,8 +250,7 @@ thus skipping the deallocation code:
     ...
 
 With allocations and deallocations represented as described as above, after
-coroutine heap allocation elision optimization, the resulting main will end up 
-looking just like it was when we used `malloc` and `free`:
+coroutine heap allocation elision optimization, the resulting main will be:
 
 .. code-block:: llvm
 
@@ -419,12 +412,19 @@ store the current value produced by a coroutine.
   entry:
     %promise = alloca i32
     %pv = bitcast i32* %promise to i8*
+    %elide = call i8* @llvm.coro.alloc()
+    %need.dyn.alloc = icmp ne i8* %elide, null
+    br i1 %need.dyn.alloc, label %coro.begin, label %dyn.alloc
+  dyn.alloc:
     %size = call i32 @llvm.coro.size.i32()
     %alloc = call i8* @malloc(i32 %size)
-    %hdl = call noalias i8* @llvm.coro.begin(i8* %alloc, i32 0, i8* %pv, i8* null)
+    br label %coro.begin
+  coro.begin:
+    %phi = phi i8* [ %elide, %entry ], [ %alloc, %dyn.alloc ]
+    %hdl = call noalias i8* @llvm.coro.begin(i8* %phi, i32 0, i8* %pv, i8* null)
     br label %loop
   loop:
-    %n.val = phi i32 [ %n, %entry ], [ %inc, %loop ]
+    %n.val = phi i32 [ %n, %coro.begin ], [ %inc, %loop ]
     %inc = add nsw i32 %n.val, 1
     store i32 %n.val, i32* %promise
     %0 = call i8 @llvm.coro.suspend(token none, i1 false)
@@ -461,8 +461,7 @@ coroutine promise.
     ret i32 0
   }
 
-After example in this section is compiled, result of the compilation will 
-exactly like the result of the very first example:
+After example in this section is compiled, result of the compilation will be:
 
 .. code-block:: llvm
 
@@ -758,14 +757,13 @@ the coroutine frame.
 Overview:
 """""""""
 
-The '``llvm.coro.begin``' intrinsic returns an address of the 
-coroutine frame.
+The '``llvm.coro.begin``' intrinsic returns an address of the coroutine frame.
 
 Arguments:
 """"""""""
 
-The first argument is a pointer to a block of memory in which coroutine frame
-may use if memory for the coroutine frame needs to be allocated dynamically. 
+The first argument is a pointer to a block of memory where coroutine frame
+will be stored.
 
 The second argument provides information on the alignment of the memory returned 
 by the allocation function and given to `coro.begin` by the first argument. If 
@@ -861,10 +859,6 @@ Semantics:
 
 If the coroutine is eligible for heap elision, this intrinsic is lowered to an 
 alloca storing the coroutine frame. Otherwise, it is lowered to constant `null`.
-This intrinsic only needs to be used if a custom allocation function is used
-(i.e. a function not recognized by LLVM as a memory allocation function) and the
-language rules allow for custom allocation / deallocation to be elided when not
-needed.
 
 Example:
 """"""""
