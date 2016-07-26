@@ -605,17 +605,20 @@ def int_experimental_gc_relocate : Intrinsic<[llvm_any_ty],
 def int_coro_alloc : Intrinsic<[llvm_ptr_ty], [], [IntrNoMem]>;
 def int_coro_begin : Intrinsic<[llvm_ptr_ty], [llvm_ptr_ty, llvm_i32_ty,
                                 llvm_ptr_ty, llvm_ptr_ty],
-                               [ReadNone<0>, ReadNone<2>, ReadOnly<3>,
+                               [WriteOnly<0>, ReadNone<2>, ReadOnly<3>,
                                 NoCapture<0>, NoCapture<2>, NoCapture<3>]>;
 
+// coro.free, coro.end and coro.save are marked Throws to prevent sinking stores
+// below them. They don't actually throw.
 def int_coro_free : Intrinsic<[llvm_ptr_ty], [llvm_ptr_ty],
-                              [IntrArgMemOnly, ReadOnly<0>, NoCapture<0>]>;
-def int_coro_end : Intrinsic<[], [llvm_ptr_ty, llvm_i1_ty], []>;
+                              [IntrArgMemOnly, ReadOnly<0>, NoCapture<0>, 
+                               Throws]>;
+def int_coro_end : Intrinsic<[], [llvm_ptr_ty, llvm_i1_ty], [Throws]>;
 
 def int_coro_frame : Intrinsic<[llvm_ptr_ty], [], [IntrNoMem]>;
 def int_coro_size : Intrinsic<[llvm_anyint_ty], [], [IntrNoMem]>;
 
-def int_coro_save : Intrinsic<[llvm_token_ty], [llvm_ptr_ty], []>;
+def int_coro_save : Intrinsic<[llvm_token_ty], [llvm_ptr_ty], [Throws]>;
 def int_coro_suspend : Intrinsic<[llvm_i8_ty], [llvm_token_ty, llvm_i1_ty], []>;
 
 def int_coro_param : Intrinsic<[llvm_i1_ty], [llvm_ptr_ty, llvm_ptr_ty],
