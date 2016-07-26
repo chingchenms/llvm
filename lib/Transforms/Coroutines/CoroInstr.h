@@ -234,8 +234,7 @@ namespace llvm {
         for (Value *V : PN->incoming_values())
           if (auto CA = dyn_cast<CoroAllocInst>(V))
             return CA;
-//      return nullptr;
-      llvm_unreachable("coro.begin must refer to coro.alloc");
+      return nullptr;
     }
 
     Value *getMem() const { return getArgOperand(kMem); }

@@ -8,13 +8,20 @@
 define i8* @f() {
 entry:
   %i = alloca i32
+  %elide = call i8* @llvm.coro.alloc()
+  %need.dyn.alloc = icmp ne i8* %elide, null
+  br i1 %need.dyn.alloc, label %coro.begin, label %dyn.alloc
+dyn.alloc:
   %0 = tail call i32 @llvm.coro.size.i32()
   %call = tail call i8* @malloc(i32 %0)
-  %1 = tail call i8* @llvm.coro.begin(i8* %call, i32 0, i8* null, i8* null)
+  br label %coro.begin
+coro.begin:
+  %phi = phi i8* [ %elide, %entry ], [ %call, %dyn.alloc ]
+  %1 = tail call i8* @llvm.coro.begin(i8* %phi, i32 0, i8* null, i8* null)
   br label %for.cond
 
 for.cond:                                         ; preds = %for.inc, %entry
-  %storemerge = phi i32 [ 0, %entry ], [ %inc, %for.inc ]
+  %storemerge = phi i32 [ 0, %coro.begin ], [ %inc, %for.inc ]
   store i32 %storemerge, i32* %i, align 4
   call void @print(i32* nonnull %i)
   %2 = call token @llvm.coro.save(i8* %1)
@@ -41,6 +48,7 @@ coro_Suspend:                                     ; preds = %for.cond, %coro_Cle
 }
 
 declare i8* @malloc(i32)
+declare i8* @llvm.coro.alloc()
 declare i32 @llvm.coro.size.i32()
 declare i8* @llvm.coro.begin(i8*, i32, i8*, i8*)
 declare void @print(i32*)

@@ -47,7 +47,7 @@ entry:
 ; CHECK-NEXT: call void @print(i32 4)
 ; CHECK-NEXT: call void @print(i32 3)
 ; CHECK-NEXT: call void @print(i32 2)
-; CHECK-NEXT: ret i32 0
+; CHECK:      ret i32 0
 }
 
 declare i8* @malloc(i32)

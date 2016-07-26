@@ -42,10 +42,10 @@ entry:
   call void @llvm.coro.destroy(i8* %hdl)
   ret i32 0
 ; CHECK: entry:
-; CHECK-NEXT: call void @print(i32 4)
+; CHECK:      call void @print(i32 4)
 ; CHECK-NEXT: call void @print(i32 5)
 ; CHECK-NEXT: call void @print(i32 6)
-; CHECK-NEXT: ret i32 0
+; CHECK:      ret i32 0
 }
 
 declare i8* @llvm.coro.promise(i8*, i32, i1)

@@ -63,7 +63,7 @@ end:
 ; CHECK:      call void @print(i32 3)
 ; CHECK:      call void @print(i32 2)
 ; CHECK:      call void @print(i32 1)
-; CHECK-NEXT: ret i32 0
+; CHECK:      ret i32 0
 }
 
 declare i1 @llvm.coro.done(i8*)
