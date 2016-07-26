@@ -217,7 +217,7 @@ caller.
 
 In the entry block, we will call `coro.alloc`_ intrinsic that will return `null`
 when dynamic allocation is required, and an address of an alloca on the caller's
-frame if dynamic allocation can be elided.
+frame where coroutine frame can be stored if dynamic allocation is elided.
 
 .. code-block:: llvm
 
