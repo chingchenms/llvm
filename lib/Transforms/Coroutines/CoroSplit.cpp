@@ -479,6 +479,7 @@ static void splitCoroutine(Function &F, CallGraph &CG, CallGraphSCC &SCC) {
   // TODO: Optimize coroutine frame even more based on the cleaned up
   // resume and destroy bodies.
   replaceFrameSize(Shape);
+  // TODO: add dereferencable_bytes to coro.alloc, since now we now how much
 
   auto CleanupClone =
       createCleanupClone(F, ".cleanup", DestroyClone);
