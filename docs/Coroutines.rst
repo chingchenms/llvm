@@ -786,7 +786,7 @@ may be at offset to the `%mem` argument. (This could be beneficial if
 instructions that express relative access to data can be more compactly encoded 
 with small positive and negative offsets).
 
-Frontend should emit exactly one `coro.begin` intrinsic per coroutine.
+A frontend should emit exactly one `coro.begin` intrinsic per coroutine.
 
 .. _coro.free:
 
@@ -860,7 +860,7 @@ Semantics:
 If the coroutine is eligible for heap elision, this intrinsic is lowered to an 
 alloca storing the coroutine frame. Otherwise, it is lowered to constant `null`.
 
-Frontend should emit exactly one `coro.alloc` intrinsic per coroutine.
+A frontend should emit at most one `coro.alloc` intrinsic per coroutine.
 
 Example:
 """"""""
@@ -1072,7 +1072,7 @@ to the coroutine:
 Overview:
 """""""""
 
-The '``llvm.coro.param``' is used by the frontend to mark up the code used to
+The '``llvm.coro.param``' is used by a frontend to mark up the code used to
 construct and destruct copies of the parameters. If the optimizer discovers that
 a particular parameter copy is not used after any suspends, it can remove the
 construction and destruction of the copy by replacing corresponding coro.param
@@ -1097,7 +1097,7 @@ parameter copy is only used prior to control flow reaching any of the suspend
 points. The code that would be DCE'd if the `coro.param` is replaced with 
 `i1 false` is not considered to be a use of the parameter copy.
 
-The frontend can emit this intrinsic if its language rules allow for this 
+A frontend can emit this intrinsic if its language rules allow for this 
 optimization.
 
 Example:
@@ -1176,8 +1176,8 @@ earlier passes.
 
 Upstreaming sequence (rough plan)
 =================================
-#. Add documentation. <= we are here
-#. Add coroutine intrinsics.
+#. Add documentation.
+#. Add coroutine intrinsics.  <= we are here
 #. Add empty coroutine passes.
 #. Add coroutine devirtualization + tests.
 #. Add CGSCC restart trigger + tests.
