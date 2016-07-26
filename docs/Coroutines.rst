@@ -860,6 +860,8 @@ Semantics:
 If the coroutine is eligible for heap elision, this intrinsic is lowered to an 
 alloca storing the coroutine frame. Otherwise, it is lowered to constant `null`.
 
+Frontend should emit exactly one `coro.alloc` intrinsic per coroutine.
+
 Example:
 """"""""
 
