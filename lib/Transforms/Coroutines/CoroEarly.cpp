@@ -146,14 +146,6 @@ bool Lowerer::lowerEarlyIntrinsics(Function& F) {
 }
 
 std::unique_ptr<Lowerer> Lowerer::createIfNeeded(Module& M) {
-  if (auto CB = Intrinsic::getDeclaration(&M, Intrinsic::coro_begin)) {
-    CB->addAttribute(0, Attribute::NoAlias);
-    CB->addAttribute(0, Attribute::NonNull);
-  }
-  if (auto CA = Intrinsic::getDeclaration(&M, Intrinsic::coro_alloc)) {
-    CA->addAttribute(0, Attribute::DereferenceableOrNull);
-  }
-
   if (M.getNamedValue(CoroBeginInst::getIntrinsicName()) ||
     M.getNamedValue(CoroResumeInst::getIntrinsicName()) ||
     M.getNamedValue(CoroDestroyInst::getIntrinsicName()) ||
