@@ -39,10 +39,28 @@ struct CoroElide : FunctionPass {
 
   bool runOnFunction(Function &F) override;
   void getAnalysisUsage(AnalysisUsage &AU) const override {
-    AU.setPreservesCFG();
+	  AU.addRequired<AAResultsWrapperPass>();
+	  AU.setPreservesCFG();
   }
 };
 }
+
+char CoroElide::ID = 0;
+INITIALIZE_PASS_BEGIN(
+	CoroElide, "coro-elide",
+	"Coroutine frame allocation elision and indirect calls replacement", false,
+	false)
+INITIALIZE_PASS_DEPENDENCY(AAResultsWrapperPass)
+INITIALIZE_PASS_END(
+	CoroElide, "coro-elide",
+	"Coroutine frame allocation elision and indirect calls replacement", false,
+	false)
+
+Pass *llvm::createCoroElidePass() { return new CoroElide(); }
+
+//===----------------------------------------------------------------------===//
+//                              Implementation
+//===----------------------------------------------------------------------===//
 
 // Go through the list of coro.subfn.addr intrinsics and replace them with the
 // provided constant.
@@ -71,7 +89,7 @@ static void replaceWithConstant(Constant *Value,
 // See if there are any coro.subfn.addr intrinsics directly referencing
 // the coro.begin. If found, replace them with an appropriate coroutine
 // subfunction associated with that coro.begin.
-static bool replaceIndirectCalls(CoroBeginInst *CoroBegin) {
+static bool replaceIndirectCalls(CoroBeginInst *CoroBegin, AAResults& AA) {
   SmallVector<CoroSubFnInst *, 8> ResumeAddr;
   SmallVector<CoroSubFnInst *, 8> DestroyAddr;
 
@@ -99,11 +117,23 @@ static bool replaceIndirectCalls(CoroBeginInst *CoroBegin) {
                      "of coroutine subfunctions");
   auto *ResumeAddrConstant =
       ConstantExpr::getExtractValue(Resumers, CoroSubFnInst::ResumeIndex);
+  replaceWithConstant(ResumeAddrConstant, ResumeAddr);
+
+  if (DestroyAddr.empty())
+    return true;
+
   auto *DestroyAddrConstant =
       ConstantExpr::getExtractValue(Resumers, CoroSubFnInst::DestroyIndex);
-
-  replaceWithConstant(ResumeAddrConstant, ResumeAddr);
   replaceWithConstant(DestroyAddrConstant, DestroyAddr);
+#if 0
+  // If llvm.coro.begin refers to llvm.coro.alloc, we can elide the allocation.
+  auto *AllocInst = CoroBegin->getAlloc();
+
+  if (AllocInst) {
+    auto FrameTy = getFrameType(cast<Function>(ResumeAddrConstant));
+    elideHeapAllocations(CoroBegin, FrameTy, AllocInst, AA);
+  }
+#endif
   return true;
 }
 
@@ -143,20 +173,9 @@ bool CoroElide::runOnFunction(Function &F) {
   if (CoroBegins.empty())
     return Changed;
 
+  AAResults& AA = getAnalysis<AAResultsWrapperPass>().getAAResults();
   for (auto *CB : CoroBegins)
-    Changed |= replaceIndirectCalls(CB);
+    Changed |= replaceIndirectCalls(CB, AA);
 
   return Changed;
 }
-
-char CoroElide::ID = 0;
-INITIALIZE_PASS_BEGIN(
-    CoroElide, "coro-elide",
-    "Coroutine frame allocation elision and indirect calls replacement", false,
-    false)
-INITIALIZE_PASS_END(
-    CoroElide, "coro-elide",
-    "Coroutine frame allocation elision and indirect calls replacement", false,
-    false)
-
-Pass *llvm::createCoroElidePass() { return new CoroElide(); }
