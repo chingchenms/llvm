@@ -17,6 +17,8 @@
 
 namespace llvm {
 
+class CallGraph;
+class CallGraphSCC;
 class PassRegistry;
 
 void initializeCoroEarlyPass(PassRegistry &);
@@ -44,6 +46,8 @@ namespace coro {
 bool declaresIntrinsics(Module &M, std::initializer_list<StringRef>);
 void replaceAllCoroAllocs(CoroBeginInst *CB, bool Replacement);
 void replaceAllCoroFrees(CoroBeginInst *CB, Value *Replacement);
+void updateCallGraph(Function &Caller, ArrayRef<Function *> Funcs,
+                     CallGraph &CG, CallGraphSCC &SCC);
 
 // Keeps data and helper functions for lowering coroutine intrinsics.
 struct LowererBase {
@@ -64,19 +68,19 @@ struct LLVM_LIBRARY_VISIBILITY Shape {
 
   StructType *FrameTy;
   Instruction *FramePtr;
-// AllocaInst* PromiseAlloca;
-// BasicBlock* AllocaSpillBlock;
-// SwitchInst* ResumeSwitch;
-// bool HasFinalSuspend;
-
-#if !defined(NDEBUG) || defined(LLVM_ENABLE_DUMP)
-  void dump() const;
-#endif
+  AllocaInst* PromiseAlloca;
+  BasicBlock* AllocaSpillBlock;
+  SwitchInst* ResumeSwitch;
+  bool HasFinalSuspend;
 
   Shape() = default;
   explicit Shape(Function &F) { buildFrom(F); }
   void buildFrom(Function &F);
 };
+
+// Defined in CoroFrame.cpp
+//void buildCoroutineFrame(Function& F, Shape& Shape);
+
 
 } // End namespace coro.
 } // End namespace llvm
