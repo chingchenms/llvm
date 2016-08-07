@@ -91,6 +91,8 @@ class LLVM_LIBRARY_VISIBILITY CoroBeginInst : public IntrinsicInst {
   enum { MemArg, AlignArg, PromiseArg, InfoArg };
 
 public:
+
+  // See if there is a coro.alloc alternative to dynamic memory allocation.
   CoroAllocInst *getAlloc() const {
     if (auto PN = dyn_cast<PHINode>(getMem()))
       for (Value *V : PN->incoming_values())
