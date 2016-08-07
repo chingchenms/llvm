@@ -55,6 +55,29 @@ struct LowererBase {
   Value *makeSubFnCall(Value *Arg, int Index, Instruction *InsertPt);
 };
 
+// Holds structural Coroutine Intrinsics for a particular function.
+struct LLVM_LIBRARY_VISIBILITY Shape {
+  CoroBeginInst *CoroBegin;
+  SmallVector<CoroEndInst *, 4> CoroEnds;
+  SmallVector<CoroSizeInst *, 2> CoroSizes;
+  SmallVector<CoroSuspendInst *, 4> CoroSuspends;
+
+  StructType *FrameTy;
+  Instruction *FramePtr;
+// AllocaInst* PromiseAlloca;
+// BasicBlock* AllocaSpillBlock;
+// SwitchInst* ResumeSwitch;
+// bool HasFinalSuspend;
+
+#if !defined(NDEBUG) || defined(LLVM_ENABLE_DUMP)
+  void dump() const;
+#endif
+
+  Shape() = default;
+  explicit Shape(Function &F) { buildFrom(F); }
+  void buildFrom(Function &F);
+};
+
 } // End namespace coro.
 } // End namespace llvm
 
