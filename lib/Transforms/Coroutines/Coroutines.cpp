@@ -122,3 +122,25 @@ bool coro::declaresIntrinsics(Module &M,
 
   return false;
 }
+
+// Find all llvm.coro.free instructions associated with the provided frame
+// pointer and replace them with the provided replacement value. If the
+// replacement value is not provided, use appropriately typed null constant.
+void coro::replaceCoroFree(Value *FramePtr, Value *Replacement) {
+  SmallVector<CoroFreeInst *, 4> CoroFrees;
+  for (User *U : FramePtr->users())
+    if (auto *CF = dyn_cast<CoroFreeInst>(U))
+      CoroFrees.push_back(CF);
+
+  if (CoroFrees.empty())
+    return;
+
+  if (nullptr == Replacement)
+    Replacement = ConstantPointerNull::get(
+        cast<PointerType>(CoroFrees.front()->getType()));
+
+  for (CoroFreeInst *CF : CoroFrees) {
+    CF->replaceAllUsesWith(Replacement);
+    CF->eraseFromParent();
+  }
+}
