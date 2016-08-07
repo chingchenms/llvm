@@ -196,9 +196,9 @@ static bool replaceIndirectCalls(CoroBeginInst *CoroBegin, AAResults &AA) {
 
   // FIXME: Do more sophisticated check for when we can do heap elision.
   // Something like: for every exit from the function where coro.begin is live,
-  // there is a coro.free that dominates that exit block. At the moment we
-  // assume that if we found at least one coro.free referencing the coro.begin,
-  // we can elide the heap allocation.
+  // there is a coro.free or coro.destroy that dominates that exit block.
+  // At the moment we simply assume that if we found at least one coro.destroy
+  // referencing the coro.begin, we can elide the heap allocation.
 
   if (AllocInst) {
     auto FrameTy = getFrameType(cast<Function>(ResumeAddrConstant));

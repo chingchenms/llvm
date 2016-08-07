@@ -135,10 +135,6 @@ void coro::replaceCoroFree(Value *FramePtr, Value *Replacement) {
   if (CoroFrees.empty())
     return;
 
-  if (nullptr == Replacement)
-    Replacement = ConstantPointerNull::get(
-        cast<PointerType>(CoroFrees.front()->getType()));
-
   for (CoroFreeInst *CF : CoroFrees) {
     CF->replaceAllUsesWith(Replacement);
     CF->eraseFromParent();
