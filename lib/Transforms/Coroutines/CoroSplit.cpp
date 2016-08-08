@@ -14,12 +14,12 @@
 #include "llvm/Analysis/CallGraphSCCPass.h"
 #include "llvm/IR/DebugInfoMetadata.h"
 #include "llvm/IR/IRBuilder.h"
+#include "llvm/IR/LegacyPassManager.h"
 #include "llvm/IR/Verifier.h"
+#include "llvm/Transforms/Scalar.h"
 #include "llvm/Transforms/Utils/Cloning.h"
 #include "llvm/Transforms/Utils/Local.h"
 #include "llvm/Transforms/Utils/ValueMapper.h"
-#include "llvm/IR/LegacyPassManager.h"
-#include "llvm/Transforms/Scalar.h"
 
 using namespace llvm;
 

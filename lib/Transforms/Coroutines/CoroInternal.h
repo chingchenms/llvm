@@ -53,7 +53,9 @@ void updateCallGraph(Function &Caller, ArrayRef<Function *> Funcs,
 struct LowererBase {
   Module &TheModule;
   LLVMContext &Context;
+  PointerType *const Int8Ptr;
   FunctionType *const ResumeFnType;
+  ConstantPointerNull *const NullPtr;
 
   LowererBase(Module &M);
   Value *makeSubFnCall(Value *Arg, int Index, Instruction *InsertPt);

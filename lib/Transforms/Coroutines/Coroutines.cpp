@@ -72,9 +72,10 @@ void llvm::addCoroutinePassesToExtensionPoints(PassManagerBuilder &Builder) {
 // Construct the lowerer base class and initialize its members.
 coro::LowererBase::LowererBase(Module &M)
     : TheModule(M), Context(M.getContext()),
-      ResumeFnType(FunctionType::get(Type::getVoidTy(Context),
-                                     Type::getInt8PtrTy(Context),
-                                     /*isVarArg=*/false)) {}
+      Int8Ptr(Type::getInt8PtrTy(Context)),
+      ResumeFnType(FunctionType::get(Type::getVoidTy(Context), Int8Ptr,
+                                     /*isVarArg=*/false)),
+      NullPtr(ConstantPointerNull::get(Int8Ptr)) {}
 
 // Creates a sequence of instructions to obtain a resume function address using
 // llvm.coro.subfn.addr. It generates the following sequence:
