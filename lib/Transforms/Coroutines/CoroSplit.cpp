@@ -34,16 +34,24 @@ using namespace llvm;
 // coroutine subfunctions we extracted before proceeding to the caller of the
 // coroutine.
 
-template <typename T>
-ArrayRef<Instruction *>
-toArrayRef(T const &Container,
-           typename std::enable_if<std::is_convertible<
-               typename T::value_type, Instruction *>::value>::type * = 0) {
-  ArrayRef<typename T::value_type> AR(Container);
-  return reinterpret_cast<ArrayRef<Instruction *> &>(AR);
-}
+template <typename T> struct PermissiveArrayRef : ArrayRef<T> {
+  template <typename U>
+  PermissiveArrayRef(
+      const ArrayRef<U *> &A,
+      typename std::enable_if<std::is_convertible<U *, T>::value>::type * =
+          nullptr)
+      : ArrayRef((T const *)A.data(), A.size()) {}
 
-static void replaceAndRemove(ArrayRef<Instruction *> Instrs, Value *NewValue,
+  template <typename U, typename V>
+  PermissiveArrayRef(
+      const SmallVectorTemplateCommon<U *, V> &A,
+      typename std::enable_if<std::is_convertible<U *, T>::value>::type * =
+          nullptr)
+      : ArrayRef((T const *)A.data(), A.size()) {}
+};
+
+static void replaceAndRemove(PermissiveArrayRef<Instruction *> Instrs,
+                             Value *NewValue,
                              ValueToValueMapTy *VMap = nullptr) {
   for (Instruction *I : Instrs) {
     if (VMap)
@@ -51,12 +59,6 @@ static void replaceAndRemove(ArrayRef<Instruction *> Instrs, Value *NewValue,
     I->replaceAllUsesWith(NewValue);
     I->eraseFromParent();
   }
-}
-
-template <typename T>
-static void replaceAndRemove(T const &C, Value *NewValue,
-                             ValueToValueMapTy *VMap = nullptr) {
-  replaceAndRemove(toArrayRef(C), NewValue, VMap);
 }
 
 static BasicBlock *createResumeEntryBlock(Function &F, coro::Shape &Shape) {
@@ -123,7 +125,10 @@ static BasicBlock *createResumeEntryBlock(Function &F, coro::Shape &Shape) {
   return NewEntry;
 }
 
-static void replaceFinalCoroEnd(IntrinsicInst *End, ValueToValueMapTy &VMap) {
+// In Resumers, we replace fallthrough coro.end with ret void and delete the
+// rest of the block.
+static void replaceFallthroughCoroEnd(IntrinsicInst *End,
+                                      ValueToValueMapTy &VMap) {
   auto NewE = cast<IntrinsicInst>(VMap[End]);
   ReturnInst::Create(NewE->getContext(), nullptr, NewE);
 
@@ -131,48 +136,6 @@ static void replaceFinalCoroEnd(IntrinsicInst *End, ValueToValueMapTy &VMap) {
   auto BB = NewE->getParent();
   BB->splitBasicBlock(NewE);
   BB->getTerminator()->eraseFromParent();
-}
-
-static void replaceUnwindCoroEnds(ArrayRef<CoroEndInst *> Ends,
-                                  ValueToValueMapTy &VMap) {
-  for (auto E : Ends) {
-    if (E->isFinal())
-      continue;
-    auto NewE = cast<CoroEndInst>(VMap[E]);
-    auto BB = NewE->getParent();
-    auto FirstNonPhi = BB->getFirstNonPHI();
-    if (auto LP = dyn_cast<LandingPadInst>(FirstNonPhi)) {
-      assert(LP->isCleanup());
-      ResumeInst::Create(LP, NewE);
-    } else if (auto CP = dyn_cast<CleanupPadInst>(FirstNonPhi)) {
-      CleanupReturnInst::Create(CP, nullptr, NewE);
-    } else {
-      llvm_unreachable("coro.end not at the beginning of the EHpad");
-    }
-    // move coro-end and the rest of the instructions to a block that
-    // will be now unreachable and remove the useless branch
-    BB->splitBasicBlock(NewE);
-    BB->getTerminator()->eraseFromParent();
-  }
-}
-
-static void handleFinalSuspend(IRBuilder<> &Builder, Value *FramePtr,
-                               coro::Shape &Shape, SwitchInst *Switch,
-                               bool IsDestroy) {
-  BasicBlock *ResumeBB = Switch->case_begin().getCaseSuccessor();
-  Switch->removeCase(Switch->case_begin());
-  if (IsDestroy) {
-    BasicBlock *OldSwitchBB = Switch->getParent();
-    auto NewSwitchBB = OldSwitchBB->splitBasicBlock(Switch, "Switch");
-    Builder.SetInsertPoint(OldSwitchBB->getTerminator());
-    auto GepIndex = Builder.CreateConstInBoundsGEP2_32(Shape.FrameTy, FramePtr,
-                                                       0, 0, "ResumeFn.addr");
-    auto Load = Builder.CreateLoad(GepIndex);
-    auto NullPtr = ConstantPointerNull::get(cast<PointerType>(Load->getType()));
-    auto Cond = Builder.CreateICmpEQ(Load, NullPtr);
-    Builder.CreateCondBr(Cond, ResumeBB, NewSwitchBB);
-    OldSwitchBB->getTerminator()->eraseFromParent();
-  }
 }
 
 struct CreateCloneResult {
@@ -251,21 +214,14 @@ static CreateCloneResult createClone(Function &F, Twine Suffix,
   Value *OldVFrame = cast<Value>(VMap[Shape.CoroBegin]);
   OldVFrame->replaceAllUsesWith(NewVFrame);
 
-  // In ResumeClone (FnIndex == 0), it is undefined behavior to resume from
-  // final suspend point, thus, we remove its case from the switch.
-  if (Shape.HasFinalSuspend) {
-    auto Switch = cast<SwitchInst>(VMap[Shape.ResumeSwitch]);
-    bool IsDestroy = FnIndex != 0;
-    handleFinalSuspend(Builder, NewFramePtr, Shape, Switch, IsDestroy);
-  }
-
   // Replace coro suspend with the appropriate resume index.
   auto NewValue = Builder.getInt8(FnIndex);
   replaceAndRemove(Shape.CoroSuspends, NewValue, &VMap);
 
   // Remove coro.end intrinsics.
-  replaceFinalCoroEnd(Shape.CoroEnds.front(), VMap);
-  replaceUnwindCoroEnds(Shape.CoroEnds, VMap);
+  replaceFallthroughCoroEnd(Shape.CoroEnds.front(), VMap);
+  // FIXME: coming in upcoming patches:
+  // replaceUnwindCoroEnds(Shape.CoroEnds, VMap);
 
   // Store the address of this clone in the coroutine frame.
   Builder.SetInsertPoint(Shape.FramePtr->getNextNode());

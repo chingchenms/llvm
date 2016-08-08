@@ -78,13 +78,6 @@ static Instruction *insertSpills(SpillInfo &Spills, coro::Shape &Shape) {
 }
 
 void coro::buildCoroutineFrame(Function &F, Shape &Shape) {
-  // Split all of the blocks on CoroSave.
-  for (CoroSuspendInst *CSI : Shape.CoroSuspends)
-    splitAround(CSI->getCoroSave(), "CoroSave");
-
-  // Put final CoroEnd into its own block.
-  splitAround(Shape.CoroEnds.front(), "CoroEnd");
-
   SpillInfo Spills;
   // TODO: Compute Spills (incoming in later patches)
 

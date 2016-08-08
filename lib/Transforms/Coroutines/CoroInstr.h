@@ -226,7 +226,7 @@ class LLVM_LIBRARY_VISIBILITY CoroEndInst : public IntrinsicInst {
   enum { FrameArg, UnwindArg };
 
 public:
-  bool isFinal() const { return !isUnwind(); }
+  bool isFallthrough() const { return !isUnwind(); }
   bool isUnwind() const {
     return cast<Constant>(getArgOperand(UnwindArg))->isOneValue();
   }

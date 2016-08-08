@@ -235,9 +235,9 @@ void coro::Shape::buildFrom(Function &F) {
       }
       case Intrinsic::coro_end:
         CoroEnds.push_back(cast<CoroEndInst>(II));
-        if (CoroEnds.back()->isFinal()) {
+        if (CoroEnds.back()->isFallthrough()) {
           if (CoroEnds.size() > 1) {
-            assert(!CoroEnds.front()->isFinal() &&
+            assert(!CoroEnds.front()->isFallthrough() &&
               "Only one suspend point can be marked as final");
             std::swap(CoroEnds.front(), CoroEnds.back());
           }
