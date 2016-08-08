@@ -179,6 +179,17 @@ static void clear(coro::Shape &Shape) {
   Shape.HasFinalSuspend = false;
 }
 
+static CoroSaveInst *createCoroSave(CoroBeginInst *CoroBegin,
+                                    CoroSuspendInst *SuspendInst) {
+  Module *M = SuspendInst->getModule();
+  auto Fn = Intrinsic::getDeclaration(M, Intrinsic::coro_save);
+  auto SaveInst =
+      cast<CoroSaveInst>(CallInst::Create(Fn, CoroBegin, "", SuspendInst));
+  assert(!SuspendInst->getCoroSave());
+  SuspendInst->setArgOperand(0, SaveInst);
+  return SaveInst;
+}
+
 void coro::Shape::buildFrom(Function &F) {
   clear(*this);
   for (auto IB = inst_begin(F), IE = inst_end(F); IB != IE;) {
@@ -198,7 +209,7 @@ void coro::Shape::buildFrom(Function &F) {
         assert(CoroBegin && "coro.suspend should not appear before coro.begin");
         CoroSuspends.push_back(cast<CoroSuspendInst>(II));
         if (!CoroSuspends.back()->getCoroSave()) {
-          CoroSaveInst::Create(CoroBegin, CoroSuspends.back());
+          createCoroSave(CoroBegin, CoroSuspends.back());
         }
         if (CoroSuspends.back()->isFinal()) {
           HasFinalSuspend = true;

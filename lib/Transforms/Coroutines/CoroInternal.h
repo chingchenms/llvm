@@ -79,8 +79,7 @@ struct LLVM_LIBRARY_VISIBILITY Shape {
 };
 
 // Defined in CoroFrame.cpp
-//void buildCoroutineFrame(Function& F, Shape& Shape);
-
+void buildCoroutineFrame(Function& F, Shape& Shape);
 
 } // End namespace coro.
 } // End namespace llvm

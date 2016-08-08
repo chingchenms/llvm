@@ -14,8 +14,12 @@
 #include "llvm/Analysis/CallGraphSCCPass.h"
 #include "llvm/IR/DebugInfoMetadata.h"
 #include "llvm/IR/IRBuilder.h"
+#include "llvm/IR/Verifier.h"
 #include "llvm/Transforms/Utils/Cloning.h"
+#include "llvm/Transforms/Utils/Local.h"
 #include "llvm/Transforms/Utils/ValueMapper.h"
+#include "llvm/IR/LegacyPassManager.h"
+#include "llvm/Transforms/Scalar.h"
 
 using namespace llvm;
 
@@ -323,7 +327,21 @@ static void setCoroInfo(Function &F, CoroBeginInst *CoroBegin,
   CoroBegin->getId()->setInfo(BC);
 }
 
-static void buildCoroutineFrame(Function &F, coro::Shape &Shape) {}
+static void postSplitCleanup(Function &F) {
+  removeUnreachableBlocks(F);
+  llvm::legacy::FunctionPassManager FPM(F.getParent());
+
+  FPM.add(createVerifierPass());
+  FPM.add(createSCCPPass());
+  FPM.add(createCFGSimplificationPass());
+  FPM.add(createEarlyCSEPass());
+  //  FPM.add(createInstructionCombiningPass());
+  FPM.add(createCFGSimplificationPass());
+
+  FPM.doInitialization();
+  FPM.run(F);
+  FPM.doFinalization();
+}
 
 static void splitCoroutine(Function &F, CallGraph &CG, CallGraphSCC &SCC) {
   coro::Shape Shape(F);
@@ -335,6 +353,10 @@ static void splitCoroutine(Function &F, CallGraph &CG, CallGraphSCC &SCC) {
 
   // we no longer need coro.end in F
   removeCoroEnds(Shape);
+
+  postSplitCleanup(F);
+  postSplitCleanup(*ResumeClone.Fn);
+  postSplitCleanup(*DestroyClone.Fn);
 
   replaceFrameSize(Shape);
 
