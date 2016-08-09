@@ -103,8 +103,7 @@ static void removeTailCallAttribute(AllocaInst *Frame, AAResults &AA) {
   MemoryLocation Mem(Frame);
   for (Instruction &I : instructions(F))
     if (auto *Call = dyn_cast<CallInst>(&I))
-      if (Call->isTailCall() && (operandReferences(Call, Frame, AA) ||
-                                 AA.getModRefInfo(Call, Mem) != MRI_NoModRef)) {
+      if (Call->isTailCall() && operandReferences(Call, Frame, AA)) {
         // FIXME: If we ever hit this check. Evaluate whether it is more
         // appropriate to retain musttail and allow the code to compile.
         if (Call->isMustTailCall())
