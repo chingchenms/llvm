@@ -30,10 +30,11 @@ dyn.alloc:
   br label %coro.begin
 coro.begin:
   %phi = phi i8* [ %elide, %entry ], [ %alloc, %dyn.alloc ]
-  %hdl = call i8* @llvm.coro.begin(i8* %phi, i32 0, i8* null,
+  %beg = call token @llvm.coro.begin(i8* %phi, i32 0, i8* null,
                           i8* bitcast ([2 x void (%f.frame*)*]* @f.resumers to i8*))
-  invoke void @may_throw()
-          to label %ret unwind label %ehcleanup
+  %hdl = call i8* @llvm.coro.frame(token %beg)
+  invoke void @may_throw() 
+    to label %ret unwind label %ehcleanup
 ret:          
   ret i8* %hdl
 
@@ -59,7 +60,7 @@ entry:
   %hdl = call i8* @f()
 
 ; Need to remove 'tail' from the first call to @bar
-; CHECK-NOT: tail call
+; CHECK-NOT: tail call void @bar(
 ; CHECK: call void @bar(
   tail call void @bar(i8* %hdl)
 ; CHECK: tail call void @bar(  
@@ -81,5 +82,6 @@ entry:
 
 declare i8* @llvm.coro.alloc()
 declare i8* @llvm.coro.free(i8*)
-declare i8* @llvm.coro.begin(i8*, i32, i8*, i8*)
+declare token @llvm.coro.begin(i8*, i32, i8*, i8*)
+declare i8* @llvm.coro.frame(token)
 declare i8* @llvm.coro.subfn.addr(i8*, i8)

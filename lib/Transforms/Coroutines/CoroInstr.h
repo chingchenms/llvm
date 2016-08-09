@@ -74,6 +74,18 @@ public:
   }
 };
 
+/// This represents the llvm.coro.frame instruction.
+class LLVM_LIBRARY_VISIBILITY CoroFrameInst : public IntrinsicInst {
+public:
+  // Methods to support type inquiry through isa, cast, and dyn_cast:
+  static inline bool classof(const IntrinsicInst *I) {
+    return I->getIntrinsicID() == Intrinsic::coro_frame;
+  }
+  static inline bool classof(const Value *V) {
+    return isa<IntrinsicInst>(V) && classof(cast<IntrinsicInst>(V));
+  }
+};
+
 /// This represents the llvm.coro.free instruction.
 class LLVM_LIBRARY_VISIBILITY CoroFreeInst : public IntrinsicInst {
 public:
@@ -141,6 +153,22 @@ public:
 
     Result.Resumers = cast<ConstantArray>(Initializer);
     return Result;
+  }
+
+  // Replaces all coro.frame intrinsics that are associated with this coro.begin
+  // to a replacement value and removes coro.begin and all of the coro.frame
+  // intrinsics.
+  void lowerTo(Value* Replacement) {
+    SmallVector<CoroFrameInst*, 4> FrameInsts;
+    for (auto *CF : this->users())
+      FrameInsts.push_back(cast<CoroFrameInst>(CF));
+
+    for (auto *CF : FrameInsts) {
+      CF->replaceAllUsesWith(Replacement);
+      CF->eraseFromParent();
+    }
+
+    this->eraseFromParent();
   }
 
   // Methods for support type inquiry through isa, cast, and dyn_cast:

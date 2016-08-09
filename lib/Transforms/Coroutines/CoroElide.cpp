@@ -16,6 +16,7 @@
 #include "llvm/Analysis/InstructionSimplify.h"
 #include "llvm/IR/InstIterator.h"
 #include "llvm/Pass.h"
+#include "llvm/Support/ErrorHandling.h"
 
 using namespace llvm;
 
@@ -99,15 +100,23 @@ static bool operandReferences(CallInst *CI, AllocaInst *Frame, AAResults &AA) {
 // call implies that the function does not references anything on the stack.
 static void removeTailCallAttribute(AllocaInst *Frame, AAResults &AA) {
   Function &F = *Frame->getFunction();
+  MemoryLocation Mem(Frame);
   for (Instruction &I : instructions(F))
     if (auto *Call = dyn_cast<CallInst>(&I))
-      if (Call->isTailCall() && operandReferences(Call, Frame, AA))
+      if (Call->isTailCall() && (operandReferences(Call, Frame, AA) ||
+                                 AA.getModRefInfo(Call, Mem) != MRI_NoModRef)) {
+        // FIXME: If we ever hit this check. Evaluate whether it is more
+        // appropriate to retain musttail and allow the code to compile.
+        if (Call->isMustTailCall())
+          report_fatal_error("Call referring to the coroutine frame cannot be "
+                             "marked as musttail");
         Call->setTailCall(false);
+      }
 }
 
 // Given a resume function @f.resume(%f.frame* %frame), returns %f.frame type.
 static Type *getFrameType(Function *Resume) {
-  auto ArgType = Resume->getArgumentList().front().getType();
+  auto *ArgType = Resume->getArgumentList().front().getType();
   return cast<PointerType>(ArgType)->getElementType();
 }
 
@@ -126,6 +135,10 @@ static void elideHeapAllocations(CoroBeginInst *CoroBegin, Type *FrameTy,
   LLVMContext &C = CoroBegin->getContext();
   auto *InsertPt = getFirstNonAllocaInTheEntryBlock(CoroBegin->getFunction());
 
+  // FIXME: Design how to transmit alignment information for every alloca that
+  // is spilled into the coroutine frame and recreate the alignment information
+  // here. Possibly we will need to do a mini SROA here and break the coroutine
+  // frame into individual AllocaInst recreating the original alignment.
   auto *Frame = new AllocaInst(FrameTy, "", InsertPt);
   auto *FrameVoidPtr =
       new BitCastInst(Frame, Type::getInt8PtrTy(C), "vFrame", InsertPt);
@@ -142,9 +155,8 @@ static void elideHeapAllocations(CoroBeginInst *CoroBegin, Type *FrameTy,
   // To suppress deallocation code, we replace all llvm.coro.free intrinsics
   // associated with this coro.begin with null constant.
   auto *NullPtr = ConstantPointerNull::get(Type::getInt8PtrTy(C));
-  coro::replaceCoroFree(CoroBegin, NullPtr);
-  CoroBegin->replaceAllUsesWith(FrameVoidPtr);
-  CoroBegin->eraseFromParent();
+  coro::replaceAllCoroFrees(CoroBegin, NullPtr);
+  CoroBegin->lowerTo(FrameVoidPtr);
 
   // Since now coroutine frame lives on the stack we need to make sure that
   // any tail call referencing it, must be made non-tail call.
@@ -158,17 +170,21 @@ static bool replaceIndirectCalls(CoroBeginInst *CoroBegin, AAResults &AA) {
   SmallVector<CoroSubFnInst *, 8> ResumeAddr;
   SmallVector<CoroSubFnInst *, 8> DestroyAddr;
 
-  for (User *U : CoroBegin->users()) {
-    if (auto *II = dyn_cast<CoroSubFnInst>(U)) {
-      switch (II->getIndex()) {
-      case CoroSubFnInst::ResumeIndex:
-        ResumeAddr.push_back(II);
-        break;
-      case CoroSubFnInst::DestroyIndex:
-        DestroyAddr.push_back(II);
-        break;
-      default:
-        llvm_unreachable("unexpected coro.subfn.addr constant");
+  for (User *CF : CoroBegin->users()) {
+    assert(isa<CoroFrameInst>(CF) &&
+           "CoroBegin can be only used by coro.frame instructions");
+    for (User *U : CF->users()) {
+      if (auto *II = dyn_cast<CoroSubFnInst>(U)) {
+        switch (II->getIndex()) {
+        case CoroSubFnInst::ResumeIndex:
+          ResumeAddr.push_back(II);
+          break;
+        case CoroSubFnInst::DestroyIndex:
+          DestroyAddr.push_back(II);
+          break;
+        default:
+          llvm_unreachable("unexpected coro.subfn.addr constant");
+        }
       }
     }
   }
@@ -192,16 +208,13 @@ static bool replaceIndirectCalls(CoroBeginInst *CoroBegin, AAResults &AA) {
   replaceWithConstant(DestroyAddrConstant, DestroyAddr);
 
   // If llvm.coro.begin refers to llvm.coro.alloc, we can elide the allocation.
-  auto *AllocInst = CoroBegin->getAlloc();
-
-  // FIXME: Do more sophisticated check for when we can do heap elision.
-  // Something like: for every exit from the function where coro.begin is live,
-  // there is a coro.free or coro.destroy that dominates that exit block.
-  // At the moment we simply assume that if we found at least one coro.destroy
-  // referencing the coro.begin, we can elide the heap allocation.
-
-  if (AllocInst) {
-    auto FrameTy = getFrameType(cast<Function>(ResumeAddrConstant));
+  if (auto *AllocInst = CoroBegin->getAlloc()) {
+    // FIXME: Do more sophisticated check for when we can do heap elision.
+    // Something like: for every exit from the function where coro.begin is
+    // live, there is a coro.free or coro.destroy dominating that exit block.
+    // At the moment we simply assume that if we found at least one coro.destroy
+    // referencing the coro.begin, we can elide the heap allocation.
+    auto *FrameTy = getFrameType(cast<Function>(ResumeAddrConstant));
     elideHeapAllocations(CoroBegin, FrameTy, AllocInst, AA);
   }
 
