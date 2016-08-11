@@ -61,8 +61,7 @@ static bool lowerRemainingCoroIntrinsics(Function& F) {
     else if (auto CF = dyn_cast<CoroFreeInst>(II))
       ReplacementValue = CF->getArgOperand(0);
     else if (auto CA = dyn_cast<CoroAllocInst>(II))
-      ReplacementValue =
-          ConstantPointerNull::get(cast<PointerType>(CA->getType()));
+      ReplacementValue = ConstantInt::get(Type::getInt1Ty(F.getContext()), 0);
     else if (auto FN = dyn_cast<CoroSubFnInst>(II))
       ReplacementValue = lowerSubFn(Builder, FN);
     else if (isa<CoroEndInst>(II))
@@ -71,7 +70,7 @@ static bool lowerRemainingCoroIntrinsics(Function& F) {
       continue;
 
     // TODO: Run ConstantFolding after replacement
-    if (ReplacementValue) 
+    if (ReplacementValue)
       II->replaceAllUsesWith(ReplacementValue);
     II->eraseFromParent();
     changed = true;

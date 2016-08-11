@@ -120,7 +120,8 @@ static void elideHeapAllocations(CoroBeginInst *CoroBegin, Type *FrameTy,
   auto vFrame =
       new BitCastInst(Frame, Type::getInt8PtrTy(C), "vFrame", InsertPt);
 
-  AllocInst->replaceAllUsesWith(vFrame);
+  auto *False = ConstantInt::get(Type::getInt1Ty(C), 0);
+  AllocInst->replaceAllUsesWith(False);
   AllocInst->eraseFromParent();
 
   CoroUtils::replaceCoroFree(CoroBegin, nullptr);
@@ -159,7 +160,7 @@ static bool replaceIndirectCalls(CoroBeginInst *CoroBegin, AAResults& AA) {
   if (DestroyAddr.empty())
     return true;
 
-  auto AllocInst = CoroBegin->getAlloc();
+  auto *AllocInst = CoroBegin->getAlloc();
 
   replaceWithConstant(AllocInst ? CleanupAddrConstant : DestroyAddrConstant,
     DestroyAddr);

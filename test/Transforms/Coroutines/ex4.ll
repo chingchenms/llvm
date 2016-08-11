@@ -3,18 +3,18 @@
 
 define i8* @f(i32 %n) {
 entry:
+  %id = call token @llvm.coro.id()
   %promise = alloca i32
   %pv = bitcast i32* %promise to i8*
-  %elide = call i8* @llvm.coro.alloc()
-  %need.dyn.alloc = icmp ne i8* %elide, null
-  br i1 %need.dyn.alloc, label %coro.begin, label %dyn.alloc
+  %need.dyn.alloc = call i1 @llvm.coro.alloc(token %id)
+  br i1 %need.dyn.alloc, label %dyn.alloc, label %coro.begin
 dyn.alloc:
   %size = call i32 @llvm.coro.size.i32()
   %alloc = call i8* @malloc(i32 %size)
   br label %coro.begin
 coro.begin:
-  %phi = phi i8* [ %elide, %entry ], [ %alloc, %dyn.alloc ]
-  %hdl = call noalias i8* @llvm.coro.begin(i8* %phi, i32 0, i8* %pv, i8* null)
+  %phi = phi i8* [ null, %entry ], [ %alloc, %dyn.alloc ]
+  %hdl = call noalias i8* @llvm.coro.begin(token %id, i8* %phi, i32 0, i8* %pv, i8* null)
   br label %loop
 loop:
   %n.val = phi i32 [ %n, %coro.begin ], [ %inc, %loop ]
@@ -59,9 +59,10 @@ declare i8* @malloc(i32)
 declare void @free(i8*)
 declare void @print(i32)
 
-declare i8* @llvm.coro.alloc()
+declare token @llvm.coro.id()
+declare i1 @llvm.coro.alloc(token)
 declare i32 @llvm.coro.size.i32()
-declare i8* @llvm.coro.begin(i8*, i32, i8*, i8*)
+declare i8* @llvm.coro.begin(token, i8*, i32, i8*, i8*)
 declare i8 @llvm.coro.suspend(token, i1)
 declare i8* @llvm.coro.free(i8*)
 declare void @llvm.coro.end(i8*, i1)

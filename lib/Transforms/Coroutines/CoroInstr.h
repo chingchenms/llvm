@@ -77,6 +77,26 @@ namespace llvm {
     }
   };
 
+  /// This represents the llvm.coro.id instruction.
+  class LLVM_LIBRARY_VISIBILITY CoroIdInst : public IntrinsicInst {
+  public:
+    CoroAllocInst *getAlloc() {
+      for (User *U : users())
+        if (auto CA = dyn_cast<CoroAllocInst>(U))
+          return CA;
+      return nullptr;
+    }
+
+    static StringRef getIntrinsicName() { return "llvm.coro.id"; }
+    // Methods to support type inquiry through isa, cast, and dyn_cast:
+    static inline bool classof(const IntrinsicInst *I) {
+      return I->getIntrinsicID() == Intrinsic::coro_id;
+    }
+    static inline bool classof(const Value *V) {
+      return isa<IntrinsicInst>(V) && classof(cast<IntrinsicInst>(V));
+    }
+  };
+
   /// This represents the llvm.coro.free instruction.
   class LLVM_LIBRARY_VISIBILITY CoroFreeInst : public IntrinsicInst {
     enum { kFrame };
@@ -226,15 +246,12 @@ namespace llvm {
 
   /// This represents the llvm.coro.begin instruction.
   class LLVM_LIBRARY_VISIBILITY CoroBeginInst : public IntrinsicInst {
-    enum { kMem, kAlign, kPromise, kInfo };
+    enum { kId, kMem, kAlign, kPromise, kInfo };
   public:
 
     CoroAllocInst *getAlloc() const {
-      if (auto PN = dyn_cast<PHINode>(getMem()))
-        for (Value *V : PN->incoming_values())
-          if (auto CA = dyn_cast<CoroAllocInst>(V))
-            return CA;
-      return nullptr;
+      auto *Id = cast<CoroIdInst>(getArgOperand(kId));
+      return Id->getAlloc();
     }
 
     Value *getMem() const { return getArgOperand(kMem); }
