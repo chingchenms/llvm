@@ -1,3 +1,4 @@
+; Tests that coro-split pass splits the coroutine into f, f.resume and f.destroy
 ; RUN: opt < %s -coro-split -S | FileCheck %s
 
 define i8* @f() "coroutine.presplit"="1" {
@@ -44,7 +45,6 @@ suspend:
 ; CHECK: call void @free(
 ; CHECK: ret void
 
-declare i8* @llvm.coro.alloc(token)
 declare i8* @llvm.coro.free(i8*)
 declare i32 @llvm.coro.size.i32()
 declare i8  @llvm.coro.suspend(token, i1)
@@ -52,6 +52,7 @@ declare void @llvm.coro.resume(i8*)
 declare void @llvm.coro.destroy(i8*)
 
 declare token @llvm.coro.id(i32, i8*, i8*)
+declare i8* @llvm.coro.alloc(token)
 declare i8* @llvm.coro.begin(token, i8*)
 declare void @llvm.coro.end(i8*, i1) 
 
