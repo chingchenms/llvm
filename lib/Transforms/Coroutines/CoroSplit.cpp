@@ -63,62 +63,86 @@ static void replaceAndRemove(PermissiveArrayRef<Instruction *> Instrs,
   }
 }
 
+// Create an entry block for a resume function with a switch that will jump to
+// suspend points.
 static BasicBlock *createResumeEntryBlock(Function &F, coro::Shape &Shape) {
   LLVMContext &C = F.getContext();
+
+  // resume.entry:
+  //  %index.addr = getelementptr inbounds %f.Frame, %f.Frame* %FramePtr, i32 0,
+  //  i32 2
+  //  % index = load i32, i32* %index.addr
+  //  switch i32 %index, label %unreachable [
+  //    i32 0, label %resume.0
+  //    i32 1, label %resume.1
+  //    ...
+  //  ]
+
   auto *NewEntry = BasicBlock::Create(C, "resume.entry", &F);
-  auto *UnreachBB = BasicBlock::Create(C, "UnreachBB", &F);
+  auto *UnreachBB = BasicBlock::Create(C, "unreachable", &F);
 
   IRBuilder<> Builder(NewEntry);
   auto *FramePtr = Shape.FramePtr;
   auto *FrameTy = Shape.FrameTy;
-  auto *GepIndex =
-      Builder.CreateConstInBoundsGEP2_32(FrameTy, FramePtr, 0, 2, "index.addr");
+  auto *GepIndex = Builder.CreateConstInBoundsGEP2_32(
+      FrameTy, FramePtr, 0, coro::Shape::IndexField, "index.addr");
   auto *Index = Builder.CreateLoad(GepIndex, "index");
   auto *Switch =
       Builder.CreateSwitch(Index, UnreachBB, Shape.CoroSuspends.size());
   Shape.ResumeSwitch = Switch;
 
-  int SuspendIndex = Shape.CoroSuspends.front()->isFinal() ? -2 : -1;
+  uint32_t SuspendIndex = 0;
   for (auto S : Shape.CoroSuspends) {
-    ++SuspendIndex;
     ConstantInt *IndexVal = Builder.getInt32(SuspendIndex);
 
-    // replace CoroSave with a store to Index
-    auto Save = S->getCoroSave();
+    // Replace CoroSave with a store to Index:
+    //    %index.addr = getelementptr %f.frame... (index field number)
+    //    store i32 0, i32* %index.addr1
+    auto *Save = S->getCoroSave();
     Builder.SetInsertPoint(Save);
-    if (SuspendIndex == -1) {
-      // final suspend point is represented by storing zero in ResumeFnAddr
-      auto *GepIndex = Builder.CreateConstInBoundsGEP2_32(FrameTy, FramePtr, 0,
-                                                         0, "ResumeFn.addr");
-      auto *NullPtr = ConstantPointerNull::get(cast<PointerType>(
-          cast<PointerType>(GepIndex->getType())->getElementType()));
-      Builder.CreateStore(NullPtr, GepIndex);
-    } else {
-      auto *GepIndex = Builder.CreateConstInBoundsGEP2_32(FrameTy, FramePtr, 0,
-                                                         2, "index.addr");
-      Builder.CreateStore(IndexVal, GepIndex);
-    }
+    auto *GepIndex = Builder.CreateConstInBoundsGEP2_32(
+        FrameTy, FramePtr, 0, coro::Shape::IndexField, "index.addr");
+    Builder.CreateStore(IndexVal, GepIndex);
     Save->replaceAllUsesWith(ConstantTokenNone::get(C));
     Save->eraseFromParent();
 
     // Split block before and after coro.suspend and add a jump from an entry
-    // switch.
+    // switch:
+    //
+    //  whateverBB:
+    //    whatever
+    //    %0 = call i8 @llvm.coro.suspend(token none, i1 false)
+    //    switch i8 %0, label %suspend[i8 0, label %resume
+    //                                 i8 1, label %cleanup]
+    // becomes:
+    //
+    //  whateverBB:
+    //     whatever
+    //     br label %resume.0.landing
+    //
+    //  resume.0: ; <--- jump from the switch in the resume.entry
+    //     %0 = tail call i8 @llvm.coro.suspend(token none, i1 false)
+    //     br label %resume.0.landing
+    //
+    //  resume.0.landing:
+    //     %1 = phi i8[-1, %whateverBB], [%0, %resume.0]
+    //     switch i8 % 1, label %suspend [i8 0, label %resume
+    //                                    i8 1, label %cleanup]
+
     auto *SuspendBB = S->getParent();
-    auto *ResumeBB = SuspendBB->splitBasicBlock(
-        S, SuspendIndex < 0 ? Twine("resume.final")
-                            : "resume." + Twine(SuspendIndex));
+    auto *ResumeBB =
+        SuspendBB->splitBasicBlock(S, "resume." + Twine(SuspendIndex));
     auto *LandingBB = ResumeBB->splitBasicBlock(
-        S->getNextNode(), SuspendBB->getName() + Twine(".landing"));
+        S->getNextNode(), ResumeBB->getName() + Twine(".landing"));
     Switch->addCase(IndexVal, ResumeBB);
 
-    // Make SuspendBB byPass ResumeBB and jump straight to LandingBB.
-    // Add a phi node, to provide -1 as the result of the coro.suspend we bypass
-    // during suspend.
     cast<BranchInst>(SuspendBB->getTerminator())->setSuccessor(0, LandingBB);
     auto *PN = PHINode::Create(Builder.getInt8Ty(), 2, "", &LandingBB->front());
     S->replaceAllUsesWith(PN);
     PN->addIncoming(Builder.getInt8(-1), SuspendBB);
     PN->addIncoming(S, ResumeBB);
+
+    ++SuspendIndex;
   }
 
   Builder.SetInsertPoint(UnreachBB);
@@ -140,14 +164,11 @@ static void replaceFallthroughCoroEnd(IntrinsicInst *End,
   BB->getTerminator()->eraseFromParent();
 }
 
-struct CreateCloneResult {
-  Function *const Fn;
-  Value *const VFrame;
-};
-
-static CreateCloneResult createClone(Function &F, Twine Suffix,
-                                     coro::Shape &Shape,
-                                     BasicBlock *ResumeEntry, int8_t FnIndex) {
+// Create a resume clone by cloning the body of the original function, setting
+// new entry block and replacing coro.suspend an appropriate value to force
+// resume or cleanup pass for every suspend point.
+static Function *createClone(Function &F, Twine Suffix, coro::Shape &Shape,
+                             BasicBlock *ResumeEntry, int8_t FnIndex) {
 
   Module *M = F.getParent();
   auto *FrameTy = Shape.FrameTy;
@@ -228,11 +249,11 @@ static CreateCloneResult createClone(Function &F, Twine Suffix,
   // Store the address of this clone in the coroutine frame.
   Builder.SetInsertPoint(Shape.FramePtr->getNextNode());
   auto *G = Builder.CreateConstInBoundsGEP2_32(Shape.FrameTy, Shape.FramePtr, 0,
-                                              FnIndex, "fn.addr");
+                                               FnIndex, "fn.addr");
   Builder.CreateStore(NewF, G);
   NewF->setCallingConv(CallingConv::Fast);
 
-  return {NewF, NewVFrame};
+  return NewF;
 }
 
 static void removeCoroEnds(coro::Shape &Shape) {
@@ -276,8 +297,8 @@ static void setCoroInfo(Function &F, CoroBeginInst *CoroBegin,
 
   auto *ConstVal = ConstantArray::get(ArrTy, Args);
   auto *GV = new GlobalVariable(*M, ConstVal->getType(), /*isConstant=*/true,
-                               GlobalVariable::PrivateLinkage, ConstVal,
-                               F.getName() + Twine(".resumers"));
+                                GlobalVariable::PrivateLinkage, ConstVal,
+                                F.getName() + Twine(".resumers"));
 
   // Update coro.begin instruction to refer to this constant
   LLVMContext &C = F.getContext();
@@ -305,20 +326,20 @@ static void splitCoroutine(Function &F, CallGraph &CG, CallGraphSCC &SCC) {
   buildCoroutineFrame(F, Shape);
 
   auto *ResumeEntry = createResumeEntryBlock(F, Shape);
-  auto ResumeClone = createClone(F, ".resume", Shape, ResumeEntry, 0);
-  auto DestroyClone = createClone(F, ".destroy", Shape, ResumeEntry, 1);
+  auto *ResumeClone = createClone(F, ".resume", Shape, ResumeEntry, 0);
+  auto *DestroyClone = createClone(F, ".destroy", Shape, ResumeEntry, 1);
 
   // we no longer need coro.end in F
   removeCoroEnds(Shape);
 
   postSplitCleanup(F);
-  postSplitCleanup(*ResumeClone.Fn);
-  postSplitCleanup(*DestroyClone.Fn);
+  postSplitCleanup(*ResumeClone);
+  postSplitCleanup(*DestroyClone);
 
   replaceFrameSize(Shape);
 
-  setCoroInfo(F, Shape.CoroBegin, {ResumeClone.Fn, DestroyClone.Fn});
-  coro::updateCallGraph(F, {ResumeClone.Fn, DestroyClone.Fn}, CG, SCC);
+  setCoroInfo(F, Shape.CoroBegin, {ResumeClone, DestroyClone});
+  coro::updateCallGraph(F, {ResumeClone, DestroyClone}, CG, SCC);
 }
 
 // When we see the coroutine the first time, we insert an indirect call to a
