@@ -174,7 +174,6 @@ static void clear(coro::Shape &Shape) {
 
   Shape.FrameTy = nullptr;
   Shape.FramePtr = nullptr;
-  Shape.PromiseAlloca = nullptr;
   Shape.AllocaSpillBlock = nullptr;
   Shape.ResumeSwitch = nullptr;
   Shape.HasFinalSuspend = false;

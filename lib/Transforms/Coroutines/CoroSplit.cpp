@@ -50,6 +50,8 @@ template <typename T> struct PermissiveArrayRef : ArrayRef<T> {
       : ArrayRef((T const *)A.data(), A.size()) {}
 };
 
+// Replace all instructions provided with the new value. If optional VMap was
+// provided, replace mapped instructions with the new value.
 static void replaceAndRemove(PermissiveArrayRef<Instruction *> Instrs,
                              Value *NewValue,
                              ValueToValueMapTy *VMap = nullptr) {
@@ -63,16 +65,16 @@ static void replaceAndRemove(PermissiveArrayRef<Instruction *> Instrs,
 
 static BasicBlock *createResumeEntryBlock(Function &F, coro::Shape &Shape) {
   LLVMContext &C = F.getContext();
-  auto NewEntry = BasicBlock::Create(C, "resume.entry", &F);
-  auto UnreachBB = BasicBlock::Create(C, "UnreachBB", &F);
+  auto *NewEntry = BasicBlock::Create(C, "resume.entry", &F);
+  auto *UnreachBB = BasicBlock::Create(C, "UnreachBB", &F);
 
   IRBuilder<> Builder(NewEntry);
-  auto FramePtr = Shape.FramePtr;
-  auto FrameTy = Shape.FrameTy;
-  auto GepIndex =
+  auto *FramePtr = Shape.FramePtr;
+  auto *FrameTy = Shape.FrameTy;
+  auto *GepIndex =
       Builder.CreateConstInBoundsGEP2_32(FrameTy, FramePtr, 0, 2, "index.addr");
-  auto Index = Builder.CreateLoad(GepIndex, "index");
-  auto Switch =
+  auto *Index = Builder.CreateLoad(GepIndex, "index");
+  auto *Switch =
       Builder.CreateSwitch(Index, UnreachBB, Shape.CoroSuspends.size());
   Shape.ResumeSwitch = Switch;
 
@@ -86,13 +88,13 @@ static BasicBlock *createResumeEntryBlock(Function &F, coro::Shape &Shape) {
     Builder.SetInsertPoint(Save);
     if (SuspendIndex == -1) {
       // final suspend point is represented by storing zero in ResumeFnAddr
-      auto GepIndex = Builder.CreateConstInBoundsGEP2_32(FrameTy, FramePtr, 0,
+      auto *GepIndex = Builder.CreateConstInBoundsGEP2_32(FrameTy, FramePtr, 0,
                                                          0, "ResumeFn.addr");
-      auto NullPtr = ConstantPointerNull::get(cast<PointerType>(
+      auto *NullPtr = ConstantPointerNull::get(cast<PointerType>(
           cast<PointerType>(GepIndex->getType())->getElementType()));
       Builder.CreateStore(NullPtr, GepIndex);
     } else {
-      auto GepIndex = Builder.CreateConstInBoundsGEP2_32(FrameTy, FramePtr, 0,
+      auto *GepIndex = Builder.CreateConstInBoundsGEP2_32(FrameTy, FramePtr, 0,
                                                          2, "index.addr");
       Builder.CreateStore(IndexVal, GepIndex);
     }
@@ -101,11 +103,11 @@ static BasicBlock *createResumeEntryBlock(Function &F, coro::Shape &Shape) {
 
     // Split block before and after coro.suspend and add a jump from an entry
     // switch.
-    auto SuspendBB = S->getParent();
-    auto ResumeBB = SuspendBB->splitBasicBlock(
+    auto *SuspendBB = S->getParent();
+    auto *ResumeBB = SuspendBB->splitBasicBlock(
         S, SuspendIndex < 0 ? Twine("resume.final")
                             : "resume." + Twine(SuspendIndex));
-    auto LandingBB = ResumeBB->splitBasicBlock(
+    auto *LandingBB = ResumeBB->splitBasicBlock(
         S->getNextNode(), SuspendBB->getName() + Twine(".landing"));
     Switch->addCase(IndexVal, ResumeBB);
 
@@ -113,7 +115,7 @@ static BasicBlock *createResumeEntryBlock(Function &F, coro::Shape &Shape) {
     // Add a phi node, to provide -1 as the result of the coro.suspend we bypass
     // during suspend.
     cast<BranchInst>(SuspendBB->getTerminator())->setSuccessor(0, LandingBB);
-    auto PN = PHINode::Create(Builder.getInt8Ty(), 2, "", &LandingBB->front());
+    auto *PN = PHINode::Create(Builder.getInt8Ty(), 2, "", &LandingBB->front());
     S->replaceAllUsesWith(PN);
     PN->addIncoming(Builder.getInt8(-1), SuspendBB);
     PN->addIncoming(S, ResumeBB);
@@ -129,11 +131,11 @@ static BasicBlock *createResumeEntryBlock(Function &F, coro::Shape &Shape) {
 // rest of the block.
 static void replaceFallthroughCoroEnd(IntrinsicInst *End,
                                       ValueToValueMapTy &VMap) {
-  auto NewE = cast<IntrinsicInst>(VMap[End]);
+  auto *NewE = cast<IntrinsicInst>(VMap[End]);
   ReturnInst::Create(NewE->getContext(), nullptr, NewE);
 
   // remove the rest of the block, by splitting it into an unreachable block
-  auto BB = NewE->getParent();
+  auto *BB = NewE->getParent();
   BB->splitBasicBlock(NewE);
   BB->getTerminator()->eraseFromParent();
 }
@@ -148,9 +150,9 @@ static CreateCloneResult createClone(Function &F, Twine Suffix,
                                      BasicBlock *ResumeEntry, int8_t FnIndex) {
 
   Module *M = F.getParent();
-  auto FrameTy = Shape.FrameTy;
-  auto FnPtrTy = cast<PointerType>(FrameTy->getElementType(0));
-  auto FnTy = cast<FunctionType>(FnPtrTy->getElementType());
+  auto *FrameTy = Shape.FrameTy;
+  auto *FnPtrTy = cast<PointerType>(FrameTy->getElementType(0));
+  auto *FnTy = cast<FunctionType>(FnPtrTy->getElementType());
 
   Function *NewF =
       Function::Create(FnTy, GlobalValue::LinkageTypes::InternalLinkage,
@@ -189,15 +191,15 @@ static CreateCloneResult createClone(Function &F, Twine Suffix,
           AttributeFuncs::typeIncompatible(NewF->getReturnType())));
 
   // Make AllocaSpillBlock the new entry block
-  auto SwitchBB = cast<BasicBlock>(VMap[ResumeEntry]);
-  auto Entry = cast<BasicBlock>(VMap[Shape.AllocaSpillBlock]);
+  auto *SwitchBB = cast<BasicBlock>(VMap[ResumeEntry]);
+  auto *Entry = cast<BasicBlock>(VMap[Shape.AllocaSpillBlock]);
   Entry->moveBefore(&NewF->getEntryBlock());
   Entry->getTerminator()->eraseFromParent();
   BranchInst::Create(SwitchBB, Entry);
   Entry->setName("entry" + Suffix);
 
   // Clear all predecessors of the new entry block.
-  auto Switch = cast<SwitchInst>(VMap[Shape.ResumeSwitch]);
+  auto *Switch = cast<SwitchInst>(VMap[Shape.ResumeSwitch]);
   Entry->replaceAllUsesWith(Switch->getDefaultDest());
 
   IRBuilder<> Builder(&NewF->getEntryBlock().front());
@@ -209,13 +211,13 @@ static CreateCloneResult createClone(Function &F, Twine Suffix,
   OldFramePtr->replaceAllUsesWith(NewFramePtr);
 
   // Remap vFrame pointer.
-  auto NewVFrame = Builder.CreateBitCast(
+  auto *NewVFrame = Builder.CreateBitCast(
       NewFramePtr, Type::getInt8PtrTy(Builder.getContext()), "vFrame");
   Value *OldVFrame = cast<Value>(VMap[Shape.CoroBegin]);
   OldVFrame->replaceAllUsesWith(NewVFrame);
 
   // Replace coro suspend with the appropriate resume index.
-  auto NewValue = Builder.getInt8(FnIndex);
+  auto *NewValue = Builder.getInt8(FnIndex);
   replaceAndRemove(Shape.CoroSuspends, NewValue, &VMap);
 
   // Remove coro.end intrinsics.
@@ -225,7 +227,7 @@ static CreateCloneResult createClone(Function &F, Twine Suffix,
 
   // Store the address of this clone in the coroutine frame.
   Builder.SetInsertPoint(Shape.FramePtr->getNextNode());
-  auto G = Builder.CreateConstInBoundsGEP2_32(Shape.FrameTy, Shape.FramePtr, 0,
+  auto *G = Builder.CreateConstInBoundsGEP2_32(Shape.FrameTy, Shape.FramePtr, 0,
                                               FnIndex, "fn.addr");
   Builder.CreateStore(NewF, G);
   NewF->setCallingConv(CallingConv::Fast);
@@ -243,11 +245,11 @@ static void replaceFrameSize(coro::Shape &Shape) {
     return;
 
   // In the same function all coro.sizes should have the same result type.
-  auto SizeIntrin = Shape.CoroSizes.back();
+  auto *SizeIntrin = Shape.CoroSizes.back();
   Module *M = SizeIntrin->getModule();
   const DataLayout &DL = M->getDataLayout();
   auto Size = DL.getTypeAllocSize(Shape.FrameTy);
-  auto SizeConstant = ConstantInt::get(SizeIntrin->getType(), Size);
+  auto *SizeConstant = ConstantInt::get(SizeIntrin->getType(), Size);
 
   replaceAndRemove(Shape.CoroSizes, SizeConstant);
 }
@@ -270,16 +272,16 @@ static void setCoroInfo(Function &F, CoroBeginInst *CoroBegin,
   assert(Args.size() > 0);
   Function *Part = *Fns.begin();
   Module *M = Part->getParent();
-  auto ArrTy = ArrayType::get(Part->getType(), Args.size());
+  auto *ArrTy = ArrayType::get(Part->getType(), Args.size());
 
-  auto ConstVal = ConstantArray::get(ArrTy, Args);
-  auto GV = new GlobalVariable(*M, ConstVal->getType(), /*isConstant=*/true,
+  auto *ConstVal = ConstantArray::get(ArrTy, Args);
+  auto *GV = new GlobalVariable(*M, ConstVal->getType(), /*isConstant=*/true,
                                GlobalVariable::PrivateLinkage, ConstVal,
                                F.getName() + Twine(".resumers"));
 
   // Update coro.begin instruction to refer to this constant
   LLVMContext &C = F.getContext();
-  auto BC = ConstantExpr::getPointerCast(GV, Type::getInt8PtrTy(C));
+  auto *BC = ConstantExpr::getPointerCast(GV, Type::getInt8PtrTy(C));
   CoroBegin->getId()->setInfo(BC);
 }
 
@@ -291,7 +293,6 @@ static void postSplitCleanup(Function &F) {
   FPM.add(createSCCPPass());
   FPM.add(createCFGSimplificationPass());
   FPM.add(createEarlyCSEPass());
-  //  FPM.add(createInstructionCombiningPass());
   FPM.add(createCFGSimplificationPass());
 
   FPM.doInitialization();

@@ -65,7 +65,7 @@ static StructType *buildFrameType(Function &F, coro::Shape &Shape,
                                 /*IsVarArgs=*/false);
   auto FnPtrTy = FnTy->getPointerTo();
 
-  if (Shape.CoroSuspends.size() >= std::numeric_limits<int32_t>::max())
+  if (Shape.CoroSuspends.size() > std::numeric_limits<uint32_t>::max())
     report_fatal_error("Cannot handle coroutine with this many suspend points");
 
   SmallVector<Type *, 8> Types{FnPtrTy, FnPtrTy, Type::getInt32Ty(C)};

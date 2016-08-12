@@ -61,7 +61,8 @@ struct LowererBase {
   Value *makeSubFnCall(Value *Arg, int Index, Instruction *InsertPt);
 };
 
-// Holds structural Coroutine Intrinsics for a particular function.
+// Holds structural Coroutine Intrinsics for a particular function and other
+// values used during CoroSplit pass.
 struct LLVM_LIBRARY_VISIBILITY Shape {
   CoroBeginInst *CoroBegin;
   SmallVector<CoroEndInst *, 4> CoroEnds;
@@ -70,7 +71,6 @@ struct LLVM_LIBRARY_VISIBILITY Shape {
 
   StructType *FrameTy;
   Instruction *FramePtr;
-  AllocaInst* PromiseAlloca;
   BasicBlock* AllocaSpillBlock;
   SwitchInst* ResumeSwitch;
   bool HasFinalSuspend;
