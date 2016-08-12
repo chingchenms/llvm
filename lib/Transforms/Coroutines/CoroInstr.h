@@ -77,15 +77,12 @@ public:
 /// This represents the llvm.coro.alloc instruction.
 class LLVM_LIBRARY_VISIBILITY CoroIdInst : public IntrinsicInst {
 public:
-  CoroAllocInst *getAlloc() {
-    CoroAllocInst* Result = nullptr;
-    for (User * U: users())
-      if (auto *CAI = dyn_cast<CoroAllocInst>(U)) {
-        if (Result)
-          report_fatal_error("cannot handle coro.alloc duplication yet");
-        Result = CAI;
-      }
-    return Result;
+  bool hasCoroAlloc() const {
+    for (User const* U: users())
+      if (isa<CoroAllocInst>(U))
+        return true;
+      
+    return false;
   }
 
   // Methods to support type inquiry through isa, cast, and dyn_cast:
@@ -126,8 +123,8 @@ class LLVM_LIBRARY_VISIBILITY CoroBeginInst : public IntrinsicInst {
   enum { IdArg, MemArg, AlignArg, PromiseArg, InfoArg };
 
 public:
-  CoroAllocInst *getAlloc() const {
-    return cast<CoroIdInst>(getArgOperand(IdArg))->getAlloc();
+  CoroIdInst *getId() const {
+    return cast<CoroIdInst>(getArgOperand(IdArg));
   }
 
   Value *getMem() const { return getArgOperand(MemArg); }

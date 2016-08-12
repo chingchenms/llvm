@@ -134,15 +134,18 @@ static void elideHeapAllocations(CoroBeginInst *CoroBegin, Type *FrameTy,
   LLVMContext &C = CoroBegin->getContext();
   auto *InsertPt = getFirstNonAllocaInTheEntryBlock(CoroBegin->getFunction());
 
+  // Find all coro.alloc and coro.free:
+  SmallVector<CoroFreeInst *, 4> CoroFrees;
+  SmallVector<CoroAllocInst *, 4> CoroAllocs;
+
+
   // Replacing llvm.coro.alloc with false will suppress dynamic
   // allocation as it is expected for the frontend to generate the code that
   // looks like:
   //   id = coro.id()
   //   mem = coro.alloc(id) ? malloc(coro.size()) : 0;
   //   coro.begin(id, mem, ...)
-  auto *False = ConstantInt::get(Type::getInt1Ty(C), 0);
-  AllocInst->replaceAllUsesWith(False);
-  AllocInst->eraseFromParent();
+  coro::replaceAllCoroAllocs(CoroBegin, false);
 
   // To suppress deallocation code, we replace all llvm.coro.free intrinsics
   // associated with this coro.begin with null constant.
