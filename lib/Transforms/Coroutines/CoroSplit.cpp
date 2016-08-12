@@ -79,7 +79,7 @@ static BasicBlock *createResumeEntryBlock(Function &F, coro::Shape &Shape) {
   int SuspendIndex = Shape.CoroSuspends.front()->isFinal() ? -2 : -1;
   for (auto S : Shape.CoroSuspends) {
     ++SuspendIndex;
-    ConstantInt *IndexVal = Builder.getInt8(SuspendIndex);
+    ConstantInt *IndexVal = Builder.getInt32(SuspendIndex);
 
     // replace CoroSave with a store to Index
     auto Save = S->getCoroSave();

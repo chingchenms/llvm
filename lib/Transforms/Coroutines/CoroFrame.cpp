@@ -14,14 +14,17 @@
 // GEP + load from the coroutine frame. At the point of the definition we spill
 // the value into the coroutine frame.
 //
-// TODO: pack values tightly using liveness info
+// TODO: pack values tightly using liveness info.
 //===----------------------------------------------------------------------===//
 
 #include "CoroInternal.h"
 #include "llvm/IR/IRBuilder.h"
+#include <limits>
 
 using namespace llvm;
 
+// Splits the block at a particular instruction unless it is the first
+// instruction in the block with a single predecessor.
 static BasicBlock *splitBlockIfNotFirst(Instruction *I, const Twine &Name) {
   auto BB = I->getParent();
   if (&*BB->begin() == I) {
@@ -34,7 +37,7 @@ static BasicBlock *splitBlockIfNotFirst(Instruction *I, const Twine &Name) {
 }
 
 // Split above and below a particular instruction so that it
-// is all alone by itself.
+// will be all alone by itself in a block.
 static void splitAround(Instruction *I, const Twine &Name) {
   splitBlockIfNotFirst(I, Name);
   splitBlockIfNotFirst(I->getNextNode(), "After" + Name);
@@ -43,6 +46,14 @@ static void splitAround(Instruction *I, const Twine &Name) {
 // TODO: Implement in future patches
 struct SpillInfo {};
 
+// Build a struct that will keep state for an active coroutine.
+//   struct f.frame {
+//     ResumeFnTy ResumeFnAddr;
+//     ResumeFnTy DestroyFnAddr;
+//     int ResumeIndex;
+//     ... promise (if present) ...
+//     ... spills ...
+//   };
 static StructType *buildFrameType(Function &F, coro::Shape &Shape,
                                   SpillInfo &Spills) {
   LLVMContext &C = F.getContext();
@@ -54,13 +65,38 @@ static StructType *buildFrameType(Function &F, coro::Shape &Shape,
                                 /*IsVarArgs=*/false);
   auto FnPtrTy = FnTy->getPointerTo();
 
-  SmallVector<Type *, 8> Types{FnPtrTy, FnPtrTy, Type::getInt8Ty(C)};
+  if (Shape.CoroSuspends.size() >= std::numeric_limits<int32_t>::max())
+    report_fatal_error("Cannot handle coroutine with this many suspend points");
+
+  SmallVector<Type *, 8> Types{FnPtrTy, FnPtrTy, Type::getInt32Ty(C)};
   // TODO: Populate from Spills.
   FrameTy->setBody(Types);
 
   return FrameTy;
 }
 
+// Replace all alloca and SSA values that are accessed across suspend points
+// with GetElementPointer from coroutine frame + loads and stores. Create an
+// AllocaSpillBB that will become the new entry block for the resume parts of
+// the coroutine:
+//
+//    %hdl = coro.begin(...)
+//    whatever
+//
+// becomes:
+//
+//    %hdl = coro.begin(...)
+//    %FramePtr = bitcast i8* hdl to %f.frame*
+//    br label %AllocaSpillBB
+//
+//  AllocaSpillBB:
+//    ; geps corresponding to allocas that were moved to coroutine frame
+//    br label PostSpill
+//
+//  PostSpill:
+//    whatever
+//
+//
 static Instruction *insertSpills(SpillInfo &Spills, coro::Shape &Shape) {
   auto CB = Shape.CoroBegin;
   IRBuilder<> Builder(CB->getNextNode());
@@ -68,11 +104,14 @@ static Instruction *insertSpills(SpillInfo &Spills, coro::Shape &Shape) {
   Instruction *FramePtr =
       cast<Instruction>(Builder.CreateBitCast(CB, FramePtrTy, "FramePtr"));
 
+  // TODO: Insert Spills.
+
   auto FramePtrBB = FramePtr->getParent();
   Shape.AllocaSpillBlock =
       FramePtrBB->splitBasicBlock(FramePtr->getNextNode(), "AllocaSpillBB");
   Shape.AllocaSpillBlock->splitBasicBlock(&Shape.AllocaSpillBlock->front(),
-    "PostSpill");
+                                          "PostSpill");
+  // TODO: Insert geps for alloca moved to coroutine frame
 
   return FramePtr;
 }

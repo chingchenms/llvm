@@ -10,13 +10,10 @@
 //===----------------------------------------------------------------------===//
 
 #include "CoroInternal.h"
-#include "llvm/Analysis/InstructionSimplify.h"
 #include "llvm/IR/InstIterator.h"
 #include "llvm/IR/LegacyPassManager.h"
-#include "llvm/IR/ValueHandle.h"
 #include "llvm/Pass.h"
 #include "llvm/Transforms/Scalar.h"
-#include "llvm/Transforms/Utils/Local.h"
 
 using namespace llvm;
 
@@ -31,7 +28,6 @@ struct Lowerer : coro::LowererBase {
 }
 
 static void simplifyCFG(Function &F) {
-  removeUnreachableBlocks(F);
   llvm::legacy::FunctionPassManager FPM(F.getParent());
   FPM.add(createCFGSimplificationPass());
 
@@ -44,7 +40,7 @@ bool Lowerer::lowerRemainingCoroIntrinsics(Function &F) {
   bool Changed = false;
 
   for (auto IB = inst_begin(F), E = inst_end(F); IB != E;) {
-    Instruction& I = *IB++;
+    Instruction &I = *IB++;
     if (IntrinsicInst *II = dyn_cast<IntrinsicInst>(&I)) {
       switch (II->getIntrinsicID()) {
       default:
@@ -68,6 +64,7 @@ bool Lowerer::lowerRemainingCoroIntrinsics(Function &F) {
   }
 
   if (Changed) {
+    // After replacement were made we can cleanup the function body a little.
     simplifyCFG(F);
   }
   return Changed;
