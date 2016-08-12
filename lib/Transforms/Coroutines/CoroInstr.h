@@ -11,7 +11,7 @@
 // allows you to do things like:
 //
 //     if (auto *SF = dyn_cast<CoroSubFnInst>(Inst))
-//        ... SF->getFrame() ... SF->getAlloc() ...
+//        ... SF->getFrame() ... 
 //
 // All intrinsic function calls are instances of the call instruction, so these
 // are all subclasses of the CallInst class.  Note that none of these classes
@@ -76,14 +76,48 @@ public:
 
 /// This represents the llvm.coro.alloc instruction.
 class LLVM_LIBRARY_VISIBILITY CoroIdInst : public IntrinsicInst {
+  enum { AlignArg, PromiseArg, InfoArg };
 public:
-  bool hasCoroAlloc() const {
-    for (User const* U: users())
-      if (isa<CoroAllocInst>(U))
-        return true;
-      
-    return false;
+  // Info argument of coro.id is
+  //   fresh out of the frontend: null ;
+  //   outlined                 : {Init, Return, Susp1, Susp2, ...} ;
+  //   postsplit                : [resume, destroy, cleanup] ;
+  //
+  // If parts of the coroutine were outlined to protect against undesirable
+  // code motion, these functions will be stored in a struct literal referred to
+  // by the Info parameter. Note: this is only needed before coroutine is split.
+  //
+  // After coroutine is split, resume functions are stored in an array
+  // referred to by this parameter.
+
+  struct Info {
+    ConstantStruct *OutlinedParts = nullptr;
+    ConstantArray *Resumers = nullptr;
+
+    bool hasOutlinedParts() const { return OutlinedParts != nullptr; }
+    bool isPostSplit() const { return Resumers != nullptr; }
+    bool isPreSplit() const { return !isPostSplit(); }
+  };
+  Info getInfo() const {
+    Info Result;
+    auto *GV = dyn_cast<GlobalVariable>(getRawInfo());
+    if (!GV)
+      return Result;
+
+    assert(GV->isConstant() && GV->hasDefinitiveInitializer());
+    Constant *Initializer = GV->getInitializer();
+    if ((Result.OutlinedParts = dyn_cast<ConstantStruct>(Initializer)))
+      return Result;
+
+    Result.Resumers = cast<ConstantArray>(Initializer);
+    return Result;
   }
+  Constant *getRawInfo() const {
+    return cast<Constant>(getArgOperand(InfoArg)->stripPointerCasts());
+  }
+
+  void setInfo(Constant *C) { setArgOperand(InfoArg, C); }
+
 
   // Methods to support type inquiry through isa, cast, and dyn_cast:
   static inline bool classof(const IntrinsicInst *I) {
@@ -120,7 +154,7 @@ public:
 
 /// This class represents the llvm.coro.begin instruction.
 class LLVM_LIBRARY_VISIBILITY CoroBeginInst : public IntrinsicInst {
-  enum { IdArg, MemArg, AlignArg, PromiseArg, InfoArg };
+  enum { IdArg, MemArg };
 
 public:
   CoroIdInst *getId() const {
@@ -128,47 +162,6 @@ public:
   }
 
   Value *getMem() const { return getArgOperand(MemArg); }
-
-  Constant *getRawInfo() const {
-    return cast<Constant>(getArgOperand(InfoArg)->stripPointerCasts());
-  }
-
-  void setInfo(Constant *C) { setArgOperand(InfoArg, C); }
-
-  // Info argument of coro.begin is
-  //   fresh out of the frontend: null ;
-  //   outlined                 : {Init, Return, Susp1, Susp2, ...} ;
-  //   postsplit                : [resume, destroy, cleanup] ;
-  //
-  // If parts of the coroutine were outlined to protect against undesirable
-  // code motion, these functions will be stored in a struct literal referred to
-  // by the Info parameter. Note: this is only needed before coroutine is split.
-  //
-  // After coroutine is split, resume functions are stored in an array
-  // referred to by this parameter.
-
-  struct Info {
-    ConstantStruct *OutlinedParts = nullptr;
-    ConstantArray *Resumers = nullptr;
-
-    bool hasOutlinedParts() const { return OutlinedParts != nullptr; }
-    bool isPostSplit() const { return Resumers != nullptr; }
-    bool isPreSplit() const { return !isPostSplit(); }
-  };
-  Info getInfo() const {
-    Info Result;
-    auto *GV = dyn_cast<GlobalVariable>(getRawInfo());
-    if (!GV)
-      return Result;
-
-    assert(GV->isConstant() && GV->hasDefinitiveInitializer());
-    Constant *Initializer = GV->getInitializer();
-    if ((Result.OutlinedParts = dyn_cast<ConstantStruct>(Initializer)))
-      return Result;
-
-    Result.Resumers = cast<ConstantArray>(Initializer);
-    return Result;
-  }
 
   // Methods for support type inquiry through isa, cast, and dyn_cast:
   static inline bool classof(const IntrinsicInst *I) {
