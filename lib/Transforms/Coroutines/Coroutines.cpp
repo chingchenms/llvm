@@ -226,9 +226,10 @@ void coro::Shape::buildFrom(Function &F) {
         if (CB->getId()->getInfo().isPreSplit()) {
           assert(!CoroBegin &&
             "coroutine should have exactly one defining @llvm.coro.begin");
-          CB->addAttribute(0, Attribute::NonNull);
-          CB->addAttribute(0, Attribute::NoAlias);
-          CB->removeAttribute(0, Attribute::NoDuplicate);
+          CB->addAttribute(AttributeSet::ReturnIndex, Attribute::NonNull);
+          CB->addAttribute(AttributeSet::ReturnIndex, Attribute::NoAlias);
+          CB->removeAttribute(AttributeSet::FunctionIndex,
+                              Attribute::NoDuplicate);
           CoroBegin = CB;
         }
         break;

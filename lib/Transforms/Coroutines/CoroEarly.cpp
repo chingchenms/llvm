@@ -44,6 +44,16 @@ void Lowerer::lowerResumeOrDestroy(CallSite CS,
   CS.setCallingConv(CallingConv::Fast);
 }
 
+// Prior to CoroSplit, calls to coro.begin needs to be marked as NoDuplicate,
+// as CoroSplit assumes there is exactly one coro.begin. After CoroSplit,
+// NoDuplicate attribute will be removed from coro.begin otherwise, it will
+// interfere with inlining.
+static void setCannotDuplicate(CoroIdInst *CoroId) {
+  for (User* U : CoroId->users())
+    if (auto *CB = dyn_cast<CoroBeginInst>(U))
+      CB->setCannotDuplicate();
+}
+
 bool Lowerer::lowerEarlyIntrinsics(Function &F) {
   bool Changed = false;
   for (auto IB = inst_begin(F), IE = inst_end(F); IB != IE;) {
@@ -56,8 +66,10 @@ bool Lowerer::lowerEarlyIntrinsics(Function &F) {
         // Mark a function that comes out of the frontend that has a coro.begin
         // with a coroutine attribute.
         if (auto *CII = cast<CoroIdInst>(&I)) {
-          if (CII->getInfo().isPreSplit())
+          if (CII->getInfo().isPreSplit()) {
             F.addFnAttr(CORO_PRESPLIT_ATTR, UNPREPARED_FOR_SPLIT);
+            setCannotDuplicate(CII);
+          }
         }
         break;
       case Intrinsic::coro_resume:
