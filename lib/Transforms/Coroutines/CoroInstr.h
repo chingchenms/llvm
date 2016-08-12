@@ -74,6 +74,29 @@ public:
   }
 };
 
+/// This represents the llvm.coro.alloc instruction.
+class LLVM_LIBRARY_VISIBILITY CoroIdInst : public IntrinsicInst {
+public:
+  CoroAllocInst *getAlloc() {
+    CoroAllocInst* Result = nullptr;
+    for (User * U: users())
+      if (auto *CAI = dyn_cast<CoroAllocInst>(U)) {
+        if (Result)
+          report_fatal_error("cannot handle coro.alloc duplication yet");
+        Result = CAI;
+      }
+    return Result;
+  }
+
+  // Methods to support type inquiry through isa, cast, and dyn_cast:
+  static inline bool classof(const IntrinsicInst *I) {
+    return I->getIntrinsicID() == Intrinsic::coro_id;
+  }
+  static inline bool classof(const Value *V) {
+    return isa<IntrinsicInst>(V) && classof(cast<IntrinsicInst>(V));
+  }
+};
+
 /// This represents the llvm.coro.frame instruction.
 class LLVM_LIBRARY_VISIBILITY CoroFrameInst : public IntrinsicInst {
 public:
@@ -100,15 +123,11 @@ public:
 
 /// This class represents the llvm.coro.begin instruction.
 class LLVM_LIBRARY_VISIBILITY CoroBeginInst : public IntrinsicInst {
-  enum { MemArg, ElideArg, AlignArg, PromiseArg, InfoArg };
+  enum { IdArg, MemArg, AlignArg, PromiseArg, InfoArg };
 
 public:
   CoroAllocInst *getAlloc() const {
-    if (auto *CAI = dyn_cast<CoroAllocInst>(
-            getArgOperand(ElideArg)->stripPointerCasts()))
-      return CAI;
-
-    return nullptr;
+    return cast<CoroIdInst>(getArgOperand(IdArg))->getAlloc();
   }
 
   Value *getMem() const { return getArgOperand(MemArg); }
@@ -152,22 +171,6 @@ public:
 
     Result.Resumers = cast<ConstantArray>(Initializer);
     return Result;
-  }
-
-  // Replaces all coro.frame intrinsics that are associated with this coro.begin
-  // to a replacement value and removes coro.begin and all of the coro.frame
-  // intrinsics.
-  void lowerTo(Value* Replacement) {
-    SmallVector<CoroFrameInst*, 4> FrameInsts;
-    for (auto *CF : this->users())
-      FrameInsts.push_back(cast<CoroFrameInst>(CF));
-
-    for (auto *CF : FrameInsts) {
-      CF->replaceAllUsesWith(Replacement);
-      CF->eraseFromParent();
-    }
-
-    this->eraseFromParent();
   }
 
   // Methods for support type inquiry through isa, cast, and dyn_cast:

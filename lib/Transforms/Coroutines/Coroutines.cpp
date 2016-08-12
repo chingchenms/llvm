@@ -127,10 +127,9 @@ bool coro::declaresIntrinsics(Module &M,
 // and replace them with the provided replacement value.
 void coro::replaceAllCoroFrees(CoroBeginInst *CB, Value *Replacement) {
   SmallVector<CoroFreeInst *, 4> CoroFrees;
-  for (User *FramePtr: CB->users())
-    for (User *U : FramePtr->users())
-      if (auto *CF = dyn_cast<CoroFreeInst>(U))
-        CoroFrees.push_back(CF);
+  for (User *U : CB->users())
+    if (auto *CF = dyn_cast<CoroFreeInst>(U))
+      CoroFrees.push_back(CF);
 
   if (CoroFrees.empty())
     return;

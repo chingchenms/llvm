@@ -134,6 +134,21 @@ static void elideHeapAllocations(CoroBeginInst *CoroBegin, Type *FrameTy,
   LLVMContext &C = CoroBegin->getContext();
   auto *InsertPt = getFirstNonAllocaInTheEntryBlock(CoroBegin->getFunction());
 
+  // Replacing llvm.coro.alloc with false will suppress dynamic
+  // allocation as it is expected for the frontend to generate the code that
+  // looks like:
+  //   id = coro.id()
+  //   mem = coro.alloc(id) ? malloc(coro.size()) : 0;
+  //   coro.begin(id, mem, ...)
+  auto *False = ConstantInt::get(Type::getInt1Ty(C), 0);
+  AllocInst->replaceAllUsesWith(False);
+  AllocInst->eraseFromParent();
+
+  // To suppress deallocation code, we replace all llvm.coro.free intrinsics
+  // associated with this coro.begin with null constant.
+  auto *NullPtr = ConstantPointerNull::get(Type::getInt8PtrTy(C));
+  coro::replaceAllCoroFrees(CoroBegin, NullPtr);
+  
   // FIXME: Design how to transmit alignment information for every alloca that
   // is spilled into the coroutine frame and recreate the alignment information
   // here. Possibly we will need to do a mini SROA here and break the coroutine
@@ -142,20 +157,8 @@ static void elideHeapAllocations(CoroBeginInst *CoroBegin, Type *FrameTy,
   auto *FrameVoidPtr =
       new BitCastInst(Frame, Type::getInt8PtrTy(C), "vFrame", InsertPt);
 
-  // Replacing llvm.coro.alloc with non-null value will suppress dynamic
-  // allocation as it is expected for the frontend to generate the code that
-  // looks like:
-  //   mem = coro.alloc();
-  //   if (!mem) mem = malloc(coro.size());
-  //   coro.begin(mem, ...)
-  AllocInst->replaceAllUsesWith(FrameVoidPtr);
-  AllocInst->eraseFromParent();
-
-  // To suppress deallocation code, we replace all llvm.coro.free intrinsics
-  // associated with this coro.begin with null constant.
-  auto *NullPtr = ConstantPointerNull::get(Type::getInt8PtrTy(C));
-  coro::replaceAllCoroFrees(CoroBegin, NullPtr);
-  CoroBegin->lowerTo(FrameVoidPtr);
+  CoroBegin->replaceAllUsesWith(FrameVoidPtr);
+  CoroBegin->eraseFromParent();
 
   // Since now coroutine frame lives on the stack we need to make sure that
   // any tail call referencing it, must be made non-tail call.
@@ -169,21 +172,17 @@ static bool replaceIndirectCalls(CoroBeginInst *CoroBegin, AAResults &AA) {
   SmallVector<CoroSubFnInst *, 8> ResumeAddr;
   SmallVector<CoroSubFnInst *, 8> DestroyAddr;
 
-  for (User *CF : CoroBegin->users()) {
-    assert(isa<CoroFrameInst>(CF) &&
-           "CoroBegin can be only used by coro.frame instructions");
-    for (User *U : CF->users()) {
-      if (auto *II = dyn_cast<CoroSubFnInst>(U)) {
-        switch (II->getIndex()) {
-        case CoroSubFnInst::ResumeIndex:
-          ResumeAddr.push_back(II);
-          break;
-        case CoroSubFnInst::DestroyIndex:
-          DestroyAddr.push_back(II);
-          break;
-        default:
-          llvm_unreachable("unexpected coro.subfn.addr constant");
-        }
+  for (User *U : CoroBegin->users()) {
+    if (auto *II = dyn_cast<CoroSubFnInst>(U)) {
+      switch (II->getIndex()) {
+      case CoroSubFnInst::ResumeIndex:
+        ResumeAddr.push_back(II);
+        break;
+      case CoroSubFnInst::DestroyIndex:
+        DestroyAddr.push_back(II);
+        break;
+      default:
+        llvm_unreachable("unexpected coro.subfn.addr constant");
       }
     }
   }
