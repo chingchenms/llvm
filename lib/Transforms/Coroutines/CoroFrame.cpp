@@ -223,8 +223,38 @@ SuspendCrossingInfo::SuspendCrossingInfo(Function &F, coro::Shape &Shape)
 #undef DEBUG_TYPE // "coro-suspend-crossing"
 #define DEBUG_TYPE "coro-frame"
 
-// TODO: Implement in future patches.
-struct SpillInfo {};
+// We build up the list of spills for every case where a use is separated
+// from the definition by a suspend point.
+
+struct Spill : std::pair<Value*, Instruction*> {
+  using base = std::pair<Value*, Instruction*>;
+
+  Spill(Value* Def, User* U) : base(Def, cast<Instruction>(U)) {}
+
+  Value* def() const { return first; }
+  Instruction* user() const { return second; }
+  BasicBlock* userBlock() const { return second->getParent(); }
+
+  std::pair<Value *, BasicBlock *> getKey() const {
+    return{ def(), userBlock() };
+  }
+
+  bool operator<(Spill const &rhs) const { return getKey() < rhs.getKey(); }
+};
+
+using SpillInfo = SmallVector<Spill, 8>;
+
+static void dump(StringRef Title, SpillInfo const& Spills) {
+  dbgs() << "------------- " << Title << "--------------\n";
+  Value* CurrentValue = nullptr;
+  for (auto const &E : Spills) {
+    if (CurrentValue != E.def()) {
+      CurrentValue = E.def();
+      CurrentValue->dump();
+    }
+    dbgs() << "   user: "; E.user()->dump();
+  }
+}
 
 // Build a struct that will keep state for an active coroutine.
 //   struct f.frame {
