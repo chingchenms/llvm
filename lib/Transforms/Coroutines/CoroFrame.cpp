@@ -78,7 +78,7 @@ struct SuspendCrossingInfo {
   SmallVector<BlockData, SmallVectorThreshold> Block;
 
   iterator_range<succ_iterator> successors(BlockData const &BD) {
-    BasicBlock* BB = Mapping.indexToBlock(&BD - &Block[0]);
+    BasicBlock *BB = Mapping.indexToBlock(&BD - &Block[0]);
     return llvm::successors(BB);
   }
 
@@ -87,22 +87,22 @@ struct SuspendCrossingInfo {
   }
 
   void dump();
-  void dump(StringRef Label, BitVector const& BV);
+  void dump(StringRef Label, BitVector const &BV);
 
-  SuspendCrossingInfo(Function& F, coro::Shape& Shape);
+  SuspendCrossingInfo(Function &F, coro::Shape &Shape);
 
-  bool hasPathCrossingSuspendPoint(BasicBlock* DefBB, BasicBlock* UseBB) {
+  bool hasPathCrossingSuspendPoint(BasicBlock *DefBB, BasicBlock *UseBB) {
     size_t const DefIndex = Mapping.blockToIndex(DefBB);
     size_t const UseIndex = Mapping.blockToIndex(UseBB);
 
     assert(Block[UseIndex].Consumes[DefIndex] && "use must consume def");
     bool const Result = Block[UseIndex].Kills[DefIndex];
     DEBUG(dbgs() << UseBB->getName() << " => " << DefBB->getName()
-      << " answer is " << Result << "\n");
+                 << " answer is " << Result << "\n");
     return Result;
   }
 
-  bool definitionAcrossSuspend(BasicBlock* DefBB, User* U) {
+  bool definitionAcrossSuspend(BasicBlock *DefBB, User *U) {
     auto I = cast<Instruction>(U);
 
     // We rewritten PHINodes, so that only the ones with exactly one incoming
@@ -111,7 +111,7 @@ struct SuspendCrossingInfo {
       if (PN->getNumIncomingValues() > 1)
         return false;
 
-    BasicBlock* UseBB = I->getParent();
+    BasicBlock *UseBB = I->getParent();
     return hasPathCrossingSuspendPoint(DefBB, UseBB);
   }
 
@@ -123,6 +123,105 @@ struct SuspendCrossingInfo {
     return definitionAcrossSuspend(I.getParent(), U);
   }
 };
+
+void SuspendCrossingInfo::dump(StringRef Label, BitVector const &BV) {
+  dbgs() << Label << ":";
+  for (size_t I = 0, N = BV.size(); I < N; ++I)
+    if (BV[I])
+      dbgs() << " " << Mapping.indexToBlock(I)->getName();
+  dbgs() << "\n";
+}
+
+void SuspendCrossingInfo::dump() {
+  for (size_t I = 0, N = Block.size(); I < N; ++I) {
+    BasicBlock *const B = Mapping.indexToBlock(I);
+    dbgs() << B->getName() << ":\n";
+    dump("   Consumes", Block[I].Consumes);
+    dump("      Kills", Block[I].Kills);
+  }
+  dbgs() << "\n";
+}
+
+SuspendCrossingInfo::SuspendCrossingInfo(Function &F, coro::Shape &Shape)
+    : Mapping(F) {
+  const size_t N = Mapping.size();
+  Block.resize(N);
+
+  // Initialize every block so that it consumes itself
+  for (size_t I = 0; I < N; ++I) {
+    auto &B = Block[I];
+    B.Consumes.resize(N);
+    B.Kills.resize(N);
+    B.Consumes.set(I);
+  }
+
+  // Mark all CoroEnd Blocks
+  for (auto CE : Shape.CoroEnds)
+    getBlockData(CE->getParent()).End = true;
+
+  // Mark all suspend blocks and indicate that kill everything they consume
+  for (CoroSuspendInst *CSI : Shape.CoroSuspends) {
+    CoroSaveInst *const CoroSave = CSI->getCoroSave();
+    BasicBlock *const CoroSaveBB = CoroSave->getParent();
+    auto &B = getBlockData(CoroSaveBB);
+    B.Suspend = true;
+    B.Kills |= B.Consumes;
+  }
+
+  // Iterate propagating consumes and kills until they stop changing
+  int Iteration = 0;
+
+  bool Changed;
+  do {
+    DEBUG(dbgs() << "iteration " << ++Iteration);
+    DEBUG(dbgs() << "==============\n");
+
+    Changed = false;
+    for (size_t I = 0; I < N; ++I) {
+      auto &B = Block[I];
+      for (BasicBlock *SI : successors(B)) {
+
+        auto SuccNo = Mapping.blockToIndex(SI);
+
+        auto &S = Block[SuccNo];
+        auto SavedCons = S.Consumes;
+        auto SavedKills = S.Kills;
+
+        S.Consumes |= B.Consumes;
+        S.Kills |= B.Kills;
+
+        if (B.Suspend) {
+          S.Kills |= B.Consumes;
+        }
+        if (S.Suspend) {
+          S.Kills |= S.Consumes;
+        } else if (S.End) {
+          S.Kills.reset();
+        } else {
+          S.Kills.reset(SuccNo);
+        }
+
+        Changed |= (S.Kills != SavedKills) || (S.Consumes != SavedCons);
+
+        if (S.Kills != SavedKills) {
+          DEBUG(dbgs() << "\nblock " << I << " follower " << SI->getName()
+                       << "\n");
+          DEBUG(dump("s.kills", S.Kills));
+          DEBUG(dump("savedKills", SavedKills));
+        }
+        if (S.Consumes != SavedCons) {
+          DEBUG(dbgs() << "\nblock " << I << " follower " << SI << "\n");
+          DEBUG(dump("s.consume", S.Consumes));
+          DEBUG(dump("savedCons", SavedCons));
+        }
+      }
+    }
+  } while (Changed);
+  DEBUG(dump());
+}
+
+#undef DEBUG_TYPE // "coro-suspend-crossing"
+#define DEBUG_TYPE "coro-frame"
 
 // TODO: Implement in future patches.
 struct SpillInfo {};
