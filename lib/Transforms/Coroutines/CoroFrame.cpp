@@ -223,13 +223,13 @@ SuspendCrossingInfo::SuspendCrossingInfo(Function &F, coro::Shape &Shape)
         if (S.Kills != SavedKills) {
           DEBUG(dbgs() << "\nblock " << I << " follower " << SI->getName()
                        << "\n");
-          DEBUG(dump("s.kills", S.Kills));
-          DEBUG(dump("savedKills", SavedKills));
+          DEBUG(dump("S.Kills", S.Kills));
+          DEBUG(dump("SavedKills", SavedKills));
         }
         if (S.Consumes != SavedConsumes) {
           DEBUG(dbgs() << "\nblock " << I << " follower " << SI << "\n");
-          DEBUG(dump("s.consume", S.Consumes));
-          DEBUG(dump("savedCons", SavedConsumes));
+          DEBUG(dump("S.Consume", S.Consumes));
+          DEBUG(dump("SavedCons", SavedConsumes));
         }
       }
     }
