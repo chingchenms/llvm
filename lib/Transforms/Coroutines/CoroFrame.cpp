@@ -159,7 +159,10 @@ SuspendCrossingInfo::SuspendCrossingInfo(Function &F, coro::Shape &Shape)
   for (auto CE : Shape.CoroEnds)
     getBlockData(CE->getParent()).End = true;
 
-  // Mark all suspend blocks and indicate that kill everything they consume
+  // Mark all suspend blocks and indicate that kill everything they consume.
+  // Note, that crossing coro.save is used to indicate suspend, as any code
+  // between coro.save and coro.suspend may resume the coroutine and all of the
+  // state needs to be saved by that time.
   for (CoroSuspendInst *CSI : Shape.CoroSuspends) {
     CoroSaveInst *const CoroSave = CSI->getCoroSave();
     BasicBlock *const CoroSaveBB = CoroSave->getParent();
@@ -183,25 +186,39 @@ SuspendCrossingInfo::SuspendCrossingInfo(Function &F, coro::Shape &Shape)
 
         auto SuccNo = Mapping.blockToIndex(SI);
 
+        // Saved Consumes and Kills bitsets so that it is easy to see
+        // if anything changed after propagation.
         auto &S = Block[SuccNo];
-        auto SavedCons = S.Consumes;
+        auto SavedConsumes = S.Consumes;
         auto SavedKills = S.Kills;
 
+        // Propagate Kills and Consumes from block B into its successor S.
         S.Consumes |= B.Consumes;
         S.Kills |= B.Kills;
 
+        // If block B is a suspend block, it should propagate kills into the
+        // its successor for every block B consumes.
         if (B.Suspend) {
           S.Kills |= B.Consumes;
         }
         if (S.Suspend) {
+          // If block S is a suspend block, it should kill all of the blocks it
+          // consumes.
           S.Kills |= S.Consumes;
         } else if (S.End) {
+          // If block S is an end block, it should not propagate kills as the
+          // blocks following coro.end() are reached during initial invocation
+          // of the coroutine while all the data are still available on the
+          // stack or in the registers.
           S.Kills.reset();
         } else {
+          // This is reached when S block it not Suspend nor coro.end and it
+          // need to make sure that it is not in the kill set.
           S.Kills.reset(SuccNo);
         }
 
-        Changed |= (S.Kills != SavedKills) || (S.Consumes != SavedCons);
+        // See if anything changed.
+        Changed |= (S.Kills != SavedKills) || (S.Consumes != SavedConsumes);
 
         if (S.Kills != SavedKills) {
           DEBUG(dbgs() << "\nblock " << I << " follower " << SI->getName()
@@ -209,10 +226,10 @@ SuspendCrossingInfo::SuspendCrossingInfo(Function &F, coro::Shape &Shape)
           DEBUG(dump("s.kills", S.Kills));
           DEBUG(dump("savedKills", SavedKills));
         }
-        if (S.Consumes != SavedCons) {
+        if (S.Consumes != SavedConsumes) {
           DEBUG(dbgs() << "\nblock " << I << " follower " << SI << "\n");
           DEBUG(dump("s.consume", S.Consumes));
-          DEBUG(dump("savedCons", SavedCons));
+          DEBUG(dump("savedCons", SavedConsumes));
         }
       }
     }
