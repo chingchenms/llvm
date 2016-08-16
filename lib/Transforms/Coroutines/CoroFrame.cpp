@@ -300,7 +300,25 @@ static StructType *buildFrameType(Function &F, coro::Shape &Shape,
     report_fatal_error("Cannot handle coroutine with this many suspend points");
 
   SmallVector<Type *, 8> Types{FnPtrTy, FnPtrTy, Type::getInt32Ty(C)};
-  // TODO: Populate from Spills.
+  Value *CurrentDef = nullptr;
+
+  for (auto const &S : Spills) {
+    if (CurrentDef == S.def())
+      continue;
+
+    CurrentDef = S.def();
+
+    Type *Ty = nullptr;
+    if (auto AI = dyn_cast<AllocaInst>(CurrentDef))
+      Ty = AI->getAllocatedType();
+    else
+      Ty = CurrentDef->getType();
+
+    Types.push_back(Ty);
+  }
+  FrameTy->setBody(Types);
+
+  return FrameTy;
   FrameTy->setBody(Types);
 
   return FrameTy;
