@@ -334,16 +334,100 @@ static Instruction *insertSpills(SpillInfo &Spills, coro::Shape &Shape) {
   PointerType *FramePtrTy = Shape.FrameTy->getPointerTo();
   auto *FramePtr =
       cast<Instruction>(Builder.CreateBitCast(CB, FramePtrTy, "FramePtr"));
+  Type *FrameTy = FramePtrTy->getElementType();
 
-  // TODO: Insert Spills.
+  Value *CurrentValue = nullptr;
+  BasicBlock *CurrentBlock = nullptr;
+  Value *CurrentReload = nullptr;
+  unsigned Index = 2; // Stores last used index for the reload.
 
-  auto *FramePtrBB = FramePtr->getParent();
+  // We need to keep track of any allocas that need "spilling"
+  // since they will live in the coroutine frame now, all access to them
+  // need to be changed, not just the access across suspend points
+  // we remember allocas and their indices to be handled once we processed
+  // all the spills.
+  SmallVector<std::pair<AllocaInst *, unsigned>, 4> Allocas;
+
+  // Create a load instruction to reload the spilled value from the coroutine
+  // frame.
+  auto CreateReload = [&](Instruction *InsertBefore) {
+    Builder.SetInsertPoint(InsertBefore);
+    auto G = Builder.CreateConstInBoundsGEP2_32(FrameTy, FramePtr, 0, Index,
+                                                CurrentValue->getName() +
+                                                    Twine(".reload.addr"));
+    return isa<AllocaInst>(CurrentValue)
+               ? G
+               : Builder.CreateLoad(G,
+                                    CurrentValue->getName() + Twine(".reload"));
+  };
+
+  for (auto const &E : Spills) {
+    // If we have not seen the value, generate a spill.
+    if (CurrentValue != E.def()) {
+      CurrentValue = E.def();
+      CurrentBlock = nullptr;
+      CurrentReload = nullptr;
+
+      ++Index;
+
+      if (auto AI = dyn_cast<AllocaInst>(CurrentValue)) {
+        // Spiled AllocaInst will be replaced with GEP from the coroutine frame
+        // there is no spill required.
+        Allocas.emplace_back(AI, Index);
+        if (!AI->isStaticAlloca())
+          report_fatal_error("Coroutines cannot handle non static allocas yet");
+      } else {
+        // Otherwise, create a store instruction storing the value into the
+        // coroutine frame. For, argument, we will place the store instruction
+        // right after the coroutine frame pointer instruction, i.e. bitcase of
+        // coro.begin from i8* to %f.frame*. For all other values, the spill is
+        // placed immediately after the definition.
+        Builder.SetInsertPoint(
+            isa<Argument>(CurrentValue)
+                ? FramePtr->getNextNode()
+                : dyn_cast<Instruction>(E.def())->getNextNode());
+
+        auto G = Builder.CreateConstInBoundsGEP2_32(FrameTy, FramePtr, 0, Index,
+                                                    CurrentValue->getName() +
+                                                        Twine(".spill.addr"));
+        Builder.CreateStore(CurrentValue, G);
+      }
+    }
+
+    // If we have not seen the use block, generate a reload in it.
+    if (CurrentBlock != E.userBlock()) {
+      CurrentBlock = E.userBlock();
+      CurrentReload = CreateReload(&*CurrentBlock->getFirstInsertionPt());
+    }
+#if 0 // REVIEW: do we need this?
+    if (auto PN = dyn_cast<PHINode>(E.user())) {
+      assert(PN->getNumIncomingValues() == 1 && "unexpected number of incoming "
+        "values in the PHINode");
+      PN->replaceAllUsesWith(CurrentReload);
+      PN->eraseFromParent();
+      continue;
+    }
+#endif
+    // replace all uses of CurrentValue in the current instruction with reload
+    for (Use &U : E.user()->operands())
+      if (U.get() == CurrentValue)
+        U.set(CurrentReload);
+  }
+
+  auto FramePtrBB = FramePtr->getParent();
   Shape.AllocaSpillBlock =
       FramePtrBB->splitBasicBlock(FramePtr->getNextNode(), "AllocaSpillBB");
   Shape.AllocaSpillBlock->splitBasicBlock(&Shape.AllocaSpillBlock->front(),
                                           "PostSpill");
-  // TODO: Insert geps for alloca moved to coroutine frame.
 
+  Builder.SetInsertPoint(&Shape.AllocaSpillBlock->front());
+  // if we found any allocas, replace all of their remaining uses with Geps
+  for (auto &P : Allocas) {
+    auto G = Builder.CreateConstInBoundsGEP2_32(FrameTy, FramePtr, 0, P.second);
+    G->takeName(P.first);
+    P.first->replaceAllUsesWith(G);
+    P.first->eraseFromParent();
+  }
   return FramePtr;
 }
 
@@ -462,11 +546,11 @@ static void rewriteMaterializableInstructions(IRBuilder<> &IRB,
 //          call @coro.begin
 //    we need to move the store after coro.begin
 static void fixupUses(Function &F, SpillInfo const &Spills,
-  CoroBeginInst *CoroBegin) {
+                      CoroBeginInst *CoroBegin) {
   DominatorTree DT(F);
-  SmallVector<Instruction*, 8> NeedsMoving;
+  SmallVector<Instruction *, 8> NeedsMoving;
 
-  Value* CurrentValue = nullptr;
+  Value *CurrentValue = nullptr;
 
   for (auto const &E : Spills) {
     if (CurrentValue == E.def())
@@ -474,15 +558,15 @@ static void fixupUses(Function &F, SpillInfo const &Spills,
 
     CurrentValue = E.def();
 
-    for (User* U : CurrentValue->users()) {
-      Instruction* I = cast<Instruction>(U);
+    for (User *U : CurrentValue->users()) {
+      Instruction *I = cast<Instruction>(U);
       if (DT.dominates(I, CoroBegin)) {
         DEBUG({
-          for (User* UI : I->users())
-          assert(DT.dominates(CoroBegin, cast<Instruction>(UI)) &&
-            "cannot move instruction"
-            " since users are not dominated by CoroBegin");
-        dbgs() << "will move: " << *I << "\n";
+          for (User *UI : I->users())
+            assert(DT.dominates(CoroBegin, cast<Instruction>(UI)) &&
+                   "cannot move instruction"
+                   " since users are not dominated by CoroBegin");
+          dbgs() << "will move: " << *I << "\n";
         });
         NeedsMoving.push_back(I);
       }
@@ -490,7 +574,7 @@ static void fixupUses(Function &F, SpillInfo const &Spills,
   }
 
   auto InsertPt = CoroBegin->getNextNode();
-  for (Instruction* I : NeedsMoving)
+  for (Instruction *I : NeedsMoving)
     I->moveBefore(InsertPt);
 }
 
