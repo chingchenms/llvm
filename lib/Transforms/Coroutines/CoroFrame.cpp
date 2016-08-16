@@ -578,6 +578,26 @@ static void fixupUses(Function &F, SpillInfo const &Spills,
     I->moveBefore(InsertPt);
 }
 
+// Splits the block at a particular instruction unless it is the first
+// instruction in the block with a single predecessor.
+static BasicBlock *splitBlockIfNotFirst(Instruction *I, const Twine &Name) {
+  auto *BB = I->getParent();
+  if (&BB->front() == I) {
+    if (BB->getSinglePredecessor()) {
+      BB->setName(Name);
+      return BB;
+    }
+  }
+  return BB->splitBasicBlock(I, Name);
+}
+
+// Split above and below a particular instruction so that it
+// will be all alone by itself in a block.
+static void splitAround(Instruction *I, const Twine &Name) {
+  splitBlockIfNotFirst(I, Name);
+  splitBlockIfNotFirst(I->getNextNode(), "After" + Name);
+}
+
 void coro::buildCoroutineFrame(Function &F, Shape &Shape) {
 
   // Make sure that all coro.saves and the fallthrough coro.end are in their
