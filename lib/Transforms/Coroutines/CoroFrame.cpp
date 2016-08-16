@@ -35,7 +35,8 @@ using namespace llvm;
 
 enum { SmallVectorThreshold = 32 };
 
-// Provides two way mapping between the blocks and numbers
+// Provides two way mapping between the blocks and numbers.
+namespace {
 class BlockToIndexMapping {
   SmallVector<BasicBlock *, SmallVectorThreshold> V;
 
@@ -54,14 +55,15 @@ public:
     return I - V.begin();
   }
 
-  BasicBlock *indexToBlock(unsigned Index) { return V[Index]; }
+  BasicBlock *indexToBlock(unsigned Index) const { return V[Index]; }
 };
+} // end anonymous namespace
 
 // The SuspendCrossingInfo maintains data that allows to answer a question
 // whether given two BasicBlocks A and B there is a path from A to B that
 // passes through a suspend point.
 //
-// For every basic block 'i' it maintains a block data that consists of:
+// For every basic block 'i' it maintains a BlockData that consists of:
 //   Consumes:  a bit vector which contains a set of indicies of blocks that can
 //              reach block 'i'
 //   Kills: a bit vector which contains a set of indicies of blocks that can
@@ -69,6 +71,7 @@ public:
 //   Suspend: a boolean indicating whether block 'i' contains a suspend point.
 //   End: a boolean indicating whether block 'i' contains a coro.end intrinsic.
 //
+namespace {
 struct SuspendCrossingInfo {
   BlockToIndexMapping Mapping;
 
@@ -80,7 +83,7 @@ struct SuspendCrossingInfo {
   };
   SmallVector<BlockData, SmallVectorThreshold> Block;
 
-  iterator_range<succ_iterator> successors(BlockData const &BD) {
+  iterator_range<succ_iterator> successors(BlockData const &BD) const {
     BasicBlock *BB = Mapping.indexToBlock(&BD - &Block[0]);
     return llvm::successors(BB);
   }
@@ -89,12 +92,14 @@ struct SuspendCrossingInfo {
     return Block[Mapping.blockToIndex(BB)];
   }
 
-  void dump();
-  void dump(StringRef Label, BitVector const &BV);
+#ifndef NDEBUG
+  void dump() const;
+  void dump(StringRef Label, BitVector const &BV) const;
+#endif
 
   SuspendCrossingInfo(Function &F, coro::Shape &Shape);
 
-  bool hasPathCrossingSuspendPoint(BasicBlock *DefBB, BasicBlock *UseBB) {
+  bool hasPathCrossingSuspendPoint(BasicBlock *DefBB, BasicBlock *UseBB) const {
     size_t const DefIndex = Mapping.blockToIndex(DefBB);
     size_t const UseIndex = Mapping.blockToIndex(UseBB);
 
@@ -105,12 +110,12 @@ struct SuspendCrossingInfo {
     return Result;
   }
 
-  bool definitionAcrossSuspend(BasicBlock *DefBB, User *U) {
-    auto I = cast<Instruction>(U);
+  bool isDefinitionAcrossSuspend(BasicBlock *DefBB, User *U) const {
+    auto *I = cast<Instruction>(U);
 
     // We rewritten PHINodes, so that only the ones with exactly one incoming
     // value need to be analyzed.
-    if (auto PN = dyn_cast<PHINode>(I))
+    if (auto *PN = dyn_cast<PHINode>(I))
       if (PN->getNumIncomingValues() > 1)
         return false;
 
@@ -118,16 +123,18 @@ struct SuspendCrossingInfo {
     return hasPathCrossingSuspendPoint(DefBB, UseBB);
   }
 
-  bool definitionAcrossSuspend(Argument &A, User *U) {
-    return definitionAcrossSuspend(&A.getParent()->getEntryBlock(), U);
+  bool isDefinitionAcrossSuspend(Argument &A, User *U) const {
+    return isDefinitionAcrossSuspend(&A.getParent()->getEntryBlock(), U);
   }
 
-  bool definitionAcrossSuspend(Instruction &I, User *U) {
-    return definitionAcrossSuspend(I.getParent(), U);
+  bool isDefinitionAcrossSuspend(Instruction &I, User *U) const {
+    return isDefinitionAcrossSuspend(I.getParent(), U);
   }
 };
+} // end anonymous namespace
 
-void SuspendCrossingInfo::dump(StringRef Label, BitVector const &BV) {
+#ifndef NDEBUG
+void SuspendCrossingInfo::dump(StringRef Label, BitVector const &BV) const {
   dbgs() << Label << ":";
   for (size_t I = 0, N = BV.size(); I < N; ++I)
     if (BV[I])
@@ -135,7 +142,7 @@ void SuspendCrossingInfo::dump(StringRef Label, BitVector const &BV) {
   dbgs() << "\n";
 }
 
-void SuspendCrossingInfo::dump() {
+void SuspendCrossingInfo::dump() const {
   for (size_t I = 0, N = Block.size(); I < N; ++I) {
     BasicBlock *const B = Mapping.indexToBlock(I);
     dbgs() << B->getName() << ":\n";
@@ -144,6 +151,7 @@ void SuspendCrossingInfo::dump() {
   }
   dbgs() << "\n";
 }
+#endif
 
 SuspendCrossingInfo::SuspendCrossingInfo(Function &F, coro::Shape &Shape)
     : Mapping(F) {
@@ -158,8 +166,10 @@ SuspendCrossingInfo::SuspendCrossingInfo(Function &F, coro::Shape &Shape)
     B.Consumes.set(I);
   }
 
-  // Mark all CoroEnd Blocks
-  for (auto CE : Shape.CoroEnds)
+  // Mark all CoroEnd Blocks. We do not propagate Kills beyond coro.ends as
+  // the code beyond coro.end is reachable during initial invocation of the
+  // coroutine.
+  for (auto *CE : Shape.CoroEnds)
     getBlockData(CE->getParent()).End = true;
 
   // Mark all suspend blocks and indicate that kill everything they consume.
@@ -262,8 +272,11 @@ struct Spill : std::pair<Value *, Instruction *> {
   bool operator<(Spill const &rhs) const { return getKey() < rhs.getKey(); }
 };
 
+// Note that there may be more than one record with the same value of Def in
+// the SpillInfo vector.
 using SpillInfo = SmallVector<Spill, 8>;
 
+#ifndef NDEBUG
 static void dump(StringRef Title, SpillInfo const &Spills) {
   dbgs() << "------------- " << Title << "--------------\n";
   Value *CurrentValue = nullptr;
@@ -276,6 +289,7 @@ static void dump(StringRef Title, SpillInfo const &Spills) {
     E.user()->dump();
   }
 }
+#endif
 
 // Build a struct that will keep state for an active coroutine.
 //   struct f.frame {
@@ -302,6 +316,7 @@ static StructType *buildFrameType(Function &F, coro::Shape &Shape,
   SmallVector<Type *, 8> Types{FnPtrTy, FnPtrTy, Type::getInt32Ty(C)};
   Value *CurrentDef = nullptr;
 
+  // Create an entry for every spilled value.
   for (auto const &S : Spills) {
     if (CurrentDef == S.def())
       continue;
@@ -309,7 +324,7 @@ static StructType *buildFrameType(Function &F, coro::Shape &Shape,
     CurrentDef = S.def();
 
     Type *Ty = nullptr;
-    if (auto AI = dyn_cast<AllocaInst>(CurrentDef))
+    if (auto *AI = dyn_cast<AllocaInst>(CurrentDef))
       Ty = AI->getAllocatedType();
     else
       Ty = CurrentDef->getType();
@@ -319,9 +334,13 @@ static StructType *buildFrameType(Function &F, coro::Shape &Shape,
   FrameTy->setBody(Types);
 
   return FrameTy;
-  FrameTy->setBody(Types);
+}
 
-  return FrameTy;
+// Returns the index of the last non-spill field in the coroutine frame.
+//  2 - if there is no coroutine promise specified or 3, if there is.
+static unsigned getLastNonSpillIndex(coro::Shape &Shape) {
+  // TODO: Add support for coroutine promise.
+  return 2;
 }
 
 // Replace all alloca and SSA values that are accessed across suspend points
@@ -357,7 +376,7 @@ static Instruction *insertSpills(SpillInfo &Spills, coro::Shape &Shape) {
   Value *CurrentValue = nullptr;
   BasicBlock *CurrentBlock = nullptr;
   Value *CurrentReload = nullptr;
-  unsigned Index = 2; // Stores last used index for the reload.
+  unsigned Index = getLastNonSpillIndex(Shape);
 
   // We need to keep track of any allocas that need "spilling"
   // since they will live in the coroutine frame now, all access to them
@@ -370,9 +389,9 @@ static Instruction *insertSpills(SpillInfo &Spills, coro::Shape &Shape) {
   // frame.
   auto CreateReload = [&](Instruction *InsertBefore) {
     Builder.SetInsertPoint(InsertBefore);
-    auto G = Builder.CreateConstInBoundsGEP2_32(FrameTy, FramePtr, 0, Index,
-                                                CurrentValue->getName() +
-                                                    Twine(".reload.addr"));
+    auto *G = Builder.CreateConstInBoundsGEP2_32(FrameTy, FramePtr, 0, Index,
+                                                 CurrentValue->getName() +
+                                                     Twine(".reload.addr"));
     return isa<AllocaInst>(CurrentValue)
                ? G
                : Builder.CreateLoad(G,
@@ -388,7 +407,7 @@ static Instruction *insertSpills(SpillInfo &Spills, coro::Shape &Shape) {
 
       ++Index;
 
-      if (auto AI = dyn_cast<AllocaInst>(CurrentValue)) {
+      if (auto *AI = dyn_cast<AllocaInst>(CurrentValue)) {
         // Spiled AllocaInst will be replaced with GEP from the coroutine frame
         // there is no spill required.
         Allocas.emplace_back(AI, Index);
@@ -405,9 +424,9 @@ static Instruction *insertSpills(SpillInfo &Spills, coro::Shape &Shape) {
                 ? FramePtr->getNextNode()
                 : dyn_cast<Instruction>(E.def())->getNextNode());
 
-        auto G = Builder.CreateConstInBoundsGEP2_32(FrameTy, FramePtr, 0, Index,
-                                                    CurrentValue->getName() +
-                                                        Twine(".spill.addr"));
+        auto *G = Builder.CreateConstInBoundsGEP2_32(
+            FrameTy, FramePtr, 0, Index,
+            CurrentValue->getName() + Twine(".spill.addr"));
         Builder.CreateStore(CurrentValue, G);
       }
     }
@@ -417,31 +436,24 @@ static Instruction *insertSpills(SpillInfo &Spills, coro::Shape &Shape) {
       CurrentBlock = E.userBlock();
       CurrentReload = CreateReload(&*CurrentBlock->getFirstInsertionPt());
     }
-#if 0 // REVIEW: do we need this?
-    if (auto PN = dyn_cast<PHINode>(E.user())) {
-      assert(PN->getNumIncomingValues() == 1 && "unexpected number of incoming "
-        "values in the PHINode");
-      PN->replaceAllUsesWith(CurrentReload);
-      PN->eraseFromParent();
-      continue;
-    }
-#endif
-    // replace all uses of CurrentValue in the current instruction with reload
+
+    // Replace all uses of CurrentValue in the current instruction with reload.
     for (Use &U : E.user()->operands())
       if (U.get() == CurrentValue)
         U.set(CurrentReload);
   }
 
-  auto FramePtrBB = FramePtr->getParent();
+  BasicBlock *FramePtrBB = FramePtr->getParent();
   Shape.AllocaSpillBlock =
       FramePtrBB->splitBasicBlock(FramePtr->getNextNode(), "AllocaSpillBB");
   Shape.AllocaSpillBlock->splitBasicBlock(&Shape.AllocaSpillBlock->front(),
                                           "PostSpill");
 
   Builder.SetInsertPoint(&Shape.AllocaSpillBlock->front());
-  // if we found any allocas, replace all of their remaining uses with Geps
+  // If we found any allocas, replace all of their remaining uses with Geps.
   for (auto &P : Allocas) {
-    auto G = Builder.CreateConstInBoundsGEP2_32(FrameTy, FramePtr, 0, P.second);
+    auto *G =
+        Builder.CreateConstInBoundsGEP2_32(FrameTy, FramePtr, 0, P.second);
     G->takeName(P.first);
     P.first->replaceAllUsesWith(G);
     P.first->eraseFromParent();
@@ -470,9 +482,9 @@ static void rewritePHIs(BasicBlock &BB) {
 
   SmallVector<BasicBlock *, 8> Preds(pred_begin(&BB), pred_end(&BB));
   for (BasicBlock *Pred : Preds) {
-    auto IncomingBB = SplitEdge(Pred, &BB);
+    auto *IncomingBB = SplitEdge(Pred, &BB);
     IncomingBB->setName(BB.getName() + Twine(".from.") + Pred->getName());
-    auto PN = cast<PHINode>(&BB.front());
+    auto *PN = cast<PHINode>(&BB.front());
     do {
       int Index = PN->getBasicBlockIndex(IncomingBB);
       Value *V = PN->getIncomingValue(Index);
@@ -490,7 +502,7 @@ static void rewritePHIs(Function &F) {
   SmallVector<BasicBlock *, 8> WorkList;
 
   for (BasicBlock &BB : F)
-    if (auto PN = dyn_cast<PHINode>(&BB.front()))
+    if (auto *PN = dyn_cast<PHINode>(&BB.front()))
       if (PN->getNumIncomingValues() > 1)
         WorkList.push_back(&BB);
 
@@ -515,7 +527,7 @@ static void rewriteMaterializableInstructions(IRBuilder<> &IRB,
 
   // Clone an instruction.
   auto CloneInstruction = [&](Instruction *InsertPt) {
-    auto ClonedInst = cast<Instruction>(CurrentDef)->clone();
+    auto *ClonedInst = cast<Instruction>(CurrentDef)->clone();
     ClonedInst->setName(CurrentDef->getName());
     ClonedInst->insertBefore(InsertPt);
     return ClonedInst;
@@ -538,7 +550,7 @@ static void rewriteMaterializableInstructions(IRBuilder<> &IRB,
           &*CurrentBlock->getFirstInsertionPt());
     }
 
-    if (auto PN = dyn_cast<PHINode>(E.user())) {
+    if (auto *PN = dyn_cast<PHINode>(E.user())) {
       assert(PN->getNumIncomingValues() == 1 && "unexpected number of incoming "
                                                 "values in the PHINode");
       PN->replaceAllUsesWith(CurrentMaterialization);
@@ -552,48 +564,6 @@ static void rewriteMaterializableInstructions(IRBuilder<> &IRB,
       if (U.get() == CurrentDef)
         U.set(CurrentMaterialization);
   }
-}
-
-// Move early uses of spilled variable after CoroBegin.
-// For example, if a parameter had address taken, we may end up with the code
-// like:
-//        define @f(i32 %n) {
-//          %n.addr = alloca i32
-//          store %n, %n.addr
-//          ...
-//          call @coro.begin
-//    we need to move the store after coro.begin
-static void fixupUses(Function &F, SpillInfo const &Spills,
-                      CoroBeginInst *CoroBegin) {
-  DominatorTree DT(F);
-  SmallVector<Instruction *, 8> NeedsMoving;
-
-  Value *CurrentValue = nullptr;
-
-  for (auto const &E : Spills) {
-    if (CurrentValue == E.def())
-      continue;
-
-    CurrentValue = E.def();
-
-    for (User *U : CurrentValue->users()) {
-      Instruction *I = cast<Instruction>(U);
-      if (DT.dominates(I, CoroBegin)) {
-        DEBUG({
-          for (User *UI : I->users())
-            assert(DT.dominates(CoroBegin, cast<Instruction>(UI)) &&
-                   "cannot move instruction"
-                   " since users are not dominated by CoroBegin");
-          dbgs() << "will move: " << *I << "\n";
-        });
-        NeedsMoving.push_back(I);
-      }
-    }
-  }
-
-  auto InsertPt = CoroBegin->getNextNode();
-  for (Instruction *I : NeedsMoving)
-    I->moveBefore(InsertPt);
 }
 
 // Splits the block at a particular instruction unless it is the first
@@ -640,7 +610,7 @@ void coro::buildCoroutineFrame(Function &F, Shape &Shape) {
   for (Instruction &I : instructions(F))
     if (materializable(I))
       for (User *U : I.users())
-        if (Checker.definitionAcrossSuspend(I, U))
+        if (Checker.isDefinitionAcrossSuspend(I, U))
           Spills.emplace_back(&I, U);
 
   // Rewrite materializable instructions to be materialized at the use point.
@@ -652,7 +622,7 @@ void coro::buildCoroutineFrame(Function &F, Shape &Shape) {
   Spills.clear();
   for (Argument &A : F.getArgumentList())
     for (User *U : A.users())
-      if (Checker.definitionAcrossSuspend(A, U))
+      if (Checker.isDefinitionAcrossSuspend(A, U))
         Spills.emplace_back(&A, U);
 
   for (Instruction &I : instructions(F)) {
@@ -667,7 +637,7 @@ void coro::buildCoroutineFrame(Function &F, Shape &Shape) {
       continue;
 
     for (User *U : I.users())
-      if (Checker.definitionAcrossSuspend(I, U)) {
+      if (Checker.isDefinitionAcrossSuspend(I, U)) {
         assert(!materializable(I) &&
                "rewriteMaterializable did not do its job");
         Spills.emplace_back(&I, U);
@@ -675,7 +645,6 @@ void coro::buildCoroutineFrame(Function &F, Shape &Shape) {
   }
   std::sort(Spills.begin(), Spills.end());
   DEBUG(dump("Spills", Spills));
-  fixupUses(F, Spills, Shape.CoroBegin);
 
   Shape.FrameTy = buildFrameType(F, Shape, Spills);
   Shape.FramePtr = insertSpills(Spills, Shape);
