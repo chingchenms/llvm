@@ -64,7 +64,7 @@ static BasicBlock *createResumeEntryBlock(Function &F, coro::Shape &Shape) {
 
   uint32_t SuspendIndex = 0;
   for (auto S : Shape.CoroSuspends) {
-    ConstantInt *IndexVal = Builder.getInt32(SuspendIndex);
+    ConstantInt *IndexVal = Shape.getIndex(SuspendIndex);
 
     // Replace CoroSave with a store to Index:
     //    %index.addr = getelementptr %f.frame... (index field number)

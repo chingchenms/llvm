@@ -71,9 +71,10 @@ struct LLVM_LIBRARY_VISIBILITY Shape {
 
   // Field Indexes for known coroutine frame fields.
   enum {
-    ResumeField = 0,
-    DestroyField = 1,
-    IndexField = 2,
+    ResumeField,
+    DestroyField,
+    IndexField,
+    LastKnownField = IndexField
   };
 
   StructType *FrameTy;
@@ -81,6 +82,14 @@ struct LLVM_LIBRARY_VISIBILITY Shape {
   BasicBlock* AllocaSpillBlock;
   SwitchInst* ResumeSwitch;
   bool HasFinalSuspend;
+
+  IntegerType* getIndexType() const {
+    assert(FrameTy && "frame type not assigned");
+    return cast<IntegerType>(FrameTy->getElementType(IndexField));
+  }
+  ConstantInt *getIndex(uint64_t Value) const {
+    return ConstantInt::get(getIndexType(), Value);
+  }
 
   Shape() = default;
   explicit Shape(Function &F) { buildFrom(F); }
