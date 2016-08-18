@@ -313,7 +313,8 @@ static StructType *buildFrameType(Function &F, coro::Shape &Shape,
 
   unsigned IndexBits = std::max(3U, Log2_64_Ceil(Shape.CoroSuspends.size()));
 
-  SmallVector<Type *, 8> Types{FnPtrTy, FnPtrTy, Type::getIntNTy(C, IndexBits)};
+  SmallVector<Type *, 8> Types{FnPtrTy, FnPtrTy, Type::getIntNTy(C, IndexBits),
+                               Type::getInt1Ty(C)};
   Value *CurrentDef = nullptr;
 
   // Create an entry for every spilled value.

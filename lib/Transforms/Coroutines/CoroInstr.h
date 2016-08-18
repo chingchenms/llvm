@@ -11,7 +11,7 @@
 // allows you to do things like:
 //
 //     if (auto *SF = dyn_cast<CoroSubFnInst>(Inst))
-//        ... SF->getFrame() ... 
+//        ... SF->getFrame() ...
 //
 // All intrinsic function calls are instances of the call instruction, so these
 // are all subclasses of the CallInst class.  Note that none of these classes
@@ -78,6 +78,19 @@ public:
 class LLVM_LIBRARY_VISIBILITY CoroIdInst : public IntrinsicInst {
   enum { AlignArg, PromiseArg, InfoArg };
 public:
+  CoroAllocInst *getAlloc() {
+    for (User *U : users())
+      if (auto *CA = dyn_cast<CoroAllocInst>(U))
+        return CA;
+    return nullptr;
+  }
+
+  Value *getNeedDynAllocValue() {
+    if (CoroAllocInst *CA = getAlloc())
+      return CA;
+    return ConstantInt::getTrue(getContext());
+  }
+
   // Info argument of coro.id is
   //   fresh out of the frontend: null ;
   //   outlined                 : {Init, Return, Susp1, Susp2, ...} ;

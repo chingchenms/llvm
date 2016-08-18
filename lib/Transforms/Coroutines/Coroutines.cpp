@@ -171,6 +171,7 @@ static void clear(coro::Shape &Shape) {
   Shape.CoroBegin = nullptr;
   Shape.CoroEnds.clear();
   Shape.CoroSizes.clear();
+  Shape.CoroFrees.clear();
   Shape.CoroSuspends.clear();
 
   Shape.FrameTy = nullptr;
@@ -202,6 +203,9 @@ void coro::Shape::buildFrom(Function &F) {
         continue;
       case Intrinsic::coro_size:
         CoroSizes.push_back(cast<CoroSizeInst>(II));
+        break;
+      case Intrinsic::coro_free:
+        CoroFrees.push_back(cast<CoroFreeInst>(II));
         break;
       case Intrinsic::coro_frame:
         CoroFrames.push_back(cast<CoroFrameInst>(II));

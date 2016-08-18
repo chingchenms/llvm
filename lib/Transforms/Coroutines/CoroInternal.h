@@ -67,6 +67,7 @@ struct LLVM_LIBRARY_VISIBILITY Shape {
   CoroBeginInst *CoroBegin;
   SmallVector<CoroEndInst *, 4> CoroEnds;
   SmallVector<CoroSizeInst *, 2> CoroSizes;
+  SmallVector<CoroFreeInst *, 2> CoroFrees;
   SmallVector<CoroSuspendInst *, 4> CoroSuspends;
 
   // Field Indexes for known coroutine frame fields.
@@ -74,7 +75,8 @@ struct LLVM_LIBRARY_VISIBILITY Shape {
     ResumeField,
     DestroyField,
     IndexField,
-    LastKnownField = IndexField
+    ElideField,
+    LastKnownField = ElideField
   };
 
   StructType *FrameTy;

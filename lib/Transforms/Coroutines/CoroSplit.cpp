@@ -297,12 +297,38 @@ static void postSplitCleanup(Function &F) {
   FPM.doFinalization();
 }
 
+static void createNeedDynAlloc(coro::Shape& Shape) {
+  IRBuilder<> Builder(Shape.FramePtr->getNextNode());
+  auto *Gep = Builder.CreateConstInBoundsGEP2_32(Shape.FrameTy, Shape.FramePtr,
+                                                 0, coro::Shape::ElideField,
+                                                 "need.dyn.alloc");
+  Builder.CreateStore(Shape.CoroBegin->getId()->getNeedDynAllocValue(), Gep);
+}
+static void replaceCoroFree(coro::Shape& Shape) {
+  LLVMContext &C = Shape.CoroBegin->getContext();
+  IRBuilder<> Builder(C);
+  auto *Null = ConstantPointerNull::get(Type::getInt8PtrTy(C));
+
+  for (CoroFreeInst *CF : Shape.CoroFrees) {
+    Builder.SetInsertPoint(CF);
+    auto *Gep = Builder.CreateConstInBoundsGEP2_32(
+        Shape.FrameTy, Shape.FramePtr, 0, coro::Shape::ElideField,
+        "need.dyn.alloc");
+    auto *Value = Builder.CreateLoad(Gep);
+    auto *Select = Builder.CreateSelect(Value, CF->getArgOperand(0), Null);
+    CF->replaceAllUsesWith(Select);
+    CF->eraseFromParent();
+  }
+}
+
 static void splitCoroutine(Function &F, CallGraph &CG, CallGraphSCC &SCC) {
   coro::Shape Shape(F);
   if (!Shape.CoroBegin)
     return;
 
   buildCoroutineFrame(F, Shape);
+  createNeedDynAlloc(Shape);
+  replaceCoroFree(Shape);
 
   auto *ResumeEntry = createResumeEntryBlock(F, Shape);
   auto *ResumeClone = createClone(F, ".resume", Shape, ResumeEntry, 0);
