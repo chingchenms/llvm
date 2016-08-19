@@ -26,10 +26,11 @@ namespace {
 // Created on demand if CoroEarly pass has work to do.
 class Lowerer : public coro::LowererBase {
   IRBuilder<> Builder;
-  PointerType *AnyResumeFnPtrTy;
+  PointerType* const AnyResumeFnPtrTy;
 
   void lowerResumeOrDestroy(CallSite CS, CoroSubFnInst::ResumeKind);
   void lowerCoroPromise(CoroPromiseInst *Intrin);
+  void lowerCoroDone(IntrinsicInst* II);
 
 public:
   Lowerer(Module &M)
@@ -81,6 +82,24 @@ void Lowerer::lowerCoroPromise(CoroPromiseInst *Intrin) {
   Intrin->eraseFromParent();
 }
 
+
+void Lowerer::lowerCoroDone(IntrinsicInst* II) {
+  Value *Operand = II->getArgOperand(0);
+
+  auto *FrameTy = Int8Ptr;
+  PointerType* FramePtrTy = FrameTy->getPointerTo();
+
+  Builder.SetInsertPoint(II);
+  auto *BCI = Builder.CreateBitCast(Operand, FramePtrTy);
+  auto *Gep = Builder.CreateConstInBoundsGEP1_32(FrameTy, BCI, 0);
+  auto *Load = Builder.CreateLoad(Gep);
+  auto *Cond = Builder.CreateICmpEQ(Load, NullPtr);
+
+  II->replaceAllUsesWith(Cond);
+  II->eraseFromParent();
+}
+
+
 // Prior to CoroSplit, calls to coro.begin needs to be marked as NoDuplicate,
 // as CoroSplit assumes there is exactly one coro.begin. After CoroSplit,
 // NoDuplicate attribute will be removed from coro.begin otherwise, it will
@@ -130,6 +149,9 @@ bool Lowerer::lowerEarlyIntrinsics(Function &F) {
         break;
       case Intrinsic::coro_promise:
         lowerCoroPromise(cast<CoroPromiseInst>(&I));
+        break;
+      case Intrinsic::coro_done:
+        lowerCoroDone(cast<IntrinsicInst>(&I));
         break;
       }
       Changed = true;
