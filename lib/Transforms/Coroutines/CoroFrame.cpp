@@ -438,6 +438,16 @@ static Instruction *insertSpills(SpillInfo &Spills, coro::Shape &Shape) {
       CurrentReload = CreateReload(&*CurrentBlock->getFirstInsertionPt());
     }
 
+    // If we have a single edge PHI Node, remove it and replace it with the
+    // reload.
+    if (auto *PN = dyn_cast<PHINode>(E.user())) {
+      assert(PN->getNumIncomingValues() == 1 && "unexpected number of incoming "
+        "values in the PHINode");
+      PN->replaceAllUsesWith(CurrentReload);
+      PN->eraseFromParent();
+      continue;
+    }
+
     // Replace all uses of CurrentValue in the current instruction with reload.
     E.user()->replaceUsesOfWith(CurrentValue, CurrentReload);
   }
