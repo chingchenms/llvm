@@ -15,6 +15,7 @@
 #include "llvm/IR/CallSite.h"
 #include "llvm/IR/InstIterator.h"
 #include "llvm/IR/Module.h"
+#include "llvm/IR/IRBuilder.h"
 #include "llvm/Pass.h"
 
 using namespace llvm;
@@ -24,10 +25,17 @@ using namespace llvm;
 namespace {
 // Created on demand if CoroEarly pass has work to do.
 class Lowerer : public coro::LowererBase {
+  PointerType* AnyResumeFnPtrTy;
+
   void lowerResumeOrDestroy(CallSite CS, CoroSubFnInst::ResumeKind);
+  void lowerCoroPromise(CoroPromiseInst *Intrin);
 
 public:
-  Lowerer(Module &M) : LowererBase(M) {}
+  Lowerer(Module &M)
+      : LowererBase(M),
+        AnyResumeFnPtrTy(FunctionType::get(Type::getVoidTy(Context), Int8Ptr,
+                                           /*isVarArg=*/false)
+                             ->getPointerTo()) {}
   bool lowerEarlyIntrinsics(Function &F);
 };
 }
@@ -42,6 +50,28 @@ void Lowerer::lowerResumeOrDestroy(CallSite CS,
       makeSubFnCall(CS.getArgOperand(0), Index, CS.getInstruction());
   CS.setCalledFunction(ResumeAddr);
   CS.setCallingConv(CallingConv::Fast);
+}
+
+void Lowerer::lowerCoroPromise(CoroPromiseInst *Intrin) {
+  Value *Operand = Intrin->getArgOperand(0);
+  int64_t Alignement = Intrin->getAlignment();
+  Type* Int8Ty = Type::getInt8Ty(Context);
+
+  auto SampleStruct =
+      StructType::get(Context, {AnyResumeFnPtrTy, AnyResumeFnPtrTy, Int8Ty});
+  const DataLayout &DL = TheModule.getDataLayout();
+  int64_t Offset = alignTo(
+    DL.getStructLayout(SampleStruct)->getElementOffset(2), Alignement);
+  if (Intrin->isFromPromise())
+    Offset = -Offset;
+
+  IRBuilder<> Builder(Context);
+  Builder.SetInsertPoint(Intrin);
+  Value *Replacement = Builder.CreateConstInBoundsGEP1_32(
+      Int8Ty, Operand, Offset);
+
+  Intrin->replaceAllUsesWith(Replacement);
+  Intrin->eraseFromParent();
 }
 
 // Prior to CoroSplit, calls to coro.begin needs to be marked as NoDuplicate,
@@ -90,6 +120,9 @@ bool Lowerer::lowerEarlyIntrinsics(Function &F) {
         break;
       case Intrinsic::coro_destroy:
         lowerResumeOrDestroy(CS, CoroSubFnInst::DestroyIndex);
+        break;
+      case Intrinsic::coro_promise:
+        lowerCoroPromise(cast<CoroPromiseInst>(&I));
         break;
       }
       Changed = true;

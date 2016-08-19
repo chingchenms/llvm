@@ -79,7 +79,7 @@ class LLVM_LIBRARY_VISIBILITY CoroIdInst : public IntrinsicInst {
   enum { AlignArg, PromiseArg, CoroutineArg, InfoArg };
 
 public:
-  CoroAllocInst *getAlloc() {
+  CoroAllocInst *getCoroAlloc() {
     for (User *U : users())
       if (auto *CA = dyn_cast<CoroAllocInst>(U))
         return CA;
@@ -87,9 +87,41 @@ public:
   }
 
   Value *getNeedDynAllocValue() {
-    if (CoroAllocInst *CA = getAlloc())
+    if (CoroAllocInst *CA = getCoroAlloc())
       return CA;
     return ConstantInt::getTrue(getContext());
+  }
+
+  AllocaInst *getPromise() const {
+    Value* Arg = getArgOperand(PromiseArg);
+    return isa<ConstantPointerNull>(Arg)
+      ? nullptr
+      : cast<AllocaInst>(Arg->stripPointerCasts());
+  }
+
+  IntrinsicInst *getCoroBegin() {
+    for (User *U : users())
+      if (auto *II = dyn_cast<IntrinsicInst>(U))
+        if (II->getIntrinsicID() == Intrinsic::coro_begin)
+          return II;
+    llvm_unreachable("no coro.begin associated with coro.id");
+  }
+
+  void clearPromise() {
+    Value* Arg = getArgOperand(PromiseArg);
+    setArgOperand(PromiseArg,
+      ConstantPointerNull::get(Type::getInt8PtrTy(getContext())));
+    if (isa<AllocaInst>(Arg))
+      return;
+    assert((isa<BitCastInst>(Arg) || isa<GetElementPtrInst>(Arg)) &&
+      "unexpected instruction designating the promise");
+    auto Inst = cast<Instruction>(Arg);
+    if (Inst->use_empty()) {
+      Inst->eraseFromParent();
+      return;
+    }
+    else
+      Inst->moveBefore(getCoroBegin()->getNextNode());
   }
 
   // Info argument of coro.id is
@@ -203,6 +235,27 @@ public:
     return isa<IntrinsicInst>(V) && classof(cast<IntrinsicInst>(V));
   }
 };
+
+/// This represents the llvm.coro.done instruction.
+class LLVM_LIBRARY_VISIBILITY CoroPromiseInst : public IntrinsicInst {
+  enum { FrameArg, AlignArg, FromArg };
+public:
+  bool isFromPromise() const {
+    return cast<Constant>(getArgOperand(FromArg))->isOneValue();
+  }
+  int64_t getAlignment() const {
+    return cast<ConstantInt>(getArgOperand(AlignArg))->getSExtValue();
+  }
+
+  // Methods to support type inquiry through isa, cast, and dyn_cast:
+  static inline bool classof(const IntrinsicInst *I) {
+    return I->getIntrinsicID() == Intrinsic::coro_promise;
+  }
+  static inline bool classof(const Value *V) {
+    return isa<IntrinsicInst>(V) && classof(cast<IntrinsicInst>(V));
+  }
+};
+
 
 /// This represents the llvm.coro.suspend instruction.
 class LLVM_LIBRARY_VISIBILITY CoroSuspendInst : public IntrinsicInst {

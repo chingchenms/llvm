@@ -74,6 +74,7 @@ struct LLVM_LIBRARY_VISIBILITY Shape {
   enum {
     ResumeField,
     DestroyField,
+    PromiseField,
     IndexField,
     ElideField,
     LastKnownField = ElideField
@@ -83,6 +84,7 @@ struct LLVM_LIBRARY_VISIBILITY Shape {
   Instruction *FramePtr;
   BasicBlock* AllocaSpillBlock;
   SwitchInst* ResumeSwitch;
+  AllocaInst* PromiseAlloca;
   bool HasFinalSuspend;
 
   IntegerType* getIndexType() const {
