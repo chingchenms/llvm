@@ -1,9 +1,9 @@
 ; Third example from Doc/Coroutines.rst (two suspend points)
-; RUN: opt < %s -O3 -S | FileCheck %s
+; RUN: opt < %s -O2 -enable-coroutines -S | FileCheck %s
 
 define i8* @f(i32 %n) {
 entry:
-  %id = call token @llvm.coro.id(i32 0, i8* null, i8* null)
+  %id = call token @llvm.coro.id(i32 0, i8* null, i8* null, i8* null)
   %size = call i32 @llvm.coro.size.i32()
   %alloc = call i8* @malloc(i32 %size)
   %hdl = call noalias i8* @llvm.coro.begin(token %id, i8* %alloc)
@@ -30,9 +30,7 @@ suspend:
   ret i8* %hdl
 }
 
-; CHECK: %f.Frame = type { void (%f.Frame*)*, void (%f.Frame*)*, i1, i32 }
-
-; CHECK-LABEL: @main
+; CHECK-LABEL: @main(
 define i32 @main() {
 entry:
   %hdl = call i8* @f(i32 4)
@@ -50,7 +48,7 @@ declare i8* @malloc(i32)
 declare void @free(i8*)
 declare void @print(i32)
 
-declare token @llvm.coro.id(i32, i8*, i8*)
+declare token @llvm.coro.id(i32, i8*, i8*, i8*)
 declare i1 @llvm.coro.alloc(token)
 declare i32 @llvm.coro.size.i32()
 declare i8* @llvm.coro.begin(token, i8*)
