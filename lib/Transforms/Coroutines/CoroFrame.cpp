@@ -567,6 +567,48 @@ static void rewriteMaterializableInstructions(IRBuilder<> &IRB,
   }
 }
 
+// Move early uses of spilled variable after CoroBegin.
+// For example, if a parameter had address taken, we may end up with the code
+// like:
+//        define @f(i32 %n) {
+//          %n.addr = alloca i32
+//          store %n, %n.addr
+//          ...
+//          call @coro.begin
+//    we need to move the store after coro.begin
+static void fixupUses(Function &F, SpillInfo const &Spills,
+                      CoroBeginInst *CoroBegin) {
+  DominatorTree DT(F);
+  SmallVector<Instruction *, 8> NeedsMoving;
+
+  Value *CurrentValue = nullptr;
+
+  for (auto const &E : Spills) {
+    if (CurrentValue == E.def())
+      continue;
+
+    CurrentValue = E.def();
+
+    for (User *U : CurrentValue->users()) {
+      Instruction *I = cast<Instruction>(U);
+      if (DT.dominates(I, CoroBegin)) {
+        DEBUG({
+          for (User *UI : I->users())
+            assert(DT.dominates(CoroBegin, cast<Instruction>(UI)) &&
+                   "cannot move instruction"
+                   " since users are not dominated by CoroBegin");
+          dbgs() << "will move: " << *I << "\n";
+        });
+        NeedsMoving.push_back(I);
+      }
+    }
+  }
+
+  auto *InsertPt = CoroBegin->getNextNode();
+  for (Instruction *I : NeedsMoving)
+    I->moveBefore(InsertPt);
+}
+
 // Splits the block at a particular instruction unless it is the first
 // instruction in the block with a single predecessor.
 static BasicBlock *splitBlockIfNotFirst(Instruction *I, const Twine &Name) {
@@ -655,7 +697,7 @@ void coro::buildCoroutineFrame(Function &F, Shape &Shape) {
   }
   std::sort(Spills.begin(), Spills.end());
   DEBUG(dump("Spills", Spills));
-
+  fixupUses(F, Spills, Shape.CoroBegin);
   Shape.FrameTy = buildFrameType(F, Shape, Spills);
   Shape.FramePtr = insertSpills(Spills, Shape);
 }
