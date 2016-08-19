@@ -181,6 +181,30 @@ bool Lowerer::processCoroId(CoroIdInst *CoroId, AAResults &AA) {
         }
   }
 
+  // If we don't have anything to devirtualize, replace coro.alloc with 'true',
+  // since we won't be able to heap elide anything.
+  if (DestroyAddr.empty() && ResumeAddr.empty()) {
+    if (CoroAllocs.empty() && CoroBegins.empty())
+      return false;
+
+    // If it is the coroutine itself, don't touch it.
+    if (CoroId->getCoroutine() == CoroId->getFunction())
+      return false;
+
+    auto *True = ConstantInt::getTrue(Context);
+    for (CoroAllocInst* CA : CoroAllocs) {
+      CA->replaceAllUsesWith(True);
+      CA->eraseFromParent();
+    }
+
+    for (CoroBeginInst* CB : CoroBegins) {
+      CB->replaceAllUsesWith(CB->getMem());
+      CB->eraseFromParent();
+    }
+    return true;
+  }
+
+
   // PostSplit coro.id refers to an array of subfunctions in its Info
   // argument.
   ConstantArray *Resumers = CoroId->getInfo().Resumers;

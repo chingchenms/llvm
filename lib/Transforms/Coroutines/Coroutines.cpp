@@ -290,5 +290,5 @@ void coro::Shape::buildFrom(Function &F) {
   // Canonicalize coro.suspend by inserting a coro.save if needed.
   for (CoroSuspendInst *CS : CoroSuspends)
     if (!CS->getCoroSave())
-      createCoroSave(CoroBegin, CoroSuspends.back());
+      createCoroSave(CoroBegin, CS);
 }
