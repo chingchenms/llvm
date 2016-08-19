@@ -76,7 +76,8 @@ public:
 
 /// This represents the llvm.coro.alloc instruction.
 class LLVM_LIBRARY_VISIBILITY CoroIdInst : public IntrinsicInst {
-  enum { AlignArg, PromiseArg, InfoArg };
+  enum { AlignArg, PromiseArg, CoroutineArg, InfoArg };
+
 public:
   // Info argument of coro.id is
   //   fresh out of the frontend: null ;
@@ -118,6 +119,14 @@ public:
 
   void setInfo(Constant *C) { setArgOperand(InfoArg, C); }
 
+  Function *getCoroutine() const {
+    return cast<Function>(getArgOperand(CoroutineArg)->stripPointerCasts());
+  }
+  void setCoroutineSelf() {
+    auto *const Int8PtrTy = Type::getInt8PtrTy(getContext());
+    setArgOperand(CoroutineArg,
+                  ConstantExpr::getBitCast(getFunction(), Int8PtrTy));
+  }
 
   // Methods to support type inquiry through isa, cast, and dyn_cast:
   static inline bool classof(const IntrinsicInst *I) {
@@ -157,9 +166,7 @@ class LLVM_LIBRARY_VISIBILITY CoroBeginInst : public IntrinsicInst {
   enum { IdArg, MemArg };
 
 public:
-  CoroIdInst *getId() const {
-    return cast<CoroIdInst>(getArgOperand(IdArg));
-  }
+  CoroIdInst *getId() const { return cast<CoroIdInst>(getArgOperand(IdArg)); }
 
   Value *getMem() const { return getArgOperand(MemArg); }
 
