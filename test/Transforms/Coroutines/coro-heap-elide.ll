@@ -23,6 +23,7 @@ declare void @CustomFree(i8*)
 define i8* @f() personality i8* null {
 entry:
   %id = call token @llvm.coro.id(i32 0, i8* null,
+                      i8* bitcast (i8*()* @f to i8*),
                       i8* bitcast ([2 x void (%f.frame*)*]* @f.resumers to i8*))
   %need.dyn.alloc = call i1 @llvm.coro.alloc(token %id)
   br i1 %need.dyn.alloc, label %dyn.alloc, label %coro.begin
@@ -62,7 +63,7 @@ entry:
 ; CHECK-NOT: tail call void @bar(
 ; CHECK: call void @bar(
   tail call void @bar(i8* %hdl)
-; CHECK: tail call void @bar(  
+; CHECK: tail call void @bar(
   tail call void @bar(i8* null)
 
 ; CHECK-NEXT: call fastcc void bitcast (void (%f.frame*)* @f.resume to void (i8*)*)(i8* %vFrame)
@@ -84,6 +85,7 @@ entry:
 define i8* @f_no_elision() personality i8* null {
 entry:
   %id = call token @llvm.coro.id(i32 0, i8* null,
+                      i8* bitcast (i8*()* @f_no_elision to i8*),
                       i8* bitcast ([2 x void (%f.frame*)*]* @f.resumers to i8*))
   %alloc = call i8* @CustomAlloc(i32 4)
   %hdl = call i8* @llvm.coro.begin(token %id, i8* %alloc)
@@ -116,7 +118,7 @@ entry:
   ret void
 }
 
-declare token @llvm.coro.id(i32, i8*, i8*)
+declare token @llvm.coro.id(i32, i8*, i8*, i8*)
 declare i1 @llvm.coro.alloc(token)
 declare i8* @llvm.coro.free(i8*)
 declare i8* @llvm.coro.begin(token, i8*)
