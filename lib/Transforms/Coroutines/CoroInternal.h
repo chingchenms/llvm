@@ -46,6 +46,7 @@ namespace coro {
 bool declaresIntrinsics(Module &M, std::initializer_list<StringRef>);
 void replaceAllCoroAllocs(CoroBeginInst *CB, bool Replacement);
 void replaceAllCoroFrees(CoroBeginInst *CB, Value *Replacement);
+void replaceCoroFree(CoroIdInst *CoroId, bool Elide);
 void updateCallGraph(Function &Caller, ArrayRef<Function *> Funcs,
                      CallGraph &CG, CallGraphSCC &SCC);
 

@@ -22,7 +22,7 @@ resume:
   br label %cleanup
 
 cleanup:
-  %mem = call i8* @llvm.coro.free(i8* %hdl)
+  %mem = call i8* @llvm.coro.free(token %id, i8* %hdl)
   call void @free(i8* %mem)
   br label %suspend
 suspend:
@@ -40,7 +40,7 @@ entry:
 ; CHECK:      ret i32 0
 }
 
-declare i8* @llvm.coro.free(i8*)
+declare i8* @llvm.coro.free(token, i8*)
 declare i32 @llvm.coro.size.i32()
 declare i8  @llvm.coro.suspend(token, i1)
 declare void @llvm.coro.resume(i8*)

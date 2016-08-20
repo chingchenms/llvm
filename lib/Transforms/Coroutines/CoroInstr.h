@@ -37,6 +37,7 @@ public:
     RestartTrigger = -1,
     ResumeIndex,
     DestroyIndex,
+    CleanupIndex,
     IndexLast,
     IndexFirst = RestartTrigger
   };
@@ -151,7 +152,10 @@ public:
 
 /// This represents the llvm.coro.free instruction.
 class LLVM_LIBRARY_VISIBILITY CoroFreeInst : public IntrinsicInst {
+  enum { IdArg, FrameArg };
 public:
+  Value *getFrame() const { return getArgOperand(FrameArg); }
+
   // Methods to support type inquiry through isa, cast, and dyn_cast:
   static inline bool classof(const IntrinsicInst *I) {
     return I->getIntrinsicID() == Intrinsic::coro_free;

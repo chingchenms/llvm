@@ -14,6 +14,8 @@
 #include "CoroInternal.h"
 #include "llvm/Analysis/AliasAnalysis.h"
 #include "llvm/Analysis/InstructionSimplify.h"
+#include "llvm/Analysis/PostDominators.h"
+#include "llvm/IR/Dominators.h"
 #include "llvm/IR/InstIterator.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/ErrorHandling.h"
@@ -35,7 +37,10 @@ struct Lowerer : coro::LowererBase {
   Lowerer(Module &M) : LowererBase(M) {}
 
   void elideHeapAllocations(Function *F, Type *FrameTy, AAResults &AA);
-  bool processCoroId(CoroIdInst *, AAResults &AA);
+  bool shouldElide(Function *F, DominatorTree &DT,
+                   PostDominatorTree &PDT) const;
+  bool processCoroId(CoroIdInst *, AAResults &AA, DominatorTree &DT,
+                     PostDominatorTree &PDT);
 };
 } // end anonymous namespace
 
@@ -122,14 +127,6 @@ void Lowerer::elideHeapAllocations(Function *F, Type *FrameTy, AAResults &AA) {
     CA->eraseFromParent();
   }
 
-  // To suppress deallocation code, we replace all llvm.coro.free intrinsics
-  // associated with this coro.begin with null constant.
-  auto *NullPtr = ConstantPointerNull::get(Type::getInt8PtrTy(C));
-  for (auto *CF : CoroFrees) {
-    CF->replaceAllUsesWith(NullPtr);
-    CF->eraseFromParent();
-  }
-
   // FIXME: Design how to transmit alignment information for every alloca that
   // is spilled into the coroutine frame and recreate the alignment information
   // here. Possibly we will need to do a mini SROA here and break the coroutine
@@ -148,9 +145,63 @@ void Lowerer::elideHeapAllocations(Function *F, Type *FrameTy, AAResults &AA) {
   removeTailCallAttribute(Frame, AA);
 }
 
-bool Lowerer::processCoroId(CoroIdInst *CoroId, AAResults &AA) {
+static bool isInternalToFunction(TerminatorInst* T) {
+  if (isa<ReturnInst>(T) || isa<ResumeInst>(T))
+    return false;
+
+  if (auto *CR = dyn_cast<CleanupReturnInst>(T))
+    return !CR->unwindsToCaller();
+  if (auto *CS = dyn_cast<CatchSwitchInst>(T))
+    return !CS->unwindsToCaller();
+
+  return true;
+}
+
+// Check that on every code pass leaving the function dominated by a coro.begin,
+// there is either a coro.free or coro.destroy postdominating a coro.begin.
+bool Lowerer::shouldElide(Function *F, DominatorTree &DT,
+                          PostDominatorTree &PDT) const {
+  // If no CoroAllocs, we cannot suppress allocation, so elision is not
+  // possible.
+  if (CoroAllocs.empty())
+    return false;
+
+  for (BasicBlock& BB : *F) {
+    auto *T = BB.getTerminator();
+    if (isInternalToFunction(T))
+      continue;
+
+    for (CoroBeginInst *CB : CoroBegins) {
+      if (DT.dominates(CB, T)) {
+        bool PostDominated = false;
+        for (CoroFreeInst *CF: CoroFrees) {
+          if (PDT.dominates(&BB, CF->getParent())) {
+            PostDominated = true;
+            break;
+          }
+        }
+        if (PostDominated)
+          continue;
+
+        for (CoroSubFnInst *SF : DestroyAddr) {
+          if (PDT.dominates(&BB, SF->getParent())) {
+            PostDominated = true;
+            break;
+          }
+        }
+        if (!PostDominated)
+          return false;
+      }
+    }
+  }
+  return true;
+}
+
+bool Lowerer::processCoroId(CoroIdInst *CoroId, AAResults &AA,
+                            DominatorTree &DT, PostDominatorTree &PDT) {
   CoroBegins.clear();
   CoroAllocs.clear();
+  CoroFrees.clear();
   ResumeAddr.clear();
   DestroyAddr.clear();
 
@@ -160,6 +211,8 @@ bool Lowerer::processCoroId(CoroIdInst *CoroId, AAResults &AA) {
       CoroBegins.push_back(CB);
     else if (auto *CA = dyn_cast<CoroAllocInst>(U))
       CoroAllocs.push_back(CA);
+    else if (auto *CF = dyn_cast<CoroFreeInst>(U))
+      CoroFrees.push_back(CF);
   }
 
   // Collect all coro.subfn.addrs associated with coro.begin.
@@ -191,27 +244,33 @@ bool Lowerer::processCoroId(CoroIdInst *CoroId, AAResults &AA) {
 
   replaceWithConstant(ResumeAddrConstant, ResumeAddr);
 
-  if (DestroyAddr.empty())
-    return true;
+  bool ShouldElide = shouldElide(CoroId->getFunction(), DT, PDT);
 
-  auto *DestroyAddrConstant =
-      ConstantExpr::getExtractValue(Resumers, CoroSubFnInst::DestroyIndex);
+  auto *DestroyAddrConstant = ConstantExpr::getExtractValue(
+      Resumers,
+      ShouldElide ? CoroSubFnInst::CleanupIndex : CoroSubFnInst::DestroyIndex);
 
   replaceWithConstant(DestroyAddrConstant, DestroyAddr);
 
-  // If there is a coro.alloc that llvm.coro.id refers to, we have the ability
-  // to suppress dynamic allocation.
-  if (!CoroAllocs.empty()) {
-    // FIXME: The check above is overly lax. It only checks for whether we have
-    // an ability to elide heap allocations, not whether it is safe to do so.
-    // We need to do something like:
-    // If for every exit from the function where coro.begin is
-    // live, there is a coro.free or coro.destroy dominating that exit block,
-    // then it is safe to elide heap allocation, since the lifetime of coroutine
-    // is fully enclosed in its caller.
+  coro::replaceCoroFree(CoroId, ShouldElide);
+
+  if (ShouldElide) {
     auto *FrameTy = getFrameType(cast<Function>(ResumeAddrConstant));
     elideHeapAllocations(CoroId->getFunction(), FrameTy, AA);
   }
+  else {
+    auto *True = ConstantInt::getTrue(Context);
+    for (CoroAllocInst* CA : CoroAllocs) {
+      CA->replaceAllUsesWith(True);
+      CA->eraseFromParent();
+    }
+
+    for (CoroBeginInst* CB : CoroBegins) {
+      CB->replaceAllUsesWith(CB->getMem());
+      CB->eraseFromParent();
+    }
+  }
+
   return true;
 }
 
@@ -262,28 +321,33 @@ struct CoroElide : FunctionPass {
       Changed = replaceDevirtTrigger(F);
 
     L->CoroIds.clear();
-    L->CoroFrees.clear();
 
-    // Collect all PostSplit coro.ids and all coro.free.
+    // Collect all PostSplit coro.ids.
     for (auto &I : instructions(F))
-      if (auto *CF = dyn_cast<CoroFreeInst>(&I))
-        L->CoroFrees.push_back(CF);
-      else if (auto *CII = dyn_cast<CoroIdInst>(&I))
+      if (auto *CII = dyn_cast<CoroIdInst>(&I))
         if (CII->getInfo().isPostSplit())
-          L->CoroIds.push_back(CII);
+          // If it is the coroutine itself, don't touch it.
+          if (CII->getCoroutine() != CII->getFunction())
+            L->CoroIds.push_back(CII);
 
     // If we did not find any coro.id, there is nothing to do.
     if (L->CoroIds.empty())
       return Changed;
 
     AAResults &AA = getAnalysis<AAResultsWrapperPass>().getAAResults();
+    DominatorTree &DT = getAnalysis<DominatorTreeWrapperPass>().getDomTree();
+    PostDominatorTree &PDT =
+        getAnalysis<PostDominatorTreeWrapperPass>().getPostDomTree();
+
     for (auto *CII : L->CoroIds)
-      Changed |= L->processCoroId(CII, AA);
+      Changed |= L->processCoroId(CII, AA, DT, PDT);
 
     return Changed;
   }
   void getAnalysisUsage(AnalysisUsage &AU) const override {
     AU.addRequired<AAResultsWrapperPass>();
+    AU.addRequired<DominatorTreeWrapperPass>();
+    AU.addRequired<PostDominatorTreeWrapperPass>();
     AU.setPreservesCFG();
   }
 };
@@ -295,6 +359,8 @@ INITIALIZE_PASS_BEGIN(
     "Coroutine frame allocation elision and indirect calls replacement", false,
     false)
 INITIALIZE_PASS_DEPENDENCY(AAResultsWrapperPass)
+INITIALIZE_PASS_DEPENDENCY(DominatorTreeWrapperPass)
+INITIALIZE_PASS_DEPENDENCY(PostDominatorTreeWrapperPass)
 INITIALIZE_PASS_END(
     CoroElide, "coro-elide",
     "Coroutine frame allocation elision and indirect calls replacement", false,
