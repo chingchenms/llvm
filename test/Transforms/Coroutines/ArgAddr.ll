@@ -27,7 +27,7 @@ for.cond:
   ]
 
 coro_Cleanup:
-  %5 = call i8* @llvm.coro.free(i8* nonnull %1)
+  %5 = call i8* @llvm.coro.free(token %id, i8* nonnull %1)
   call void @free(i8* %5)
   br label %coro_Suspend
 
@@ -60,7 +60,7 @@ declare token @llvm.coro.id(i32, i8*, i8*, i8*)
 declare i32 @llvm.coro.size.i32()
 declare i8* @llvm.coro.begin(token, i8*)
 declare i8 @llvm.coro.suspend(token, i1)
-declare i8* @llvm.coro.free(i8*)
+declare i8* @llvm.coro.free(token, i8*)
 declare void @llvm.coro.end(i8*, i1)
 
 declare void @llvm.coro.resume(i8*)
