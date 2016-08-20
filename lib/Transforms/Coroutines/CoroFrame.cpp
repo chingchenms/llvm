@@ -615,6 +615,8 @@ void coro::buildCoroutineFrame(Function &F, Shape &Shape) {
     // frame.
     if (isa<CoroBeginInst>(&I))
       continue;
+    if (isa<CoroIdInst>(&I))
+      continue;
 
     for (User *U : I.users())
       if (Checker.isDefinitionAcrossSuspend(I, U)) {
