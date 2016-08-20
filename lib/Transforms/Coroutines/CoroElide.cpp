@@ -283,7 +283,7 @@ struct CoroElide : FunctionPass {
       if (auto *CII = dyn_cast<CoroIdInst>(&I))
         if (CII->getInfo().isPostSplit())
           // If it is the coroutine itself, don't touch it.
-          if (CII->getCoroutine() != CII->getFunction())
+          //if (CII->getCoroutine() != CII->getFunction())
             L->CoroIds.push_back(CII);
 
     // If we did not find any coro.id, there is nothing to do.
