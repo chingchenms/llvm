@@ -252,23 +252,10 @@ bool Lowerer::processCoroId(CoroIdInst *CoroId, AAResults &AA,
 
   replaceWithConstant(DestroyAddrConstant, DestroyAddr);
 
-  coro::replaceCoroFree(CoroId, ShouldElide);
-
   if (ShouldElide) {
     auto *FrameTy = getFrameType(cast<Function>(ResumeAddrConstant));
     elideHeapAllocations(CoroId->getFunction(), FrameTy, AA);
-  }
-  else {
-    auto *True = ConstantInt::getTrue(Context);
-    for (CoroAllocInst* CA : CoroAllocs) {
-      CA->replaceAllUsesWith(True);
-      CA->eraseFromParent();
-    }
-
-    for (CoroBeginInst* CB : CoroBegins) {
-      CB->replaceAllUsesWith(CB->getMem());
-      CB->eraseFromParent();
-    }
+    coro::replaceCoroFree(CoroId, /*Elide=*/true);
   }
 
   return true;
@@ -327,7 +314,7 @@ struct CoroElide : FunctionPass {
       if (auto *CII = dyn_cast<CoroIdInst>(&I))
         if (CII->getInfo().isPostSplit())
           // If it is the coroutine itself, don't touch it.
-          if (CII->getCoroutine() != CII->getFunction())
+          //if (CII->getCoroutine() != CII->getFunction())
             L->CoroIds.push_back(CII);
 
     // If we did not find any coro.id, there is nothing to do.
