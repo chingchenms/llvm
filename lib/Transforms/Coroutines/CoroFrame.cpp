@@ -30,7 +30,7 @@
 using namespace llvm;
 
 // The "coro-suspend-crossing" flag is very noisy. There is another debug type,
-// "coro-frame", which has results in leaner debug spew.
+// "coro-frame", which results in leaner debug spew.
 #define DEBUG_TYPE "coro-suspend-crossing"
 
 enum { SmallVectorThreshold = 32 };
@@ -113,7 +113,7 @@ struct SuspendCrossingInfo {
   bool isDefinitionAcrossSuspend(BasicBlock *DefBB, User *U) const {
     auto *I = cast<Instruction>(U);
 
-    // We rewritten PHINodes, so that only the ones with exactly one incoming
+    // We rewrote PHINodes, so that only the ones with exactly one incoming
     // value need to be analyzed.
     if (auto *PN = dyn_cast<PHINode>(I))
       if (PN->getNumIncomingValues() > 1)
@@ -438,9 +438,7 @@ static Instruction *insertSpills(SpillInfo &Spills, coro::Shape &Shape) {
     }
 
     // Replace all uses of CurrentValue in the current instruction with reload.
-    for (Use &U : E.user()->operands())
-      if (U.get() == CurrentValue)
-        U.set(CurrentReload);
+    E.user()->replaceUsesOfWith(CurrentValue, CurrentReload);
   }
 
   BasicBlock *FramePtrBB = FramePtr->getParent();
@@ -454,9 +452,7 @@ static Instruction *insertSpills(SpillInfo &Spills, coro::Shape &Shape) {
   for (auto &P : Allocas) {
     auto *G =
         Builder.CreateConstInBoundsGEP2_32(FrameTy, FramePtr, 0, P.second);
-    G->takeName(P.first);
-    P.first->replaceAllUsesWith(G);
-    P.first->eraseFromParent();
+    ReplaceInstWithInst(P.first, cast<Instruction>(G));
   }
   return FramePtr;
 }
@@ -479,6 +475,9 @@ static void rewritePHIs(BasicBlock &BB) {
   //
   // After this rewrite, further analysis will ignore any phi nodes with more
   // than one incoming edge.
+
+  // TODO: Simplify PHINodes in the basic block to remove duplicate
+  // predecessors.
 
   SmallVector<BasicBlock *, 8> Preds(pred_begin(&BB), pred_end(&BB));
   for (BasicBlock *Pred : Preds) {
@@ -560,9 +559,7 @@ static void rewriteMaterializableInstructions(IRBuilder<> &IRB,
 
     // Replace all uses of CurrentDef in the current instruction with the
     // CurrentMaterialization for the block.
-    for (Use &U : E.user()->operands())
-      if (U.get() == CurrentDef)
-        U.set(CurrentMaterialization);
+    E.user()->replaceUsesOfWith(CurrentDef, CurrentMaterialization);
   }
 }
 
@@ -593,7 +590,8 @@ void coro::buildCoroutineFrame(Function &F, Shape &Shape) {
   for (CoroSuspendInst *CSI : Shape.CoroSuspends)
     splitAround(CSI->getCoroSave(), "CoroSave");
 
-  // Put final CoroEnd into its own block.
+  // Put fallthrough CoroEnd into its own block. Note: Shape::buildFrom places
+  // the fallthrough coro.end as the first element of CoroEnds array.
   splitAround(Shape.CoroEnds.front(), "CoroEnd");
 
   // Transforms multi-edge PHI Nodes, so that any value feeding into a PHI will
