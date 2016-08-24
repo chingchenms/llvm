@@ -127,6 +127,8 @@ bool coro::declaresIntrinsics(Module &M,
   return false;
 }
 
+// Replace all coro.frees associated with the provided CoroId either with 'null'
+// if Elide is true and with its frame parameter otherwise.
 void coro::replaceCoroFree(CoroIdInst *CoroId, bool Elide) {
   SmallVector<CoroFreeInst*, 4> CoroFrees;
   for (User* U : CoroId->users())

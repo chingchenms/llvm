@@ -124,6 +124,8 @@ public:
     return cast<Function>(getArgOperand(CoroutineArg)->stripPointerCasts());
   }
   void setCoroutineSelf() {
+    assert(isa<ConstantPointerNull>(getArgOperand(CoroutineArg)) &&
+           "Coroutine argument is already assigned");
     auto *const Int8PtrTy = Type::getInt8PtrTy(getContext());
     setArgOperand(CoroutineArg,
                   ConstantExpr::getBitCast(getFunction(), Int8PtrTy));

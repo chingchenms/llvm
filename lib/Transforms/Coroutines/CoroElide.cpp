@@ -145,19 +145,21 @@ void Lowerer::elideHeapAllocations(Function *F, Type *FrameTy, AAResults &AA) {
   removeTailCallAttribute(Frame, AA);
 }
 
-static bool isInternalToFunction(TerminatorInst* T) {
+// This function is used to check whether a terminator causes control flow to
+// leaves the function in some way.
+static bool returnsOrUnwindsToCaller(TerminatorInst *T) {
   if (isa<ReturnInst>(T) || isa<ResumeInst>(T))
-    return false;
+    return true;
 
   if (auto *CR = dyn_cast<CleanupReturnInst>(T))
-    return !CR->unwindsToCaller();
+    return CR->unwindsToCaller();
   if (auto *CS = dyn_cast<CatchSwitchInst>(T))
-    return !CS->unwindsToCaller();
+    return CS->unwindsToCaller();
 
-  return true;
+  return false;
 }
 
-// Check that on every code pass leaving the function dominated by a coro.begin,
+// Check that on every code path leaving the function dominated by a coro.begin,
 // there is either a coro.free or coro.destroy postdominating a coro.begin.
 bool Lowerer::shouldElide(Function *F, DominatorTree &DT,
                           PostDominatorTree &PDT) const {
@@ -166,15 +168,15 @@ bool Lowerer::shouldElide(Function *F, DominatorTree &DT,
   if (CoroAllocs.empty())
     return false;
 
-  for (BasicBlock& BB : *F) {
+  for (BasicBlock &BB : *F) {
     auto *T = BB.getTerminator();
-    if (isInternalToFunction(T))
+    if (!returnsOrUnwindsToCaller(T))
       continue;
 
     for (CoroBeginInst *CB : CoroBegins) {
       if (DT.dominates(CB, T)) {
         bool PostDominated = false;
-        for (CoroFreeInst *CF: CoroFrees) {
+        for (CoroFreeInst *CF : CoroFrees) {
           if (PDT.dominates(&BB, CF->getParent())) {
             PostDominated = true;
             break;
@@ -252,23 +254,10 @@ bool Lowerer::processCoroId(CoroIdInst *CoroId, AAResults &AA,
 
   replaceWithConstant(DestroyAddrConstant, DestroyAddr);
 
-  coro::replaceCoroFree(CoroId, ShouldElide);
-
   if (ShouldElide) {
     auto *FrameTy = getFrameType(cast<Function>(ResumeAddrConstant));
     elideHeapAllocations(CoroId->getFunction(), FrameTy, AA);
-  }
-  else {
-    auto *True = ConstantInt::getTrue(Context);
-    for (CoroAllocInst* CA : CoroAllocs) {
-      CA->replaceAllUsesWith(True);
-      CA->eraseFromParent();
-    }
-
-    for (CoroBeginInst* CB : CoroBegins) {
-      CB->replaceAllUsesWith(CB->getMem());
-      CB->eraseFromParent();
-    }
+    coro::replaceCoroFree(CoroId, /*Elide=*/true);
   }
 
   return true;
@@ -348,7 +337,6 @@ struct CoroElide : FunctionPass {
     AU.addRequired<AAResultsWrapperPass>();
     AU.addRequired<DominatorTreeWrapperPass>();
     AU.addRequired<PostDominatorTreeWrapperPass>();
-    AU.setPreservesCFG();
   }
 };
 }

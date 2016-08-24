@@ -308,7 +308,8 @@ static StructType *buildFrameType(Function &F, coro::Shape &Shape,
                                  /*IsVarArgs=*/false);
   auto *FnPtrTy = FnTy->getPointerTo();
 
-  unsigned IndexBits = std::max(3U, Log2_64_Ceil(Shape.CoroSuspends.size()));
+  // Figure out how wide should be an integer type storing the suspend index.
+  unsigned IndexBits = std::max(1U, Log2_64_Ceil(Shape.CoroSuspends.size()));
 
   SmallVector<Type *, 8> Types{FnPtrTy, FnPtrTy, Type::getIntNTy(C, IndexBits)};
   Value *CurrentDef = nullptr;
@@ -615,6 +616,8 @@ void coro::buildCoroutineFrame(Function &F, Shape &Shape) {
     // frame.
     if (isa<CoroBeginInst>(&I))
       continue;
+	// A token returned CoroIdInst is used to tie together structural intrinsics
+	// in a coroutine. It should not be saved to the coroutine frame.
     if (isa<CoroIdInst>(&I))
       continue;
 
