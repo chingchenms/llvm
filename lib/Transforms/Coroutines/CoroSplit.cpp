@@ -206,6 +206,10 @@ static Function *createClone(Function &F, Twine Suffix, coro::Shape &Shape,
   OldVFrame->replaceAllUsesWith(NewVFrame);
 
   // Replace coro suspend with the appropriate resume index.
+  // Replacing coro.suspend with (0) will result in control flow proceeding to
+  // a resume label associated with a suspend point, replacing it with (1) will
+  // result in control flow proceeding to a cleanup label associated with this
+  // suspend point.
   auto *NewValue = Builder.getInt8(FnIndex ? 1 : 0);
   for (CoroSuspendInst *CS : Shape.CoroSuspends) {
     auto *MappedCS = cast<CoroSuspendInst>(VMap[CS]);
@@ -218,6 +222,10 @@ static Function *createClone(Function &F, Twine Suffix, coro::Shape &Shape,
   // FIXME: coming in upcoming patches:
   // replaceUnwindCoroEnds(Shape.CoroEnds, VMap);
 
+  // We only store resume(0) and destroy(1) addresses in the coroutine frame.
+  // The cleanup(2) clone is only used during devirtualization when coroutine is
+  // eligible for heap elision and thus does not participate in indirect calls
+  // and does not need its address to be stored in the coroutine frame.
   if (FnIndex < 2) {
     // Store the address of this clone in the coroutine frame.
     Builder.SetInsertPoint(Shape.FramePtr->getNextNode());
@@ -225,6 +233,9 @@ static Function *createClone(Function &F, Twine Suffix, coro::Shape &Shape,
                                                  0, FnIndex, "fn.addr");
     Builder.CreateStore(NewF, G);
   }
+
+  // Eliminate coro.free from the clones, replacing it with 'null' in cleanup,
+  // to suppress deallocation code.
   coro::replaceCoroFree(cast<CoroIdInst>(VMap[Shape.CoroBegin->getId()]),
                         /*Elide=*/FnIndex == 2);
 
