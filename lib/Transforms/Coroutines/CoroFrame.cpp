@@ -92,10 +92,8 @@ struct SuspendCrossingInfo {
     return Block[Mapping.blockToIndex(BB)];
   }
 
-#ifndef NDEBUG
   void dump() const;
   void dump(StringRef Label, BitVector const &BV) const;
-#endif
 
   SuspendCrossingInfo(Function &F, coro::Shape &Shape);
 
@@ -133,8 +131,8 @@ struct SuspendCrossingInfo {
 };
 } // end anonymous namespace
 
-#ifndef NDEBUG
-void SuspendCrossingInfo::dump(StringRef Label, BitVector const &BV) const {
+LLVM_DUMP_METHOD void SuspendCrossingInfo::dump(StringRef Label,
+                                                BitVector const &BV) const {
   dbgs() << Label << ":";
   for (size_t I = 0, N = BV.size(); I < N; ++I)
     if (BV[I])
@@ -142,7 +140,7 @@ void SuspendCrossingInfo::dump(StringRef Label, BitVector const &BV) const {
   dbgs() << "\n";
 }
 
-void SuspendCrossingInfo::dump() const {
+LLVM_DUMP_METHOD void SuspendCrossingInfo::dump() const {
   for (size_t I = 0, N = Block.size(); I < N; ++I) {
     BasicBlock *const B = Mapping.indexToBlock(I);
     dbgs() << B->getName() << ":\n";
@@ -151,7 +149,6 @@ void SuspendCrossingInfo::dump() const {
   }
   dbgs() << "\n";
 }
-#endif
 
 SuspendCrossingInfo::SuspendCrossingInfo(Function &F, coro::Shape &Shape)
     : Mapping(F) {
@@ -636,6 +633,10 @@ void coro::buildCoroutineFrame(Function &F, Shape &Shape) {
 
     for (User *U : I.users())
       if (Checker.isDefinitionAcrossSuspend(I, U)) {
+        // We cannot spill a token.
+        if (I.getType()->isTokenTy())
+          report_fatal_error(
+              "token definition is separated from the use by a suspend point");
         assert(!materializable(I) &&
                "rewriteMaterializable did not do its job");
         Spills.emplace_back(&I, U);
