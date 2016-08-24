@@ -183,8 +183,9 @@ SuspendCrossingInfo::SuspendCrossingInfo(Function &F, coro::Shape &Shape)
   }
 
   // Iterate propagating consumes and kills until they stop changing
-  int Iteration = 0; (void)Iteration;
-  
+  int Iteration = 0;
+  (void)Iteration;
+
   bool Changed;
   do {
     DEBUG(dbgs() << "iteration " << ++Iteration);
@@ -616,8 +617,8 @@ void coro::buildCoroutineFrame(Function &F, Shape &Shape) {
     // frame.
     if (isa<CoroBeginInst>(&I))
       continue;
-	// A token returned CoroIdInst is used to tie together structural intrinsics
-	// in a coroutine. It should not be saved to the coroutine frame.
+    // A token returned CoroIdInst is used to tie together structural intrinsics
+    // in a coroutine. It should not be saved to the coroutine frame.
     if (isa<CoroIdInst>(&I))
       continue;
 

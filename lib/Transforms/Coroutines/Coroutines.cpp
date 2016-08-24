@@ -130,8 +130,8 @@ bool coro::declaresIntrinsics(Module &M,
 // Replace all coro.frees associated with the provided CoroId either with 'null'
 // if Elide is true and with its frame parameter otherwise.
 void coro::replaceCoroFree(CoroIdInst *CoroId, bool Elide) {
-  SmallVector<CoroFreeInst*, 4> CoroFrees;
-  for (User* U : CoroId->users())
+  SmallVector<CoroFreeInst *, 4> CoroFrees;
+  for (User *U : CoroId->users())
     if (auto CF = dyn_cast<CoroFreeInst>(U))
       CoroFrees.push_back(CF);
 
@@ -142,7 +142,7 @@ void coro::replaceCoroFree(CoroIdInst *CoroId, bool Elide) {
       Elide ? ConstantPointerNull::get(Type::getInt8PtrTy(CoroId->getContext()))
             : CoroFrees.front()->getFrame();
 
-  for (CoroFreeInst* CF : CoroFrees) {
+  for (CoroFreeInst *CF : CoroFrees) {
     CF->replaceAllUsesWith(Replacement);
     CF->eraseFromParent();
   }

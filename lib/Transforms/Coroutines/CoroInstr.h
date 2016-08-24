@@ -11,7 +11,7 @@
 // allows you to do things like:
 //
 //     if (auto *SF = dyn_cast<CoroSubFnInst>(Inst))
-//        ... SF->getFrame() ... 
+//        ... SF->getFrame() ...
 //
 // All intrinsic function calls are instances of the call instruction, so these
 // are all subclasses of the CallInst class.  Note that none of these classes
@@ -155,6 +155,7 @@ public:
 /// This represents the llvm.coro.free instruction.
 class LLVM_LIBRARY_VISIBILITY CoroFreeInst : public IntrinsicInst {
   enum { IdArg, FrameArg };
+
 public:
   Value *getFrame() const { return getArgOperand(FrameArg); }
 
