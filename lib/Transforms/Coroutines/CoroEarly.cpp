@@ -82,9 +82,14 @@ void Lowerer::lowerCoroPromise(CoroPromiseInst *Intrin) {
   Intrin->eraseFromParent();
 }
 
+// When a coroutine reaches final suspend point, it zeros out ResumeFnAddr in
+// the coroutine frame (it is UB to resume from a final suspend point).
+// The llvm.coro.done intrinsic is used to check whether a coroutine is
+// suspended at the final suspend point or not.
 void Lowerer::lowerCoroDone(IntrinsicInst *II) {
   Value *Operand = II->getArgOperand(0);
 
+  // ResumeFnAddr is the first pointer sized element of the coroutine frame.
   auto *FrameTy = Int8Ptr;
   PointerType *FramePtrTy = FrameTy->getPointerTo();
 
