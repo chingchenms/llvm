@@ -26,11 +26,11 @@ namespace {
 // Created on demand if CoroEarly pass has work to do.
 class Lowerer : public coro::LowererBase {
   IRBuilder<> Builder;
-  PointerType* const AnyResumeFnPtrTy;
+  PointerType *const AnyResumeFnPtrTy;
 
   void lowerResumeOrDestroy(CallSite CS, CoroSubFnInst::ResumeKind);
   void lowerCoroPromise(CoroPromiseInst *Intrin);
-  void lowerCoroDone(IntrinsicInst* II);
+  void lowerCoroDone(IntrinsicInst *II);
 
 public:
   Lowerer(Module &M)
@@ -82,12 +82,11 @@ void Lowerer::lowerCoroPromise(CoroPromiseInst *Intrin) {
   Intrin->eraseFromParent();
 }
 
-
-void Lowerer::lowerCoroDone(IntrinsicInst* II) {
+void Lowerer::lowerCoroDone(IntrinsicInst *II) {
   Value *Operand = II->getArgOperand(0);
 
   auto *FrameTy = Int8Ptr;
-  PointerType* FramePtrTy = FrameTy->getPointerTo();
+  PointerType *FramePtrTy = FrameTy->getPointerTo();
 
   Builder.SetInsertPoint(II);
   auto *BCI = Builder.CreateBitCast(Operand, FramePtrTy);
@@ -98,7 +97,6 @@ void Lowerer::lowerCoroDone(IntrinsicInst* II) {
   II->replaceAllUsesWith(Cond);
   II->eraseFromParent();
 }
-
 
 // Prior to CoroSplit, calls to coro.begin needs to be marked as NoDuplicate,
 // as CoroSplit assumes there is exactly one coro.begin. After CoroSplit,
@@ -175,9 +173,9 @@ struct CoroEarly : public FunctionPass {
   // This pass has work to do only if we find intrinsics we are going to lower
   // in the module.
   bool doInitialization(Module &M) override {
-    if (coro::declaresIntrinsics(M, {"llvm.coro.begin", "llvm.coro.resume",
-                                     "llvm.coro.destroy", "llvm.coro.suspend",
-                                     "llvm.coro.end"}))
+    if (coro::declaresIntrinsics(M, {"llvm.coro.begin", "llvm.coro.end",
+                                     "llvm.coro.resume", "llvm.coro.destroy",
+                                     "llvm.coro.done", "llvm.coro.suspend"}))
       L = llvm::make_unique<Lowerer>(M);
     return false;
   }
