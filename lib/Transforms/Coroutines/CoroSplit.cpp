@@ -62,7 +62,7 @@ static BasicBlock *createResumeEntryBlock(Function &F, coro::Shape &Shape) {
       Builder.CreateSwitch(Index, UnreachBB, Shape.CoroSuspends.size());
   Shape.ResumeSwitch = Switch;
 
-  size_t SuspendIndex = Shape.HasFinalSuspend ? -1 : 0;
+  size_t SuspendIndex = 0;
   for (CoroSuspendInst *S : Shape.CoroSuspends) {
     ConstantInt *IndexVal = Shape.getIndex(SuspendIndex);
 
@@ -71,7 +71,7 @@ static BasicBlock *createResumeEntryBlock(Function &F, coro::Shape &Shape) {
     //    store i32 0, i32* %index.addr1
     auto *Save = S->getCoroSave();
     Builder.SetInsertPoint(Save);
-    if (SuspendIndex == -1) {
+    if (S->isFinal()) {
       // Final suspend point is represented by storing zero in ResumeFnAddr.
       auto *GepIndex = Builder.CreateConstInBoundsGEP2_32(FrameTy, FramePtr, 0,
                                                           0, "ResumeFn.addr");
@@ -148,16 +148,18 @@ static void replaceFallthroughCoroEnd(IntrinsicInst *End,
 // represent the final suspend point. Instead we zero-out ResumeFnAddr in the
 // coroutine frame, since it is undefined behavior to resume a coroutine
 // suspended at the final suspend point. Thus, in the resume function, we can
-// simply remove the first case (coro::Shape constructor reorders suspend
-// points, so that final suspend point is always the first).
-// In the destroy function, we add a code sequence checking ResumeAddrForNull
-// and if true, jump to the appropriate label to handle cleanup from the final
-// suspend point.
+// simply remove the last case (when coro::Shape is built, the final suspend
+// point (if present) is always the last element of CoroSuspends array).
+// In the destroy function, we add a code sequence to check if ResumeFnAddress
+// is Null, and if so, jump to the appropriate label to handle cleanup from the
+// final suspend point.
 static void handleFinalSuspend(IRBuilder<> &Builder, Value *FramePtr,
                                coro::Shape &Shape, SwitchInst *Switch,
                                bool IsDestroy) {
-  BasicBlock *ResumeBB = Switch->case_begin().getCaseSuccessor();
-  Switch->removeCase(Switch->case_begin());
+  assert(Shape.HasFinalSuspend);
+  auto FinalCase = --Switch->case_end();
+  BasicBlock *ResumeBB = FinalCase.getCaseSuccessor();
+  Switch->removeCase(FinalCase);
   if (IsDestroy) {
     BasicBlock *OldSwitchBB = Switch->getParent();
     auto *NewSwitchBB = OldSwitchBB->splitBasicBlock(Switch, "Switch");
