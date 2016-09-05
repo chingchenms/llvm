@@ -66,26 +66,6 @@ static BasicBlock *createResumeEntryBlock(Function &F, coro::Shape &Shape) {
   for (CoroSuspendInst *S : Shape.CoroSuspends) {
     ConstantInt *IndexVal = Shape.getIndex(SuspendIndex);
 
-    // Replace CoroSave with a store to Index:
-    //    %index.addr = getelementptr %f.frame... (index field number)
-    //    store i32 0, i32* %index.addr1
-    auto *Save = S->getCoroSave();
-    Builder.SetInsertPoint(Save);
-    if (S->isFinal()) {
-      // Final suspend point is represented by storing zero in ResumeFnAddr.
-      auto *GepIndex = Builder.CreateConstInBoundsGEP2_32(FrameTy, FramePtr, 0,
-                                                          0, "ResumeFn.addr");
-      auto *NullPtr = ConstantPointerNull::get(cast<PointerType>(
-          cast<PointerType>(GepIndex->getType())->getElementType()));
-      Builder.CreateStore(NullPtr, GepIndex);
-    } else {
-      auto *GepIndex = Builder.CreateConstInBoundsGEP2_32(
-          FrameTy, FramePtr, 0, coro::Shape::IndexField, "index.addr");
-      Builder.CreateStore(IndexVal, GepIndex);
-    }
-    Save->replaceAllUsesWith(ConstantTokenNone::get(C));
-    Save->eraseFromParent();
-
     // Split block before and after coro.suspend and add a jump from an entry
     // switch:
     //
@@ -122,6 +102,33 @@ static BasicBlock *createResumeEntryBlock(Function &F, coro::Shape &Shape) {
     PN->addIncoming(Builder.getInt8(-1), SuspendBB);
     PN->addIncoming(S, ResumeBB);
 
+    ++SuspendIndex;
+  }
+
+  SuspendIndex = 0;
+  for (CoroSuspendInst *S : Shape.CoroSuspends) {
+    ConstantInt *IndexVal = Shape.getIndex(SuspendIndex);
+
+    // Replace CoroSave with a store to Index:
+    //    %index.addr = getelementptr %f.frame... (index field number)
+    //    store i32 0, i32* %index.addr1
+    auto *Save = S->getCoroSave();
+    Builder.SetInsertPoint(Save);
+    if (S->isFinal()) {
+      // Final suspend point is represented by storing zero in ResumeFnAddr.
+      auto *GepIndex = Builder.CreateConstInBoundsGEP2_32(FrameTy, FramePtr, 0,
+        0, "ResumeFn.addr");
+      auto *NullPtr = ConstantPointerNull::get(cast<PointerType>(
+        cast<PointerType>(GepIndex->getType())->getElementType()));
+      Builder.CreateStore(NullPtr, GepIndex);
+    }
+    else {
+      auto *GepIndex = Builder.CreateConstInBoundsGEP2_32(
+        FrameTy, FramePtr, 0, coro::Shape::IndexField, "index.addr");
+      Builder.CreateStore(IndexVal, GepIndex);
+    }
+    Save->replaceAllUsesWith(ConstantTokenNone::get(C));
+    Save->eraseFromParent();
     ++SuspendIndex;
   }
 
