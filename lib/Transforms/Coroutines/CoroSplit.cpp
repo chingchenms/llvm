@@ -34,6 +34,27 @@ using namespace llvm;
 
 #define DEBUG_TYPE "coro-split"
 
+// Tries to move CoroSave up the dominator tree as far as possible.
+static void floatCoroSaveIfPossible(CoroSaveInst *Save, Instruction *FramePtr) {
+  BasicBlock *SaveBB = Save->getParent();
+  BasicBlock *FramePtrBB = FramePtr->getParent();
+  BasicBlock *CandidateBB = SaveBB;
+  for (;;) {
+    if (CandidateBB == FramePtrBB) {
+      Save->removeFromParent();
+      Save->insertAfter(FramePtr);
+      break;
+    }
+    if (BasicBlock *Pred = CandidateBB->getSinglePredecessor()) {
+      CandidateBB = Pred;
+      continue;
+    }
+    Save->removeFromParent();
+    Save->insertBefore(CandidateBB->getFirstNonPHIOrDbgOrLifetime());
+    break;
+  }
+}
+
 // Create an entry block for a resume function with a switch that will jump to
 // suspend points.
 static BasicBlock *createResumeEntryBlock(Function &F, coro::Shape &Shape) {
@@ -113,6 +134,7 @@ static BasicBlock *createResumeEntryBlock(Function &F, coro::Shape &Shape) {
     //    %index.addr = getelementptr %f.frame... (index field number)
     //    store i32 0, i32* %index.addr1
     auto *Save = S->getCoroSave();
+    floatCoroSaveIfPossible(Save, FramePtr);
     Builder.SetInsertPoint(Save);
     if (S->isFinal()) {
       // Final suspend point is represented by storing zero in ResumeFnAddr.
