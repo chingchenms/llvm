@@ -115,8 +115,8 @@ static void setCannotDuplicate(CoroIdInst *CoroId) {
 
 bool Lowerer::lowerEarlyIntrinsics(Function &F) {
   bool Changed = false;
-  CoroIdInst* CoroId = nullptr;
-  SmallVector<CoroFreeInst*, 4> CoroFrees;
+  CoroIdInst *CoroId = nullptr;
+  SmallVector<CoroFreeInst *, 4> CoroFrees;
   for (auto IB = inst_begin(F), IE = inst_end(F); IB != IE;) {
     Instruction &I = *IB++;
     if (auto CS = CallSite(&I)) {
@@ -166,7 +166,9 @@ bool Lowerer::lowerEarlyIntrinsics(Function &F) {
       Changed = true;
     }
   }
-  // Fixup coro.id.
+  // Make sure that all CoroFree reference the coro.id intrinsic.
+  // Token type is not exposed through coroutine C/C++ builtins to plain C, so
+  // we allow specifying none and fixing it up here.
   if (CoroId)
     for (CoroFreeInst *CF : CoroFrees)
       CF->setArgOperand(0, CoroId);

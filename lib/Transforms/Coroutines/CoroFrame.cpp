@@ -438,11 +438,12 @@ static Instruction *insertSpills(SpillInfo &Spills, coro::Shape &Shape) {
       CurrentReload = CreateReload(&*CurrentBlock->getFirstInsertionPt());
     }
 
-    // If we have a single edge PHI Node, remove it and replace it with the
-    // reload.
+    // If we have a single edge PHINode, remove it and replace it with a reload
+    // from the coroutine frame. (We already took care of multi edge PHINodes
+    // by rewriting them in the rewritePHIs function).
     if (auto *PN = dyn_cast<PHINode>(E.user())) {
       assert(PN->getNumIncomingValues() == 1 && "unexpected number of incoming "
-        "values in the PHINode");
+                                                "values in the PHINode");
       PN->replaceAllUsesWith(CurrentReload);
       PN->eraseFromParent();
       continue;
