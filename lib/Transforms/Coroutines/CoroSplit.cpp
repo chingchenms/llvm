@@ -145,6 +145,24 @@ static void replaceFallthroughCoroEnd(IntrinsicInst *End,
   BB->getTerminator()->eraseFromParent();
 }
 
+// In Resumers, we replace unwind coro.end with True to force the immediate
+// unwind to caller.
+static void replaceUnwindCoroEnds(coro::Shape &Shape, ValueToValueMapTy &VMap) {
+  if (Shape.CoroEnds.empty())
+    return;
+
+  LLVMContext &Context = Shape.CoroEnds.front()->getContext();
+  auto *True = ConstantInt::getTrue(Context);
+  for (CoroEndInst *CE : Shape.CoroEnds) {
+    if (!CE->isUnwind())
+      continue;
+
+    auto *NewCE = cast<IntrinsicInst>(VMap[CE]);
+    NewCE->replaceAllUsesWith(True);
+    NewCE->eraseFromParent();
+  }
+}
+
 // Rewrite final suspend point handling. We do not use suspend index to
 // represent the final suspend point. Instead we zero-out ResumeFnAddr in the
 // coroutine frame, since it is undefined behavior to resume a coroutine
@@ -271,8 +289,7 @@ static Function *createClone(Function &F, Twine Suffix, coro::Shape &Shape,
 
   // Remove coro.end intrinsics.
   replaceFallthroughCoroEnd(Shape.CoroEnds.front(), VMap);
-  // FIXME: coming in upcoming patches:
-  // replaceUnwindCoroEnds(Shape.CoroEnds, VMap);
+  replaceUnwindCoroEnds(Shape, VMap);
 
   // Eliminate coro.free from the clones, replacing it with 'null' in cleanup,
   // to suppress deallocation code.
@@ -285,8 +302,16 @@ static Function *createClone(Function &F, Twine Suffix, coro::Shape &Shape,
 }
 
 static void removeCoroEnds(coro::Shape &Shape) {
-  for (CoroEndInst *CE : Shape.CoroEnds)
+  if (Shape.CoroEnds.empty())
+    return;
+
+  LLVMContext &Context = Shape.CoroEnds.front()->getContext();
+  auto *False = ConstantInt::getFalse(Context);
+
+  for (CoroEndInst *CE : Shape.CoroEnds) {
+    CE->replaceAllUsesWith(False);
     CE->eraseFromParent();
+  }
 }
 
 static void replaceFrameSize(coro::Shape &Shape) {
@@ -499,16 +524,6 @@ static void splitCoroutine(Function &F, CallGraph &CG, CallGraphSCC &SCC) {
   removeLifetimeIntrinsics(F);
   buildCoroutineFrame(F, Shape);
   replaceFrameSize(Shape);
-
-  // If there are no suspend points, no split required, just remove
-  // the allocation and deallocation blocks, they are not needed.
-  if (Shape.CoroSuspends.empty()) {
-    handleNoSuspendCoroutine(Shape.CoroBegin, Shape.FrameTy);
-    removeCoroEnds(Shape);
-    postSplitCleanup(F);
-    coro::updateCallGraph(F, {}, CG, SCC);
-    return;
-  }
 
   // If there are no suspend points, no split required, just remove
   // the allocation and deallocation blocks, they are not needed.
