@@ -158,6 +158,15 @@ static void replaceUnwindCoroEnds(coro::Shape &Shape, ValueToValueMapTy &VMap) {
       continue;
 
     auto *NewCE = cast<IntrinsicInst>(VMap[CE]);
+
+    // If coro.end has an associated bundle, add cleanupret instruction.
+    if (auto Bundle = NewCE->getOperandBundle(LLVMContext::OB_funclet)) {
+      Value *FromPad = Bundle->Inputs[0];
+      auto *CleanupRet = CleanupReturnInst::Create(FromPad, nullptr, NewCE);
+      NewCE->getParent()->splitBasicBlock(NewCE);
+      CleanupRet->getParent()->getTerminator()->eraseFromParent();
+    }
+
     NewCE->replaceAllUsesWith(True);
     NewCE->eraseFromParent();
   }
