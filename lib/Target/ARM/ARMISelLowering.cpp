@@ -278,7 +278,7 @@ void ARMTargetLowering::addTypeForNEON(MVT VT, MVT PromotedLdStVT,
   }
 
   MVT ElemTy = VT.getVectorElementType();
-  if (ElemTy != MVT::i64 && ElemTy != MVT::f64)
+  if (ElemTy != MVT::f64)
     setOperationAction(ISD::SETCC, VT, Custom);
   setOperationAction(ISD::INSERT_VECTOR_ELT, VT, Custom);
   setOperationAction(ISD::EXTRACT_VECTOR_ELT, VT, Custom);
@@ -742,8 +742,6 @@ ARMTargetLowering::ARMTargetLowering(const TargetMachine &TM,
     setOperationAction(ISD::SDIV, MVT::v8i8, Custom);
     setOperationAction(ISD::UDIV, MVT::v4i16, Custom);
     setOperationAction(ISD::UDIV, MVT::v8i8, Custom);
-    setOperationAction(ISD::SETCC, MVT::v1i64, Expand);
-    setOperationAction(ISD::SETCC, MVT::v2i64, Expand);
     // Neon does not have single instruction SINT_TO_FP and UINT_TO_FP with
     // a destination type that is wider than the source, and nor does
     // it have a FP_TO_[SU]INT instruction with a narrower destination than
@@ -980,19 +978,26 @@ ARMTargetLowering::ARMTargetLowering(const TargetMachine &TM,
   setOperationAction(ISD::UREM,  MVT::i32, Expand);
   // Register based DivRem for AEABI (RTABI 4.2)
   if (Subtarget->isTargetAEABI() || Subtarget->isTargetAndroid() ||
-      Subtarget->isTargetGNUAEABI() || Subtarget->isTargetMuslAEABI()) {
+      Subtarget->isTargetGNUAEABI() || Subtarget->isTargetMuslAEABI() ||
+      Subtarget->isTargetWindows()) {
     setOperationAction(ISD::SREM, MVT::i64, Custom);
     setOperationAction(ISD::UREM, MVT::i64, Custom);
     HasStandaloneRem = false;
 
-    setLibcallName(RTLIB::SDIVREM_I8,  "__aeabi_idivmod");
-    setLibcallName(RTLIB::SDIVREM_I16, "__aeabi_idivmod");
-    setLibcallName(RTLIB::SDIVREM_I32, "__aeabi_idivmod");
-    setLibcallName(RTLIB::SDIVREM_I64, "__aeabi_ldivmod");
-    setLibcallName(RTLIB::UDIVREM_I8,  "__aeabi_uidivmod");
-    setLibcallName(RTLIB::UDIVREM_I16, "__aeabi_uidivmod");
-    setLibcallName(RTLIB::UDIVREM_I32, "__aeabi_uidivmod");
-    setLibcallName(RTLIB::UDIVREM_I64, "__aeabi_uldivmod");
+    for (const auto &LC :
+         {RTLIB::SDIVREM_I8, RTLIB::SDIVREM_I16, RTLIB::SDIVREM_I32})
+      setLibcallName(LC, Subtarget->isTargetWindows() ? "__rt_sdiv"
+                                                      : "__aeabi_idivmod");
+    setLibcallName(RTLIB::SDIVREM_I64, Subtarget->isTargetWindows()
+                                           ? "__rt_sdiv64"
+                                           : "__aeabi_ldivmod");
+    for (const auto &LC :
+         {RTLIB::UDIVREM_I8, RTLIB::UDIVREM_I16, RTLIB::UDIVREM_I32})
+      setLibcallName(LC, Subtarget->isTargetWindows() ? "__rt_udiv"
+                                                      : "__aeabi_uidivmod");
+    setLibcallName(RTLIB::UDIVREM_I64, Subtarget->isTargetWindows()
+                                           ? "__rt_udiv64"
+                                           : "__aeabi_uldivmod");
 
     setLibcallCallingConv(RTLIB::SDIVREM_I8, CallingConv::ARM_AAPCS);
     setLibcallCallingConv(RTLIB::SDIVREM_I16, CallingConv::ARM_AAPCS);
@@ -5235,10 +5240,27 @@ static SDValue LowerVSETCC(SDValue Op, SelectionDAG &DAG) {
   ISD::CondCode SetCCOpcode = cast<CondCodeSDNode>(CC)->get();
   SDLoc dl(Op);
 
+  if (Op0.getValueType().getVectorElementType() == MVT::i64 &&
+      (SetCCOpcode == ISD::SETEQ || SetCCOpcode == ISD::SETNE)) {
+    // Special-case integer 64-bit equality comparisons. They aren't legal,
+    // but they can be lowered with a few vector instructions.
+    unsigned CmpElements = CmpVT.getVectorNumElements() * 2;
+    EVT SplitVT = EVT::getVectorVT(*DAG.getContext(), MVT::i32, CmpElements);
+    SDValue CastOp0 = DAG.getNode(ISD::BITCAST, dl, SplitVT, Op0);
+    SDValue CastOp1 = DAG.getNode(ISD::BITCAST, dl, SplitVT, Op1);
+    SDValue Cmp = DAG.getNode(ISD::SETCC, dl, SplitVT, CastOp0, CastOp1,
+                              DAG.getCondCode(ISD::SETEQ));
+    SDValue Reversed = DAG.getNode(ARMISD::VREV64, dl, SplitVT, Cmp);
+    SDValue Merged = DAG.getNode(ISD::AND, dl, SplitVT, Cmp, Reversed);
+    Merged = DAG.getNode(ISD::BITCAST, dl, CmpVT, Merged);
+    if (SetCCOpcode == ISD::SETNE)
+      Merged = DAG.getNOT(dl, Merged, CmpVT);
+    Merged = DAG.getSExtOrTrunc(Merged, dl, VT);
+    return Merged;
+  }
+
   if (CmpVT.getVectorElementType() == MVT::i64)
-    // 64-bit comparisons are not legal. We've marked SETCC as non-Custom,
-    // but it's possible that our operands are 64-bit but our result is 32-bit.
-    // Bail in this case.
+    // 64-bit comparisons are not legal in general.
     return SDValue();
 
   if (Op1.getValueType().isFloatingPoint()) {
@@ -7388,6 +7410,19 @@ SDValue ARMTargetLowering::LowerDIV_Windows(SDValue Op, SelectionDAG &DAG,
   return LowerWindowsDIVLibCall(Op, DAG, Signed, DBZCHK);
 }
 
+static SDValue WinDBZCheckDenominator(SelectionDAG &DAG, SDNode *N, SDValue InChain) {
+  SDLoc DL(N);
+  SDValue Op = N->getOperand(1);
+  if (N->getValueType(0) == MVT::i32)
+    return DAG.getNode(ARMISD::WIN__DBZCHK, DL, MVT::Other, InChain, Op);
+  SDValue Lo = DAG.getNode(ISD::EXTRACT_ELEMENT, DL, MVT::i32, Op,
+                           DAG.getConstant(0, DL, MVT::i32));
+  SDValue Hi = DAG.getNode(ISD::EXTRACT_ELEMENT, DL, MVT::i32, Op,
+                           DAG.getConstant(1, DL, MVT::i32));
+  return DAG.getNode(ARMISD::WIN__DBZCHK, DL, MVT::Other, InChain,
+                     DAG.getNode(ISD::OR, DL, MVT::i32, Lo, Hi));
+}
+
 void ARMTargetLowering::ExpandDIV_Windows(
     SDValue Op, SelectionDAG &DAG, bool Signed,
     SmallVectorImpl<SDValue> &Results) const {
@@ -7398,14 +7433,7 @@ void ARMTargetLowering::ExpandDIV_Windows(
          "unexpected type for custom lowering DIV");
   SDLoc dl(Op);
 
-  SDValue Lo = DAG.getNode(ISD::EXTRACT_ELEMENT, dl, MVT::i32, Op.getOperand(1),
-                           DAG.getConstant(0, dl, MVT::i32));
-  SDValue Hi = DAG.getNode(ISD::EXTRACT_ELEMENT, dl, MVT::i32, Op.getOperand(1),
-                           DAG.getConstant(1, dl, MVT::i32));
-  SDValue Or = DAG.getNode(ISD::OR, dl, MVT::i32, Lo, Hi);
-
-  SDValue DBZCHK =
-      DAG.getNode(ARMISD::WIN__DBZCHK, dl, MVT::Other, DAG.getEntryNode(), Or);
+  SDValue DBZCHK = WinDBZCheckDenominator(DAG, Op.getNode(), DAG.getEntryNode());
 
   SDValue Result = LowerWindowsDIVLibCall(Op, DAG, Signed, DBZCHK);
 
@@ -7852,8 +7880,10 @@ void ARMTargetLowering::EmitSjLjDispatchBlock(MachineInstr &MI,
   const ARMBaseRegisterInfo &RI = AII->getRegisterInfo();
 
   // Add a register mask with no preserved registers.  This results in all
-  // registers being marked as clobbered.
-  MIB.addRegMask(RI.getNoPreservedMask());
+  // registers being marked as clobbered. This can't work if the dispatch block
+  // is in a Thumb1 function and is linked with ARM code which uses the FP
+  // registers, as there is no way to preserve the FP registers in Thumb1 mode.
+  MIB.addRegMask(RI.getSjLjDispatchPreservedMask(*MF));
 
   bool IsPositionIndependent = isPositionIndependent();
   unsigned NumLPads = LPadList.size();
@@ -11597,6 +11627,17 @@ bool ARMTargetLowering::allowTruncateForTailCall(Type *Ty1, Type *Ty2) const {
   return true;
 }
 
+int ARMTargetLowering::getScalingFactorCost(const DataLayout &DL,
+                                                const AddrMode &AM, Type *Ty,
+                                                unsigned AS) const {
+  if (isLegalAddressingMode(DL, AM, Ty, AS)) {
+    if (Subtarget->hasFPAO())
+      return AM.Scale < 0 ? 1 : 0; // positive offsets execute faster
+    return 0;
+  }
+  return -1;
+}
+
 
 static bool isLegalT1AddressImmediate(int64_t V, EVT VT) {
   if (V < 0)
@@ -12406,7 +12447,7 @@ static RTLIB::Libcall getDivRemLibcall(
 }
 
 static TargetLowering::ArgListTy getDivRemArgList(
-    const SDNode *N, LLVMContext *Context) {
+    const SDNode *N, LLVMContext *Context, const ARMSubtarget *Subtarget) {
   assert((N->getOpcode() == ISD::SDIVREM || N->getOpcode() == ISD::UDIVREM ||
           N->getOpcode() == ISD::SREM    || N->getOpcode() == ISD::UREM) &&
          "Unhandled Opcode in getDivRemArgList");
@@ -12423,12 +12464,15 @@ static TargetLowering::ArgListTy getDivRemArgList(
     Entry.isZExt = !isSigned;
     Args.push_back(Entry);
   }
+  if (Subtarget->isTargetWindows() && Args.size() >= 2)
+    std::swap(Args[0], Args[1]);
   return Args;
 }
 
 SDValue ARMTargetLowering::LowerDivRem(SDValue Op, SelectionDAG &DAG) const {
   assert((Subtarget->isTargetAEABI() || Subtarget->isTargetAndroid() ||
-          Subtarget->isTargetGNUAEABI() || Subtarget->isTargetMuslAEABI()) &&
+          Subtarget->isTargetGNUAEABI() || Subtarget->isTargetMuslAEABI() ||
+          Subtarget->isTargetWindows()) &&
          "Register-based DivRem lowering only");
   unsigned Opcode = Op->getOpcode();
   assert((Opcode == ISD::SDIVREM || Opcode == ISD::UDIVREM) &&
@@ -12461,12 +12505,16 @@ SDValue ARMTargetLowering::LowerDivRem(SDValue Op, SelectionDAG &DAG) const {
   SDValue InChain = DAG.getEntryNode();
 
   TargetLowering::ArgListTy Args = getDivRemArgList(Op.getNode(),
-                                                    DAG.getContext());
+                                                    DAG.getContext(),
+                                                    Subtarget);
 
   SDValue Callee = DAG.getExternalSymbol(getLibcallName(LC),
                                          getPointerTy(DAG.getDataLayout()));
 
   Type *RetTy = (Type*)StructType::get(Ty, Ty, nullptr);
+
+  if (Subtarget->isTargetWindows())
+    InChain = WinDBZCheckDenominator(DAG, Op.getNode(), InChain);
 
   TargetLowering::CallLoweringInfo CLI(DAG);
   CLI.setDebugLoc(dl).setChain(InChain)
@@ -12500,10 +12548,14 @@ SDValue ARMTargetLowering::LowerREM(SDNode *N, SelectionDAG &DAG) const {
   RTLIB::Libcall LC = getDivRemLibcall(N, N->getValueType(0).getSimpleVT().
                                                              SimpleTy);
   SDValue InChain = DAG.getEntryNode();
-  TargetLowering::ArgListTy Args = getDivRemArgList(N, DAG.getContext());
+  TargetLowering::ArgListTy Args = getDivRemArgList(N, DAG.getContext(),
+                                                    Subtarget);
   bool isSigned = N->getOpcode() == ISD::SREM;
   SDValue Callee = DAG.getExternalSymbol(getLibcallName(LC),
                                          getPointerTy(DAG.getDataLayout()));
+
+  if (Subtarget->isTargetWindows())
+    InChain = WinDBZCheckDenominator(DAG, N, InChain);
 
   // Lower call
   CallLoweringInfo CLI(DAG);

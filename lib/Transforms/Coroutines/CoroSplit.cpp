@@ -299,7 +299,6 @@ static Function *createClone(Function &F, Twine Suffix, coro::Shape &Shape,
   // Remove coro.end intrinsics.
   replaceFallthroughCoroEnd(Shape.CoroEnds.front(), VMap);
   replaceUnwindCoroEnds(Shape, VMap);
-
   // Eliminate coro.free from the clones, replacing it with 'null' in cleanup,
   // to suppress deallocation code.
   coro::replaceCoroFree(cast<CoroIdInst>(VMap[Shape.CoroBegin->getId()]),
@@ -372,7 +371,7 @@ static void setCoroInfo(Function &F, CoroBeginInst *CoroBegin,
 }
 
 // Store addresses of Resume/Destroy/Cleanup functions in the coroutine frame.
-static void updateCoroFrame(coro::Shape& Shape, Function *ResumeFn,
+static void updateCoroFrame(coro::Shape &Shape, Function *ResumeFn,
                             Function *DestroyFn, Function *CleanupFn) {
 
   IRBuilder<> Builder(Shape.FramePtr->getNextNode());
@@ -381,31 +380,19 @@ static void updateCoroFrame(coro::Shape& Shape, Function *ResumeFn,
       "resume.addr");
   Builder.CreateStore(ResumeFn, ResumeAddr);
 
-  Value* DestroyOrCleanupFn = DestroyFn;
+  Value *DestroyOrCleanupFn = DestroyFn;
 
   CoroIdInst *CoroId = Shape.CoroBegin->getId();
-  if (CoroAllocInst* CA = CoroId->getCoroAlloc()) {
+  if (CoroAllocInst *CA = CoroId->getCoroAlloc()) {
     // If there is a CoroAlloc and it returns false (meaning we elide the
     // allocation, use CleanupFn instead of DestroyFn).
     DestroyOrCleanupFn = Builder.CreateSelect(CA, DestroyFn, CleanupFn);
   }
 
   auto *DestroyAddr = Builder.CreateConstInBoundsGEP2_32(
-    Shape.FrameTy, Shape.FramePtr, 0, coro::Shape::DestroyField,
-    "destroy.addr");
+      Shape.FrameTy, Shape.FramePtr, 0, coro::Shape::DestroyField,
+      "destroy.addr");
   Builder.CreateStore(DestroyOrCleanupFn, DestroyAddr);
-}
-
-static void removeLifetimeIntrinsics(Function& F) {
-  for (auto IB = inst_begin(F), IE = inst_end(F); IB != IE;) {
-    auto *II = dyn_cast<IntrinsicInst>(&*IB++);
-    if (!II)
-      continue;
-
-    if (II->getIntrinsicID() == Intrinsic::lifetime_start ||
-      II->getIntrinsicID() == Intrinsic::lifetime_end)
-      II->eraseFromParent();
-  }
 }
 
 static void postSplitCleanup(Function &F) {

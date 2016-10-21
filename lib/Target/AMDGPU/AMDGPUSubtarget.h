@@ -53,6 +53,7 @@ public:
     ISAVersion7_0_1,
     ISAVersion8_0_0,
     ISAVersion8_0_1,
+    ISAVersion8_0_2,
     ISAVersion8_0_3
   };
 
@@ -75,6 +76,7 @@ protected:
   bool FP64Denormals;
   bool FPExceptions;
   bool FlatForGlobal;
+  bool UnalignedScratchAccess;
   bool UnalignedBufferAccess;
   bool EnableXNACK;
   bool DebuggerInsertNops;
@@ -98,6 +100,8 @@ protected:
   bool SGPRInitBug;
   bool HasSMemRealTime;
   bool Has16BitInsts;
+  bool HasMovrel;
+  bool HasVGPRIndexMode;
   bool FlatAddressSpace;
   bool R600ALUInst;
   bool CaymanISA;
@@ -245,6 +249,10 @@ public:
     return DumpCode;
   }
 
+  bool enableIEEEBit(const MachineFunction &MF) const {
+    return AMDGPU::isCompute(MF.getFunction()->getCallingConv());
+  }
+
   /// Return the amount of LDS that can be used that will not restrict the
   /// occupancy lower than WaveCount.
   unsigned getMaxLocalMemSizeWithWaveCount(unsigned WaveCount) const;
@@ -272,6 +280,10 @@ public:
 
   bool hasUnalignedBufferAccess() const {
     return UnalignedBufferAccess;
+  }
+
+  bool hasUnalignedScratchAccess() const {
+    return UnalignedScratchAccess;
   }
 
   bool isXNACKEnabled() const {
@@ -498,6 +510,14 @@ public:
 
   bool has16BitInsts() const {
     return Has16BitInsts;
+  }
+
+  bool hasMovrel() const {
+    return HasMovrel;
+  }
+
+  bool hasVGPRIndexMode() const {
+    return HasVGPRIndexMode;
   }
 
   bool hasScalarCompareEq64() const {

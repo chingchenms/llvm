@@ -15,6 +15,7 @@
 #include "AVRMCAsmInfo.h"
 #include "AVRMCTargetDesc.h"
 #include "AVRTargetStreamer.h"
+#include "InstPrinter/AVRInstPrinter.h"
 
 #include "llvm/MC/MCELFStreamer.h"
 #include "llvm/MC/MCInstrInfo.h"
@@ -52,6 +53,18 @@ static MCSubtargetInfo *createAVRMCSubtargetInfo(const Triple &TT,
   return createAVRMCSubtargetInfoImpl(TT, CPU, FS);
 }
 
+static MCInstPrinter *createAVRMCInstPrinter(const Triple &T,
+                                             unsigned SyntaxVariant,
+                                             const MCAsmInfo &MAI,
+                                             const MCInstrInfo &MII,
+                                             const MCRegisterInfo &MRI) {
+  if (SyntaxVariant == 0) {
+    return new AVRInstPrinter(MAI, MII, MRI);
+  }
+
+  return nullptr;
+}
+
 static MCStreamer *createMCStreamer(const Triple &T, MCContext &Context,
                                     MCAsmBackend &MAB, raw_pwrite_stream &OS,
                                     MCCodeEmitter *Emitter, bool RelaxAll) {
@@ -72,27 +85,34 @@ static MCTargetStreamer *createMCAsmTargetStreamer(MCStreamer &S,
 
 extern "C" void LLVMInitializeAVRTargetMC() {
   // Register the MC asm info.
-  RegisterMCAsmInfo<AVRMCAsmInfo> X(TheAVRTarget);
+  RegisterMCAsmInfo<AVRMCAsmInfo> X(getTheAVRTarget());
 
   // Register the MC instruction info.
-  TargetRegistry::RegisterMCInstrInfo(TheAVRTarget, createAVRMCInstrInfo);
+  TargetRegistry::RegisterMCInstrInfo(getTheAVRTarget(), createAVRMCInstrInfo);
 
   // Register the MC register info.
-  TargetRegistry::RegisterMCRegInfo(TheAVRTarget, createAVRMCRegisterInfo);
+  TargetRegistry::RegisterMCRegInfo(getTheAVRTarget(), createAVRMCRegisterInfo);
 
   // Register the MC subtarget info.
-  TargetRegistry::RegisterMCSubtargetInfo(TheAVRTarget,
+  TargetRegistry::RegisterMCSubtargetInfo(getTheAVRTarget(),
                                           createAVRMCSubtargetInfo);
 
+  // Register the MCInstPrinter.
+  TargetRegistry::RegisterMCInstPrinter(getTheAVRTarget(),
+                                        createAVRMCInstPrinter);
+
   // Register the ELF streamer
-  TargetRegistry::RegisterELFStreamer(TheAVRTarget, createMCStreamer);
+  TargetRegistry::RegisterELFStreamer(getTheAVRTarget(), createMCStreamer);
 
   // Register the obj target streamer.
-  TargetRegistry::RegisterObjectTargetStreamer(TheAVRTarget,
+  TargetRegistry::RegisterObjectTargetStreamer(getTheAVRTarget(),
                                                createAVRObjectTargetStreamer);
 
   // Register the asm target streamer.
-  TargetRegistry::RegisterAsmTargetStreamer(TheAVRTarget,
+  TargetRegistry::RegisterAsmTargetStreamer(getTheAVRTarget(),
                                             createMCAsmTargetStreamer);
+
+  // Register the asm backend (as little endian).
+  TargetRegistry::RegisterMCAsmBackend(getTheAVRTarget(), createAVRAsmBackend);
 }
 

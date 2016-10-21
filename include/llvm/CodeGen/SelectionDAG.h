@@ -183,8 +183,8 @@ class SelectionDAG {
   /// The AllocatorType for allocating SDNodes. We use
   /// pool allocation with recycling.
   typedef RecyclingAllocator<BumpPtrAllocator, SDNode, sizeof(LargestSDNode),
-                             AlignOf<MostAlignedSDNode>::Alignment>
-    NodeAllocatorType;
+                             alignof(MostAlignedSDNode)>
+      NodeAllocatorType;
 
   /// Pool allocation for nodes.
   NodeAllocatorType NodeAllocator;
@@ -856,10 +856,7 @@ public:
                            SynchronizationScope SynchScope);
   SDValue getAtomicCmpSwap(unsigned Opcode, const SDLoc &dl, EVT MemVT,
                            SDVTList VTs, SDValue Chain, SDValue Ptr,
-                           SDValue Cmp, SDValue Swp, MachineMemOperand *MMO,
-                           AtomicOrdering SuccessOrdering,
-                           AtomicOrdering FailureOrdering,
-                           SynchronizationScope SynchScope);
+                           SDValue Cmp, SDValue Swp, MachineMemOperand *MMO);
 
   /// Gets a node for an atomic op, produces result (if relevant)
   /// and chain and takes 2 operands.
@@ -868,26 +865,18 @@ public:
                     unsigned Alignment, AtomicOrdering Ordering,
                     SynchronizationScope SynchScope);
   SDValue getAtomic(unsigned Opcode, const SDLoc &dl, EVT MemVT, SDValue Chain,
-                    SDValue Ptr, SDValue Val, MachineMemOperand *MMO,
-                    AtomicOrdering Ordering, SynchronizationScope SynchScope);
+                    SDValue Ptr, SDValue Val, MachineMemOperand *MMO);
 
   /// Gets a node for an atomic op, produces result and chain and
   /// takes 1 operand.
   SDValue getAtomic(unsigned Opcode, const SDLoc &dl, EVT MemVT, EVT VT,
-                    SDValue Chain, SDValue Ptr, MachineMemOperand *MMO,
-                    AtomicOrdering Ordering, SynchronizationScope SynchScope);
+                    SDValue Chain, SDValue Ptr, MachineMemOperand *MMO);
 
   /// Gets a node for an atomic op, produces result and chain and takes N
   /// operands.
   SDValue getAtomic(unsigned Opcode, const SDLoc &dl, EVT MemVT,
                     SDVTList VTList, ArrayRef<SDValue> Ops,
-                    MachineMemOperand *MMO, AtomicOrdering SuccessOrdering,
-                    AtomicOrdering FailureOrdering,
-                    SynchronizationScope SynchScope);
-  SDValue getAtomic(unsigned Opcode, const SDLoc &dl, EVT MemVT,
-                    SDVTList VTList, ArrayRef<SDValue> Ops,
-                    MachineMemOperand *MMO, AtomicOrdering Ordering,
-                    SynchronizationScope SynchScope);
+                    MachineMemOperand *MMO);
 
   /// Creates a MemIntrinsicNode that may produce a
   /// result and takes a list of operands. Opcode may be INTRINSIC_VOID,
@@ -965,11 +954,12 @@ public:
 
   SDValue getMaskedLoad(EVT VT, const SDLoc &dl, SDValue Chain, SDValue Ptr,
                         SDValue Mask, SDValue Src0, EVT MemVT,
-                        MachineMemOperand *MMO, ISD::LoadExtType);
+                        MachineMemOperand *MMO, ISD::LoadExtType,
+                        bool IsExpanding = false);
   SDValue getMaskedStore(SDValue Chain, const SDLoc &dl, SDValue Val,
                          SDValue Ptr, SDValue Mask, EVT MemVT,
-                         MachineMemOperand *MMO, bool IsTrunc, 
-                         bool isCompressing = false);
+                         MachineMemOperand *MMO, bool IsTruncating = false, 
+                         bool IsCompressing = false);
   SDValue getMaskedGather(SDVTList VTs, EVT VT, const SDLoc &dl,
                           ArrayRef<SDValue> Ops, MachineMemOperand *MMO);
   SDValue getMaskedScatter(SDVTList VTs, EVT VT, const SDLoc &dl,

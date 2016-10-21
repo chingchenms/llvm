@@ -441,6 +441,10 @@ protected:
   /// respective conditions.
   void predicateInstructions();
 
+  /// Collect the instructions from the original loop that would be trivially
+  /// dead in the vectorized loop if generated.
+  void collectTriviallyDeadInstructions();
+
   /// Shrinks vector element sizes to the smallest bitwidth they can be legally
   /// represented as.
   void truncateToMinimalBitwidths();
@@ -763,6 +767,14 @@ protected:
 
   // Record whether runtime checks are added.
   bool AddedSafetyChecks;
+
+  // Holds instructions from the original loop whose counterparts in the
+  // vectorized loop would be trivially dead if generated. For example,
+  // original induction update instructions can become dead because we
+  // separately emit induction "steps" when generating code for the new loop.
+  // Similarly, we create a new latch condition when setting up the structure
+  // of the new loop, so the old one can become dead.
+  SmallPtrSet<Instruction *, 4> DeadInstructions;
 };
 
 class InnerLoopUnroller : public InnerLoopVectorizer {
@@ -3542,10 +3554,7 @@ static Value *addFastMathFlag(Value *V) {
 /// \brief Estimate the overhead of scalarizing a value based on its type.
 /// Insert and Extract are set if the result needs to be inserted and/or
 /// extracted from vectors.
-/// If the instruction is also to be predicated, add the cost of a PHI
-/// node to the insertion cost.
 static unsigned getScalarizationOverhead(Type *Ty, bool Insert, bool Extract,
-                                         bool Predicated,
                                          const TargetTransformInfo &TTI) {
   if (Ty->isVoidTy())
     return 0;
@@ -3556,18 +3565,9 @@ static unsigned getScalarizationOverhead(Type *Ty, bool Insert, bool Extract,
   for (unsigned I = 0, E = Ty->getVectorNumElements(); I < E; ++I) {
     if (Extract)
       Cost += TTI.getVectorInstrCost(Instruction::ExtractElement, Ty, I);
-    if (Insert) {
+    if (Insert)
       Cost += TTI.getVectorInstrCost(Instruction::InsertElement, Ty, I);
-      if (Predicated)
-        Cost += TTI.getCFInstrCost(Instruction::PHI);
-    }
   }
-
-  // If we have a predicated instruction, it may not be executed for each
-  // vector lane. Scale the cost by the probability of executing the
-  // predicated block.
-  if (Predicated)
-    Cost /= getReciprocalPredBlockProb();
 
   return Cost;
 }
@@ -3575,14 +3575,13 @@ static unsigned getScalarizationOverhead(Type *Ty, bool Insert, bool Extract,
 /// \brief Estimate the overhead of scalarizing an Instruction based on the
 /// types of its operands and return value.
 static unsigned getScalarizationOverhead(SmallVectorImpl<Type *> &OpTys,
-                                         Type *RetTy, bool Predicated,
+                                         Type *RetTy,
                                          const TargetTransformInfo &TTI) {
   unsigned ScalarizationCost =
-      getScalarizationOverhead(RetTy, true, false, Predicated, TTI);
+      getScalarizationOverhead(RetTy, true, false, TTI);
 
   for (Type *Ty : OpTys)
-    ScalarizationCost +=
-        getScalarizationOverhead(Ty, false, true, Predicated, TTI);
+    ScalarizationCost += getScalarizationOverhead(Ty, false, true, TTI);
 
   return ScalarizationCost;
 }
@@ -3590,7 +3589,6 @@ static unsigned getScalarizationOverhead(SmallVectorImpl<Type *> &OpTys,
 /// \brief Estimate the overhead of scalarizing an instruction. This is a
 /// convenience wrapper for the type-based getScalarizationOverhead API.
 static unsigned getScalarizationOverhead(Instruction *I, unsigned VF,
-                                         bool Predicated,
                                          const TargetTransformInfo &TTI) {
   if (VF == 1)
     return 0;
@@ -3602,7 +3600,7 @@ static unsigned getScalarizationOverhead(Instruction *I, unsigned VF,
   for (unsigned OpInd = 0; OpInd < OperandsNum; ++OpInd)
     OpTys.push_back(ToVectorTy(I->getOperand(OpInd)->getType(), VF));
 
-  return getScalarizationOverhead(OpTys, RetTy, Predicated, TTI);
+  return getScalarizationOverhead(OpTys, RetTy, TTI);
 }
 
 // Estimate cost of a call instruction CI if it were vectorized with factor VF.
@@ -3635,7 +3633,7 @@ static unsigned getVectorCallCost(CallInst *CI, unsigned VF,
 
   // Compute costs of unpacking argument values for the scalar calls and
   // packing the return values to a vector.
-  unsigned ScalarizationCost = getScalarizationOverhead(Tys, RetTy, false, TTI);
+  unsigned ScalarizationCost = getScalarizationOverhead(Tys, RetTy, TTI);
 
   unsigned Cost = ScalarCallCost * VF + ScalarizationCost;
 
@@ -3815,6 +3813,11 @@ void InnerLoopVectorizer::vectorizeLoop() {
   // edges to the PHI. At this point all of the instructions in the basic block
   // are vectorized, so we can use them to construct the PHI.
   PhiVector PHIsToFix;
+
+  // Collect instructions from the original loop that will become trivially
+  // dead in the vectorized loop. We don't need to vectorize these
+  // instructions.
+  collectTriviallyDeadInstructions();
 
   // Scan the loop in a topological order to ensure that defs are vectorized
   // before users.
@@ -4223,6 +4226,29 @@ void InnerLoopVectorizer::fixLCSSAPHIs() {
   }
 }
 
+void InnerLoopVectorizer::collectTriviallyDeadInstructions() {
+  BasicBlock *Latch = OrigLoop->getLoopLatch();
+
+  // We create new control-flow for the vectorized loop, so the original
+  // condition will be dead after vectorization if it's only used by the
+  // branch.
+  auto *Cmp = dyn_cast<Instruction>(Latch->getTerminator()->getOperand(0));
+  if (Cmp && Cmp->hasOneUse())
+    DeadInstructions.insert(Cmp);
+
+  // We create new "steps" for induction variable updates to which the original
+  // induction variables map. An original update instruction will be dead if
+  // all its users except the induction variable are dead.
+  for (auto &Induction : *Legal->getInductionVars()) {
+    PHINode *Ind = Induction.first;
+    auto *IndUpdate = cast<Instruction>(Ind->getIncomingValueForBlock(Latch));
+    if (all_of(IndUpdate->users(), [&](User *U) -> bool {
+          return U == Ind || DeadInstructions.count(cast<Instruction>(U));
+        }))
+      DeadInstructions.insert(IndUpdate);
+  }
+}
+
 void InnerLoopVectorizer::predicateInstructions() {
 
   // For each instruction I marked for predication on value C, split I into its
@@ -4549,6 +4575,11 @@ static bool mayDivideByZero(Instruction &I) {
 void InnerLoopVectorizer::vectorizeBlockInLoop(BasicBlock *BB, PhiVector *PV) {
   // For each instruction in the old loop.
   for (Instruction &I : *BB) {
+
+    // If the instruction will become trivially dead when vectorized, we don't
+    // need to generate it.
+    if (DeadInstructions.count(&I))
+      continue;
 
     // Scalarize instructions that should remain scalar after vectorization.
     if (!(isa<BranchInst>(&I) || isa<PHINode>(&I) ||
@@ -5386,9 +5417,12 @@ void LoopVectorizationLegality::collectLoopUniforms() {
 
   SetVector<Instruction *> Worklist;
   BasicBlock *Latch = TheLoop->getLoopLatch();
-  // Start with the conditional branch.
-  if (!isOutOfScope(Latch->getTerminator()->getOperand(0))) {
-    Instruction *Cmp = cast<Instruction>(Latch->getTerminator()->getOperand(0));
+
+  // Start with the conditional branch. If the branch condition is an
+  // instruction contained in the loop that is only used by the branch, it is
+  // uniform.
+  auto *Cmp = dyn_cast<Instruction>(Latch->getTerminator()->getOperand(0));
+  if (Cmp && TheLoop->contains(Cmp) && Cmp->hasOneUse()) {
     Worklist.insert(Cmp);
     DEBUG(dbgs() << "LV: Found uniform instruction: " << *Cmp << "\n");
   }
@@ -6533,10 +6567,27 @@ unsigned LoopVectorizationCostModel::getInstructionCost(Instruction *I,
     // vector lane. Get the scalarization cost and scale this amount by the
     // probability of executing the predicated block. If the instruction is not
     // predicated, we fall through to the next case.
-    if (VF > 1 && Legal->isScalarWithPredication(I))
-      return VF * TTI.getArithmeticInstrCost(I->getOpcode(), RetTy) /
-                 getReciprocalPredBlockProb() +
-             getScalarizationOverhead(I, VF, true, TTI);
+    if (VF > 1 && Legal->isScalarWithPredication(I)) {
+      unsigned Cost = 0;
+
+      // These instructions have a non-void type, so account for the phi nodes
+      // that we will create. This cost is likely to be zero. The phi node
+      // cost, if any, should be scaled by the block probability because it
+      // models a copy at the end of each predicated block.
+      Cost += VF * TTI.getCFInstrCost(Instruction::PHI);
+
+      // The cost of the non-predicated instruction.
+      Cost += VF * TTI.getArithmeticInstrCost(I->getOpcode(), RetTy);
+
+      // The cost of insertelement and extractelement instructions needed for
+      // scalarization.
+      Cost += getScalarizationOverhead(I, VF, TTI);
+
+      // Scale the cost by the probability of executing the predicated blocks.
+      // This assumes the predicated block for each vector lane is equally
+      // likely.
+      return Cost / getReciprocalPredBlockProb();
+    }
   case Instruction::Add:
   case Instruction::FAdd:
   case Instruction::Sub:
@@ -6692,7 +6743,13 @@ unsigned LoopVectorizationCostModel::getInstructionCost(Instruction *I,
 
       // Get the overhead of the extractelement and insertelement instructions
       // we might create due to scalarization.
-      Cost += getScalarizationOverhead(I, VF, false, TTI);
+      Cost += getScalarizationOverhead(I, VF, TTI);
+
+      // If we have a predicated store, it may not be executed for each vector
+      // lane. Scale the cost by the probability of executing the predicated
+      // block.
+      if (Legal->isScalarWithPredication(I))
+        Cost /= getReciprocalPredBlockProb();
 
       return Cost;
     }
@@ -6779,7 +6836,7 @@ unsigned LoopVectorizationCostModel::getInstructionCost(Instruction *I,
     // The cost of executing VF copies of the scalar instruction. This opcode
     // is unknown. Assume that it is the same as 'mul'.
     return VF * TTI.getArithmeticInstrCost(Instruction::Mul, VectorTy) +
-           getScalarizationOverhead(I, VF, false, TTI);
+           getScalarizationOverhead(I, VF, TTI);
   } // end of switch.
 }
 

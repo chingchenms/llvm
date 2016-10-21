@@ -87,8 +87,10 @@ createAMDGPUAsmPrinterPass(TargetMachine &tm,
 }
 
 extern "C" void LLVMInitializeAMDGPUAsmPrinter() {
-  TargetRegistry::RegisterAsmPrinter(TheAMDGPUTarget, createAMDGPUAsmPrinterPass);
-  TargetRegistry::RegisterAsmPrinter(TheGCNTarget, createAMDGPUAsmPrinterPass);
+  TargetRegistry::RegisterAsmPrinter(getTheAMDGPUTarget(),
+                                     createAMDGPUAsmPrinterPass);
+  TargetRegistry::RegisterAsmPrinter(getTheGCNTarget(),
+                                     createAMDGPUAsmPrinterPass);
 }
 
 AMDGPUAsmPrinter::AMDGPUAsmPrinter(TargetMachine &TM,
@@ -546,7 +548,7 @@ void AMDGPUAsmPrinter::getSIProgramInfo(SIProgramInfo &ProgInfo,
   // register.
   ProgInfo.FloatMode = getFPMode(MF);
 
-  ProgInfo.IEEEMode = 0;
+  ProgInfo.IEEEMode = STM.enableIEEEBit(MF);
 
   // Make clamp modifier on NaN input returns 0.
   ProgInfo.DX10Clamp = 1;

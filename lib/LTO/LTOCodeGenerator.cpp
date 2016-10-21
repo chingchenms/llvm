@@ -131,7 +131,7 @@ void LTOCodeGenerator::initializeLTOPasses() {
 }
 
 void LTOCodeGenerator::setAsmUndefinedRefs(LTOModule *Mod) {
-  const std::vector<const char *> &undefs = Mod->getAsmUndefinedRefs();
+  const std::vector<StringRef> &undefs = Mod->getAsmUndefinedRefs();
   for (int i = 0, e = undefs.size(); i != e; ++i)
     AsmUndefinedRefs[undefs[i]] = 1;
 }
@@ -410,6 +410,7 @@ void LTOCodeGenerator::applyScopeRestrictions() {
 
   // Declare a callback for the internalize pass that will ask for every
   // candidate GlobalValue if it can be internalized or not.
+  Mangler Mang;
   SmallString<64> MangledName;
   auto mustPreserveGV = [&](const GlobalValue &GV) -> bool {
     // Unnamed globals can't be mangled, but they can't be preserved either.
@@ -421,8 +422,7 @@ void LTOCodeGenerator::applyScopeRestrictions() {
     // underscore.
     MangledName.clear();
     MangledName.reserve(GV.getName().size() + 1);
-    Mangler::getNameWithPrefix(MangledName, GV.getName(),
-                               MergedModule->getDataLayout());
+    Mang.getNameWithPrefix(MangledName, &GV, /*CannotUsePrivateLabel=*/false);
     return MustPreserveSymbols.count(MangledName);
   };
 

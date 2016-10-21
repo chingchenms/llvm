@@ -53,6 +53,14 @@ unsigned AMDGPUELFObjectWriter::getRelocType(MCContext &Ctx,
     break;
   case MCSymbolRefExpr::VK_GOTPCREL:
     return ELF::R_AMDGPU_GOTPCREL;
+  case MCSymbolRefExpr::VK_AMDGPU_GOTPCREL32_LO:
+    return ELF::R_AMDGPU_GOTPCREL32_LO;
+  case MCSymbolRefExpr::VK_AMDGPU_GOTPCREL32_HI:
+    return ELF::R_AMDGPU_GOTPCREL32_HI;
+  case MCSymbolRefExpr::VK_AMDGPU_REL32_LO:
+    return ELF::R_AMDGPU_REL32_LO;
+  case MCSymbolRefExpr::VK_AMDGPU_REL32_HI:
+    return ELF::R_AMDGPU_REL32_HI;
   }
 
   switch (Fixup.getKind()) {
@@ -62,6 +70,8 @@ unsigned AMDGPUELFObjectWriter::getRelocType(MCContext &Ctx,
   case FK_Data_4:
   case FK_SecRel_4:
     return ELF::R_AMDGPU_ABS32;
+  case FK_Data_8:
+    return ELF::R_AMDGPU_ABS64;
   }
 
   llvm_unreachable("unhandled relocation type");
