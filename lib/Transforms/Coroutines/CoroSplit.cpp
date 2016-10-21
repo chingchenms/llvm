@@ -517,7 +517,6 @@ static void splitCoroutine(Function &F, CallGraph &CG, CallGraphSCC &SCC) {
     return;
 
   simplifySuspendPoints(Shape);
-  removeLifetimeIntrinsics(F);
   buildCoroutineFrame(F, Shape);
   replaceFrameSize(Shape);
 
