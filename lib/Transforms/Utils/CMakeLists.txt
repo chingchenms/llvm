@@ -35,6 +35,7 @@ add_llvm_library(LLVMTransformUtils
   ModuleUtils.cpp
   NameAnonGlobals.cpp
   PromoteMemoryToRegister.cpp
+  StripGCRelocates.cpp
   SSAUpdater.cpp
   SanitizerStats.cpp
   SimplifyCFG.cpp
@@ -42,6 +43,7 @@ add_llvm_library(LLVMTransformUtils
   SimplifyInstructions.cpp
   SimplifyLibCalls.cpp
   SplitModule.cpp
+  StripNonLineTableDebugInfo.cpp
   SymbolRewriter.cpp
   UnifyFunctionExitNodes.cpp
   Utils.cpp

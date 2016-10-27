@@ -204,6 +204,19 @@ int X86TTIImpl::getArithmeticInstrCost(
       return LT.first * Entry->Cost;
   }
 
+  static const CostTblEntry AVX512DQCostTable[] = {
+    { ISD::MUL,  MVT::v2i64, 1 },
+    { ISD::MUL,  MVT::v4i64, 1 },
+    { ISD::MUL,  MVT::v8i64, 1 }
+  };
+
+  // Look for AVX512DQ lowering tricks for custom cases.
+  if (ST->hasDQI()) {
+    if (const auto *Entry = CostTableLookup(AVX512DQCostTable, ISD,
+                                            LT.second))
+      return LT.first * Entry->Cost;
+  }
+
   static const CostTblEntry AVX512BWCostTable[] = {
     // Vectorizing division is a bad idea. See the SSE2 table for more comments.
     { ISD::SDIV,  MVT::v64i8,  64*20 },
@@ -398,6 +411,32 @@ int X86TTIImpl::getArithmeticInstrCost(
     // lowered into a sequence of shuffles and 2 x pmuludq.
     if (VT == MVT::v4i32 && ST->hasSSE2())
       ISD = ISD::MUL;
+  }
+
+  static const CostTblEntry SSE41CostTable[] = {
+    { ISD::SHL,  MVT::v16i8,    11 }, // pblendvb sequence.
+    { ISD::SHL,  MVT::v32i8,  2*11 }, // pblendvb sequence.
+    { ISD::SHL,  MVT::v8i16,    14 }, // pblendvb sequence.
+    { ISD::SHL,  MVT::v16i16, 2*14 }, // pblendvb sequence.
+
+    { ISD::SRL,  MVT::v16i8,    12 }, // pblendvb sequence.
+    { ISD::SRL,  MVT::v32i8,  2*12 }, // pblendvb sequence.
+    { ISD::SRL,  MVT::v8i16,    14 }, // pblendvb sequence.
+    { ISD::SRL,  MVT::v16i16, 2*14 }, // pblendvb sequence.
+    { ISD::SRL,  MVT::v4i32,    11 }, // Shift each lane + blend.
+    { ISD::SRL,  MVT::v8i32,  2*11 }, // Shift each lane + blend.
+
+    { ISD::SRA,  MVT::v16i8,    24 }, // pblendvb sequence.
+    { ISD::SRA,  MVT::v32i8,  2*24 }, // pblendvb sequence.
+    { ISD::SRA,  MVT::v8i16,    14 }, // pblendvb sequence.
+    { ISD::SRA,  MVT::v16i16, 2*14 }, // pblendvb sequence.
+    { ISD::SRA,  MVT::v4i32,    12 }, // Shift each lane + blend.
+    { ISD::SRA,  MVT::v8i32,  2*12 }, // Shift each lane + blend.
+  };
+
+  if (ST->hasSSE41()) {
+    if (const auto *Entry = CostTableLookup(SSE41CostTable, ISD, LT.second))
+      return LT.first * Entry->Cost;
   }
 
   static const CostTblEntry SSE2CostTable[] = {

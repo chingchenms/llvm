@@ -233,6 +233,7 @@ SITargetLowering::SITargetLowering(const TargetMachine &TM,
   setTargetDAGCombine(ISD::AND);
   setTargetDAGCombine(ISD::OR);
   setTargetDAGCombine(ISD::XOR);
+  setTargetDAGCombine(ISD::SINT_TO_FP);
   setTargetDAGCombine(ISD::UINT_TO_FP);
   setTargetDAGCombine(ISD::FCANONICALIZE);
 
@@ -1450,6 +1451,23 @@ static MachineBasicBlock *emitIndirectSrc(MachineInstr &MI,
   return LoopBB;
 }
 
+static unsigned getMOVRELDPseudo(const TargetRegisterClass *VecRC) {
+  switch (VecRC->getSize()) {
+  case 4:
+    return AMDGPU::V_MOVRELD_B32_V1;
+  case 8:
+    return AMDGPU::V_MOVRELD_B32_V2;
+  case 16:
+    return AMDGPU::V_MOVRELD_B32_V4;
+  case 32:
+    return AMDGPU::V_MOVRELD_B32_V8;
+  case 64:
+    return AMDGPU::V_MOVRELD_B32_V16;
+  default:
+    llvm_unreachable("unsupported size for MOVRELD pseudos");
+  }
+}
+
 static MachineBasicBlock *emitIndirectDst(MachineInstr &MI,
                                           MachineBasicBlock &MBB,
                                           const SISubtarget &ST) {
@@ -1503,20 +1521,13 @@ static MachineBasicBlock *emitIndirectDst(MachineInstr &MI,
 
       BuildMI(MBB, I, DL, TII->get(AMDGPU::S_SET_GPR_IDX_OFF));
     } else {
-      const MCInstrDesc &MovRelDesc = TII->get(AMDGPU::V_MOVRELD_B32_e32);
+      const MCInstrDesc &MovRelDesc = TII->get(getMOVRELDPseudo(VecRC));
 
-      MachineInstr *MovRel =
-        BuildMI(MBB, I, DL, MovRelDesc)
-        .addReg(SrcVec->getReg(), RegState::Undef, SubReg) // vdst
-        .addOperand(*Val)
-        .addReg(Dst, RegState::ImplicitDefine)
-        .addReg(SrcVec->getReg(), RegState::Implicit);
-
-      const int ImpDefIdx = MovRelDesc.getNumOperands() +
-        MovRelDesc.getNumImplicitUses();
-      const int ImpUseIdx = ImpDefIdx + 1;
-
-      MovRel->tieOperands(ImpDefIdx, ImpUseIdx);
+      BuildMI(MBB, I, DL, MovRelDesc)
+          .addReg(Dst, RegState::Define)
+          .addReg(SrcVec->getReg())
+          .addOperand(*Val)
+          .addImm(SubReg - AMDGPU::sub0);
     }
 
     MI.eraseFromParent();
@@ -1554,20 +1565,13 @@ static MachineBasicBlock *emitIndirectDst(MachineInstr &MI,
       .addReg(PhiReg, RegState::Implicit)
       .addReg(AMDGPU::M0, RegState::Implicit);
   } else {
-    const MCInstrDesc &MovRelDesc = TII->get(AMDGPU::V_MOVRELD_B32_e32);
-    // vdst is not actually read and just provides the base register index.
-    MachineInstr *MovRel =
-      BuildMI(*LoopBB, InsPt, DL, MovRelDesc)
-    .addReg(PhiReg, RegState::Undef, SubReg) // vdst
-    .addOperand(*Val)
-    .addReg(Dst, RegState::ImplicitDefine)
-    .addReg(PhiReg, RegState::Implicit);
+    const MCInstrDesc &MovRelDesc = TII->get(getMOVRELDPseudo(VecRC));
 
-    const int ImpDefIdx = MovRelDesc.getNumOperands() +
-      MovRelDesc.getNumImplicitUses();
-    const int ImpUseIdx = ImpDefIdx + 1;
-
-    MovRel->tieOperands(ImpDefIdx, ImpUseIdx);
+    BuildMI(*LoopBB, InsPt, DL, MovRelDesc)
+        .addReg(Dst, RegState::Define)
+        .addReg(PhiReg)
+        .addOperand(*Val)
+        .addImm(SubReg - AMDGPU::sub0);
   }
 
   MI.eraseFromParent();
@@ -2587,6 +2591,14 @@ SDValue SITargetLowering::LowerLOAD(SDValue Op, SelectionDAG &DAG) const {
     return DAG.getMergeValues(Ops, DL);
   }
 
+  MachineFunction &MF = DAG.getMachineFunction();
+  SIMachineFunctionInfo *MFI = MF.getInfo<SIMachineFunctionInfo>();
+  // If there is a possibilty that flat instruction access scratch memory
+  // then we need to use the same legalization rules we use for private.
+  if (AS == AMDGPUAS::FLAT_ADDRESS)
+    AS = MFI->hasFlatScratchInit() ?
+         AMDGPUAS::PRIVATE_ADDRESS : AMDGPUAS::GLOBAL_ADDRESS;
+
   unsigned NumElements = MemVT.getVectorNumElements();
   switch (AS) {
   case AMDGPUAS::CONSTANT_ADDRESS:
@@ -2885,6 +2897,14 @@ SDValue SITargetLowering::LowerSTORE(SDValue Op, SelectionDAG &DAG) const {
                           AS, Store->getAlignment())) {
     return expandUnalignedStore(Store, DAG);
   }
+
+  MachineFunction &MF = DAG.getMachineFunction();
+  SIMachineFunctionInfo *MFI = MF.getInfo<SIMachineFunctionInfo>();
+  // If there is a possibilty that flat instruction access scratch memory
+  // then we need to use the same legalization rules we use for private.
+  if (AS == AMDGPUAS::FLAT_ADDRESS)
+    AS = MFI->hasFlatScratchInit() ?
+         AMDGPUAS::PRIVATE_ADDRESS : AMDGPUAS::GLOBAL_ADDRESS;
 
   unsigned NumElements = VT.getVectorNumElements();
   switch (AS) {
@@ -3520,19 +3540,27 @@ SDValue SITargetLowering::PerformDAGCombine(SDNode *N,
   case AMDGPUISD::CVT_F32_UBYTE2:
   case AMDGPUISD::CVT_F32_UBYTE3: {
     unsigned Offset = N->getOpcode() - AMDGPUISD::CVT_F32_UBYTE0;
+
     SDValue Src = N->getOperand(0);
+    SDValue Srl = N->getOperand(0);
+    if (Srl.getOpcode() == ISD::ZERO_EXTEND)
+      Srl = Srl.getOperand(0);
 
     // TODO: Handle (or x, (srl y, 8)) pattern when known bits are zero.
-    if (Src.getOpcode() == ISD::SRL) {
+    if (Srl.getOpcode() == ISD::SRL) {
       // cvt_f32_ubyte0 (srl x, 16) -> cvt_f32_ubyte2 x
       // cvt_f32_ubyte1 (srl x, 16) -> cvt_f32_ubyte3 x
       // cvt_f32_ubyte0 (srl x, 8) -> cvt_f32_ubyte1 x
 
-      if (const ConstantSDNode *C = dyn_cast<ConstantSDNode>(Src.getOperand(1))) {
+      if (const ConstantSDNode *C =
+              dyn_cast<ConstantSDNode>(Srl.getOperand(1))) {
+        Srl = DAG.getZExtOrTrunc(Srl.getOperand(0), SDLoc(Srl.getOperand(0)),
+                                 EVT(MVT::i32));
+
         unsigned SrcOffset = C->getZExtValue() + 8 * Offset;
         if (SrcOffset < 32 && SrcOffset % 8 == 0) {
           return DAG.getNode(AMDGPUISD::CVT_F32_UBYTE0 + SrcOffset / 8, DL,
-                             MVT::f32, Src.getOperand(0));
+                             MVT::f32, Srl);
         }
       }
     }
@@ -3550,7 +3578,7 @@ SDValue SITargetLowering::PerformDAGCombine(SDNode *N,
 
     break;
   }
-
+  case ISD::SINT_TO_FP:
   case ISD::UINT_TO_FP: {
     return performUCharToFloatCombine(N, DCI);
   }

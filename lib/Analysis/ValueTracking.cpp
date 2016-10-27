@@ -3951,27 +3951,29 @@ static SelectPatternResult matchSelectPattern(CmpInst::Predicate Pred,
     }
   }
 
-  if (ConstantInt *C1 = dyn_cast<ConstantInt>(CmpRHS)) {
+  const APInt *C1;
+  if (match(CmpRHS, m_APInt(C1))) {
     if ((CmpLHS == TrueVal && match(FalseVal, m_Neg(m_Specific(CmpLHS)))) ||
         (CmpLHS == FalseVal && match(TrueVal, m_Neg(m_Specific(CmpLHS))))) {
 
       // ABS(X) ==> (X >s 0) ? X : -X and (X >s -1) ? X : -X
       // NABS(X) ==> (X >s 0) ? -X : X and (X >s -1) ? -X : X
-      if (Pred == ICmpInst::ICMP_SGT && (C1->isZero() || C1->isMinusOne())) {
+      if (Pred == ICmpInst::ICMP_SGT && (*C1 == 0 || C1->isAllOnesValue())) {
         return {(CmpLHS == TrueVal) ? SPF_ABS : SPF_NABS, SPNB_NA, false};
       }
 
       // ABS(X) ==> (X <s 0) ? -X : X and (X <s 1) ? -X : X
       // NABS(X) ==> (X <s 0) ? X : -X and (X <s 1) ? X : -X
-      if (Pred == ICmpInst::ICMP_SLT && (C1->isZero() || C1->isOne())) {
+      if (Pred == ICmpInst::ICMP_SLT && (*C1 == 0 || *C1 == 1)) {
         return {(CmpLHS == FalseVal) ? SPF_ABS : SPF_NABS, SPNB_NA, false};
       }
     }
 
     // Y >s C ? ~Y : ~C == ~Y <s ~C ? ~Y : ~C = SMIN(~Y, ~C)
-    if (const auto *C2 = dyn_cast<ConstantInt>(FalseVal)) {
-      if (Pred == ICmpInst::ICMP_SGT && C1->getType() == C2->getType() &&
-          ~C1->getValue() == C2->getValue() &&
+    const APInt *C2;
+    if (match(FalseVal, m_APInt(C2))) {
+      if (Pred == ICmpInst::ICMP_SGT &&
+          CmpRHS->getType() == FalseVal->getType() && ~(*C1) == *C2 &&
           (match(TrueVal, m_Not(m_Specific(CmpLHS))) ||
            match(CmpLHS, m_Not(m_Specific(TrueVal))))) {
         LHS = TrueVal;
@@ -4080,28 +4082,6 @@ SelectPatternResult llvm::matchSelectPattern(Value *V, Value *&LHS, Value *&RHS,
   }
   return ::matchSelectPattern(Pred, FMF, CmpLHS, CmpRHS, TrueVal, FalseVal,
                               LHS, RHS);
-}
-
-ConstantRange llvm::getConstantRangeFromMetadata(const MDNode &Ranges) {
-  const unsigned NumRanges = Ranges.getNumOperands() / 2;
-  assert(NumRanges >= 1 && "Must have at least one range!");
-  assert(Ranges.getNumOperands() % 2 == 0 && "Must be a sequence of pairs");
-
-  auto *FirstLow = mdconst::extract<ConstantInt>(Ranges.getOperand(0));
-  auto *FirstHigh = mdconst::extract<ConstantInt>(Ranges.getOperand(1));
-
-  ConstantRange CR(FirstLow->getValue(), FirstHigh->getValue());
-
-  for (unsigned i = 1; i < NumRanges; ++i) {
-    auto *Low = mdconst::extract<ConstantInt>(Ranges.getOperand(2 * i + 0));
-    auto *High = mdconst::extract<ConstantInt>(Ranges.getOperand(2 * i + 1));
-
-    // Note: unionWith will potentially create a range that contains values not
-    // contained in any of the original N ranges.
-    CR = CR.unionWith(ConstantRange(Low->getValue(), High->getValue()));
-  }
-
-  return CR;
 }
 
 /// Return true if "icmp Pred LHS RHS" is always true.
