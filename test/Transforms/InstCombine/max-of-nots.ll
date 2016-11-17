@@ -34,13 +34,15 @@ define i32 @compute_min_3(i32 %x, i32 %y, i32 %z) {
   ret i32 %min
 }
 
+; Don't increase the critical path by moving the 'not' op after the 'select'.
+
 define i32 @compute_min_arithmetic(i32 %x, i32 %y) {
 ; CHECK-LABEL: @compute_min_arithmetic(
-; CHECK-NEXT:    [[TMP1:%.*]] = add i32 %x, -4
-; CHECK-NEXT:    [[TMP2:%.*]] = icmp slt i32 [[TMP1]], %y
-; CHECK-NEXT:    [[TMP3:%.*]] = select i1 [[TMP2]], i32 [[TMP1]], i32 %y
-; CHECK-NEXT:    [[TMP4:%.*]] = xor i32 [[TMP3]], -1
-; CHECK-NEXT:    ret i32 [[TMP4]]
+; CHECK-NEXT:    [[NOT_VALUE:%.*]] = sub i32 3, %x
+; CHECK-NEXT:    [[NOT_Y:%.*]] = xor i32 %y, -1
+; CHECK-NEXT:    [[CMP:%.*]] = icmp sgt i32 [[NOT_VALUE]], [[NOT_Y]]
+; CHECK-NEXT:    [[NOT_MIN:%.*]] = select i1 [[CMP]], i32 [[NOT_VALUE]], i32 [[NOT_Y]]
+; CHECK-NEXT:    ret i32 [[NOT_MIN]]
 ;
   %not_value = sub i32 3, %x
   %not_y = sub i32 -1, %y
@@ -122,5 +124,69 @@ define <2 x i37> @max_of_nots_weird_type_vec(<2 x i37> %x, <2 x i37> %y) {
   %c1 = icmp slt <2 x i37> %s0, %xor_x
   %smax96 = select <2 x i1> %c1, <2 x i37> %xor_x, <2 x i37> %s0
   ret <2 x i37> %smax96
+}
+
+; max(min(%a, -1), -1) == -1
+define i32 @max_of_min(i32 %a) {
+; CHECK-LABEL: @max_of_min(
+; CHECK-NEXT:    ret i32 -1
+;
+  %not_a = xor i32 %a, -1
+  %c0 = icmp sgt i32 %a, 0
+  %s0 = select i1 %c0, i32 %not_a, i32 -1
+  %c1 = icmp sgt i32 %s0, -1
+  %s1 = select i1 %c1, i32 %s0, i32 -1
+  ret i32 %s1
+}
+
+; max(min(%a, -1), -1) == -1 (swap predicate and select ops)
+define i32 @max_of_min_swap(i32 %a) {
+; CHECK-LABEL: @max_of_min_swap(
+; CHECK-NEXT:    ret i32 -1
+;
+  %not_a = xor i32 %a, -1
+  %c0 = icmp slt i32 %a, 0
+  %s0 = select i1 %c0, i32 -1, i32 %not_a
+  %c1 = icmp sgt i32 %s0, -1
+  %s1 = select i1 %c1, i32 %s0, i32 -1
+  ret i32 %s1
+}
+
+; min(max(%a, -1), -1) == -1
+define i32 @min_of_max(i32 %a) {
+; CHECK-LABEL: @min_of_max(
+; CHECK-NEXT:    ret i32 -1
+;
+  %not_a = xor i32 %a, -1
+  %c0 = icmp slt i32 %a, 0
+  %s0 = select i1 %c0, i32 %not_a, i32 -1
+  %c1 = icmp slt i32 %s0, -1
+  %s1 = select i1 %c1, i32 %s0, i32 -1
+  ret i32 %s1
+}
+
+; min(max(%a, -1), -1) == -1 (swap predicate and select ops)
+define i32 @min_of_max_swap(i32 %a) {
+; CHECK-LABEL: @min_of_max_swap(
+; CHECK-NEXT:    ret i32 -1
+;
+  %not_a = xor i32 %a, -1
+  %c0 = icmp sgt i32 %a, 0
+  %s0 = select i1 %c0, i32 -1, i32 %not_a
+  %c1 = icmp slt i32 %s0, -1
+  %s1 = select i1 %c1, i32 %s0, i32 -1
+  ret i32 %s1
+}
+
+define <2 x i32> @max_of_min_vec(<2 x i32> %a) {
+; CHECK-LABEL: @max_of_min_vec(
+; CHECK-NEXT:    ret <2 x i32> <i32 -1, i32 -1>
+;
+  %not_a = xor <2 x i32> %a, <i32 -1, i32 -1>
+  %c0 = icmp sgt <2 x i32> %a, zeroinitializer
+  %s0 = select <2 x i1> %c0, <2 x i32> %not_a, <2 x i32> <i32 -1, i32 -1>
+  %c1 = icmp sgt <2 x i32> %s0, <i32 -1, i32 -1>
+  %s1 = select <2 x i1> %c1, <2 x i32> %s0, <2 x i32> <i32 -1, i32 -1>
+  ret <2 x i32> %s1
 }
 

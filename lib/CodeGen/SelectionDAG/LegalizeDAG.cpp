@@ -3550,9 +3550,9 @@ bool SelectionDAGLegalize::ExpandNode(SDNode *Node) {
     SDValue Table = Node->getOperand(1);
     SDValue Index = Node->getOperand(2);
 
-    EVT PTy = TLI.getPointerTy(DAG.getDataLayout());
-
     const DataLayout &TD = DAG.getDataLayout();
+    EVT PTy = TLI.getPointerTy(TD);
+
     unsigned EntrySize =
       DAG.getMachineFunction().getJumpTableInfo()->getEntrySize(TD);
 
@@ -3566,7 +3566,7 @@ bool SelectionDAGLegalize::ExpandNode(SDNode *Node) {
         ISD::SEXTLOAD, dl, PTy, Chain, Addr,
         MachinePointerInfo::getJumpTable(DAG.getMachineFunction()), MemVT);
     Addr = LD;
-    if (TM.isPositionIndependent()) {
+    if (TLI.isJumpTableRelative()) {
       // For PIC, the sequence is:
       // BRIND(load(Jumptable + index) + RelocBase)
       // RelocBase can be JumpTable, GOT or some sort of global base.

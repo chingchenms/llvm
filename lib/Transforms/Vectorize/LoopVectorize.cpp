@@ -1319,8 +1319,7 @@ public:
     else {
       OptimizationRemarkMissed R(LV_NAME, "MissedDetails",
                                  TheLoop->getStartLoc(), TheLoop->getHeader());
-      R << "loop not vectorized: use -Rpass-analysis=loop-vectorize for more "
-           "info";
+      R << "loop not vectorized";
       if (Force.Value == LoopVectorizeHints::FK_Enabled) {
         R << " (Force=" << NV("Force", true);
         if (Width.Value != 0)
@@ -3040,10 +3039,12 @@ PHINode *InnerLoopVectorizer::createInductionVariable(Loop *L, Value *Start,
     Latch = Header;
 
   IRBuilder<> Builder(&*Header->getFirstInsertionPt());
-  setDebugLocFromInst(Builder, getDebugLocFromInstOrOperands(OldInduction));
+  Instruction *OldInst = getDebugLocFromInstOrOperands(OldInduction);
+  setDebugLocFromInst(Builder, OldInst);
   auto *Induction = Builder.CreatePHI(Start->getType(), 2, "index");
 
   Builder.SetInsertPoint(Latch->getTerminator());
+  setDebugLocFromInst(Builder, OldInst);
 
   // Create i+1 and fill the PHINode.
   Value *Next = Builder.CreateAdd(Induction, Step, "index.next");
@@ -3382,7 +3383,7 @@ void InnerLoopVectorizer::createEmptyLoop() {
     } else {
       IRBuilder<> B(LoopBypassBlocks.back()->getTerminator());
       Type *StepType = II.getStep()->getType();
-      Instruction::CastOps CastOp = 
+      Instruction::CastOps CastOp =
         CastInst::getCastOpcode(CountRoundDown, true, StepType, true);
       Value *CRD = B.CreateCast(CastOp, CountRoundDown, StepType, "cast.crd");
       const DataLayout &DL = OrigLoop->getHeader()->getModule()->getDataLayout();
@@ -5496,7 +5497,7 @@ void LoopVectorizationLegality::collectLoopUniforms() {
   // are pointers that are treated like consecutive pointers during
   // vectorization. The pointer operands of interleaved accesses are an
   // example.
-  SmallPtrSet<Instruction *, 8> ConsecutiveLikePtrs;
+  SmallSetVector<Instruction *, 8> ConsecutiveLikePtrs;
 
   // Holds pointer operands of instructions that are possibly non-uniform.
   SmallPtrSet<Instruction *, 8> PossibleNonUniformPtrs;
@@ -5734,7 +5735,15 @@ void InterleavedAccessInfo::collectConstStrideAccesses(
         continue;
 
       Value *Ptr = getPointerOperand(&I);
-      int64_t Stride = getPtrStride(PSE, Ptr, TheLoop, Strides);
+      // We don't check wrapping here because we don't know yet if Ptr will be 
+      // part of a full group or a group with gaps. Checking wrapping for all 
+      // pointers (even those that end up in groups with no gaps) will be overly
+      // conservative. For full groups, wrapping should be ok since if we would 
+      // wrap around the address space we would do a memory access at nullptr
+      // even without the transformation. The wrapping checks are therefore
+      // deferred until after we've formed the interleaved groups.
+      int64_t Stride = getPtrStride(PSE, Ptr, TheLoop, Strides,
+                                    /*Assume=*/true, /*ShouldCheckWrap=*/false);
 
       const SCEV *Scev = replaceSymbolicStrideSCEV(PSE, Strides, Ptr);
       PointerType *PtrTy = dyn_cast<PointerType>(Ptr->getType());
@@ -5938,20 +5947,66 @@ void InterleavedAccessInfo::analyzeInterleaving(
     if (Group->getNumMembers() != Group->getFactor())
       releaseGroup(Group);
 
-  // If there is a non-reversed interleaved load group with gaps, we will need
-  // to execute at least one scalar epilogue iteration. This will ensure that
-  // we don't speculatively access memory out-of-bounds. Note that we only need
-  // to look for a member at index factor - 1, since every group must have a
-  // member at index zero.
-  for (InterleaveGroup *Group : LoadGroups)
-    if (!Group->getMember(Group->getFactor() - 1)) {
-      if (Group->isReverse()) {
+  // Remove interleaved groups with gaps (currently only loads) whose memory 
+  // accesses may wrap around. We have to revisit the getPtrStride analysis, 
+  // this time with ShouldCheckWrap=true, since collectConstStrideAccesses does 
+  // not check wrapping (see documentation there).
+  // FORNOW we use Assume=false; 
+  // TODO: Change to Assume=true but making sure we don't exceed the threshold 
+  // of runtime SCEV assumptions checks (thereby potentially failing to
+  // vectorize altogether). 
+  // Additional optional optimizations:
+  // TODO: If we are peeling the loop and we know that the first pointer doesn't 
+  // wrap then we can deduce that all pointers in the group don't wrap.
+  // This means that we can forcefully peel the loop in order to only have to 
+  // check the first pointer for no-wrap. When we'll change to use Assume=true 
+  // we'll only need at most one runtime check per interleaved group.
+  //
+  for (InterleaveGroup *Group : LoadGroups) {
+
+    // Case 1: A full group. Can Skip the checks; For full groups, if the wide
+    // load would wrap around the address space we would do a memory access at 
+    // nullptr even without the transformation. 
+    if (Group->getNumMembers() == Group->getFactor()) 
+      continue;
+
+    // Case 2: If first and last members of the group don't wrap this implies 
+    // that all the pointers in the group don't wrap.
+    // So we check only group member 0 (which is always guaranteed to exist),
+    // and group member Factor - 1; If the latter doesn't exist we rely on 
+    // peeling (if it is a non-reveresed accsess -- see Case 3).
+    Value *FirstMemberPtr = getPointerOperand(Group->getMember(0));
+    if (!getPtrStride(PSE, FirstMemberPtr, TheLoop, Strides, /*Assume=*/false, 
+                      /*ShouldCheckWrap=*/true)) {
+      DEBUG(dbgs() << "LV: Invalidate candidate interleaved group due to "
+                      "first group member potentially pointer-wrapping.\n");
+      releaseGroup(Group);
+      continue;
+    }
+    Instruction *LastMember = Group->getMember(Group->getFactor() - 1);
+    if (LastMember) {
+      Value *LastMemberPtr = getPointerOperand(LastMember);
+      if (!getPtrStride(PSE, LastMemberPtr, TheLoop, Strides, /*Assume=*/false, 
+                        /*ShouldCheckWrap=*/true)) {
+        DEBUG(dbgs() << "LV: Invalidate candidate interleaved group due to "
+                        "last group member potentially pointer-wrapping.\n");
         releaseGroup(Group);
-      } else {
-        DEBUG(dbgs() << "LV: Interleaved group requires epilogue iteration.\n");
-        RequiresScalarEpilogue = true;
       }
     }
+    else {
+      // Case 3: A non-reversed interleaved load group with gaps: We need
+      // to execute at least one scalar epilogue iteration. This will ensure 
+      // we don't speculatively access memory out-of-bounds. We only need
+      // to look for a member at index factor - 1, since every group must have 
+      // a member at index zero.
+      if (Group->isReverse()) {
+        releaseGroup(Group);
+        continue;
+      }
+      DEBUG(dbgs() << "LV: Interleaved group requires epilogue iteration.\n");
+      RequiresScalarEpilogue = true;
+    }
+  }
 }
 
 LoopVectorizationCostModel::VectorizationFactor
@@ -6414,14 +6469,15 @@ LoopVectorizationCostModel::calculateRegisterUsage(ArrayRef<unsigned> VFs) {
 
   for (unsigned int i = 0; i < Index; ++i) {
     Instruction *I = IdxToInstr[i];
-    // Ignore instructions that are never used within the loop.
-    if (!Ends.count(I))
-      continue;
 
     // Remove all of the instructions that end at this location.
     InstrList &List = TransposeEnds[i];
     for (Instruction *ToRemove : List)
       OpenIntervals.erase(ToRemove);
+
+    // Ignore instructions that are never used within the loop.
+    if (!Ends.count(I))
+      continue;
 
     // Skip ignored values.
     if (ValuesToIgnore.count(I))

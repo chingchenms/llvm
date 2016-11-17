@@ -428,6 +428,24 @@ public:
     return get(Opcode).TSFlags & SIInstrFlags::SOPK_ZEXT;
   }
 
+  /// \returns true if this is an s_store_dword* instruction. This is more
+  /// specific than than isSMEM && mayStore.
+  static bool isScalarStore(const MachineInstr &MI) {
+    return MI.getDesc().TSFlags & SIInstrFlags::SCALAR_STORE;
+  }
+
+  bool isScalarStore(uint16_t Opcode) const {
+    return get(Opcode).TSFlags & SIInstrFlags::SCALAR_STORE;
+  }
+
+  static bool isFixedSize(const MachineInstr &MI) {
+    return MI.getDesc().TSFlags & SIInstrFlags::FIXED_SIZE;
+  }
+
+  bool isFixedSize(uint16_t Opcode) const {
+    return get(Opcode).TSFlags & SIInstrFlags::FIXED_SIZE;
+  }
+
   bool isVGPRCopy(const MachineInstr &MI) const {
     assert(MI.isCopy());
     unsigned Dest = MI.getOperand(0).getReg();
@@ -549,6 +567,12 @@ public:
 
   void legalizeOperandsSMRD(MachineRegisterInfo &MRI, MachineInstr &MI) const;
 
+  void legalizeGenericOperand(MachineBasicBlock &InsertMBB,
+                              MachineBasicBlock::iterator I,
+                              const TargetRegisterClass *DstRC,
+                              MachineOperand &Op, MachineRegisterInfo &MRI,
+                              const DebugLoc &DL) const;
+
   /// \brief Legalize all operands in this instruction.  This function may
   /// create new instruction and insert them before \p MI.
   void legalizeOperands(MachineInstr &MI) const;
@@ -606,6 +630,8 @@ public:
                               int &FrameIndex) const override;
 
   unsigned getInstSizeInBytes(const MachineInstr &MI) const override;
+
+  bool mayAccessFlatAddressSpace(const MachineInstr &MI) const;
 
   ArrayRef<std::pair<int, const char *>>
   getSerializableTargetIndices() const override;
