@@ -258,8 +258,7 @@ static bool UpgradeIntrinsicFunction1(Function *F, Function *&NewFn) {
          Name == "sse2.pminu.b" || // Added in 3.9
          Name == "sse41.pminuw" || // Added in 3.9
          Name == "sse41.pminud" || // Added in 3.9
-         Name == "avx512.mask.pshuf.b.128" || // Added in 4.0
-         Name == "avx512.mask.pshuf.b.256" || // Added in 4.0
+         Name.startswith("avx512.mask.pshuf.b.") || // Added in 4.0
          Name.startswith("avx2.pmax") || // Added in 3.9
          Name.startswith("avx2.pmin") || // Added in 3.9
          Name.startswith("avx512.mask.pmax") || // Added in 4.0
@@ -313,6 +312,7 @@ static bool UpgradeIntrinsicFunction1(Function *F, Function *&NewFn) {
          Name == "avx512.mask.sub.pd.256" || // Added in 4.0
          Name == "avx512.mask.sub.ps.128" || // Added in 4.0
          Name == "avx512.mask.sub.ps.256" || // Added in 4.0
+         Name.startswith("avx512.mask.vpermilvar.") || // Added in 4.0
          Name.startswith("avx512.mask.psll.d") || // Added in 4.0
          Name.startswith("avx512.mask.psll.q") || // Added in 4.0
          Name.startswith("avx512.mask.psll.w") || // Added in 4.0
@@ -325,19 +325,9 @@ static bool UpgradeIntrinsicFunction1(Function *F, Function *&NewFn) {
          Name.startswith("avx512.mask.pslli") || // Added in 4.0
          Name.startswith("avx512.mask.psrai") || // Added in 4.0
          Name.startswith("avx512.mask.psrli") || // Added in 4.0
-         Name == "avx512.mask.psllv2.di" || // Added in 4.0
-         Name == "avx512.mask.psllv4.di" || // Added in 4.0
-         Name == "avx512.mask.psllv4.si" || // Added in 4.0
-         Name == "avx512.mask.psllv8.si" || // Added in 4.0
-         Name == "avx512.mask.psrav4.si" || // Added in 4.0
-         Name == "avx512.mask.psrav8.si" || // Added in 4.0
-         Name == "avx512.mask.psrlv2.di" || // Added in 4.0
-         Name == "avx512.mask.psrlv4.di" || // Added in 4.0
-         Name == "avx512.mask.psrlv4.si" || // Added in 4.0
-         Name == "avx512.mask.psrlv8.si" || // Added in 4.0
-         Name.startswith("avx512.mask.psllv.") || // Added in 4.0
-         Name.startswith("avx512.mask.psrav.") || // Added in 4.0
-         Name.startswith("avx512.mask.psrlv.") || // Added in 4.0
+         Name.startswith("avx512.mask.psllv") || // Added in 4.0
+         Name.startswith("avx512.mask.psrav") || // Added in 4.0
+         Name.startswith("avx512.mask.psrlv") || // Added in 4.0
          Name.startswith("sse41.pmovsx") || // Added in 3.8
          Name.startswith("sse41.pmovzx") || // Added in 3.9
          Name.startswith("avx2.pmovsx") || // Added in 3.9
@@ -370,6 +360,7 @@ static bool UpgradeIntrinsicFunction1(Function *F, Function *&NewFn) {
          Name == "sse42.crc32.64.8" || // Added in 3.4
          Name.startswith("avx.vbroadcast.s") || // Added in 3.5
          Name.startswith("avx512.mask.palignr.") || // Added in 3.9
+         Name.startswith("avx512.mask.valign.") || // Added in 4.0
          Name.startswith("sse2.psll.dq") || // Added in 3.7
          Name.startswith("sse2.psrl.dq") || // Added in 3.7
          Name.startswith("avx2.psll.dq") || // Added in 3.7
@@ -582,13 +573,23 @@ static Value *EmitX86Select(IRBuilder<> &Builder, Value *Mask,
   return Builder.CreateSelect(Mask, Op0, Op1);
 }
 
-static Value *UpgradeX86PALIGNRIntrinsics(IRBuilder<> &Builder,
-                                          Value *Op0, Value *Op1, Value *Shift,
-                                          Value *Passthru, Value *Mask) {
+// Handle autoupgrade for masked PALIGNR and VALIGND/Q intrinsics.
+// PALIGNR handles large immediates by shifting while VALIGN masks the immediate
+// so we need to handle both cases. VALIGN also doesn't have 128-bit lanes.
+static Value *UpgradeX86ALIGNIntrinsics(IRBuilder<> &Builder, Value *Op0,
+                                        Value *Op1, Value *Shift,
+                                        Value *Passthru, Value *Mask,
+                                        bool IsVALIGN) {
   unsigned ShiftVal = cast<llvm::ConstantInt>(Shift)->getZExtValue();
 
   unsigned NumElts = Op0->getType()->getVectorNumElements();
-  assert(NumElts % 16 == 0);
+  assert((IsVALIGN || NumElts % 16 == 0) && "Illegal NumElts for PALIGNR!");
+  assert((!IsVALIGN || NumElts <= 16) && "NumElts too large for VALIGN!");
+  assert(isPowerOf2_32(NumElts) && "NumElts not a power of 2!");
+
+  // Mask the immediate for VALIGN.
+  if (IsVALIGN)
+    ShiftVal &= (NumElts - 1);
 
   // If palignr is shifting the pair of vectors more than the size of two
   // lanes, emit zero.
@@ -605,10 +606,10 @@ static Value *UpgradeX86PALIGNRIntrinsics(IRBuilder<> &Builder,
 
   uint32_t Indices[64];
   // 256-bit palignr operates on 128-bit lanes so we need to handle that
-  for (unsigned l = 0; l != NumElts; l += 16) {
+  for (unsigned l = 0; l < NumElts; l += 16) {
     for (unsigned i = 0; i != 16; ++i) {
       unsigned Idx = ShiftVal + i;
-      if (Idx >= 16)
+      if (!IsVALIGN && Idx >= 16) // Disable wrap for VALIGN.
         Idx += NumElts - 16; // End of lane, switch operand.
       Indices[l + i] = Idx + l;
     }
@@ -744,6 +745,108 @@ void llvm::UpgradeIntrinsicCall(CallInst *CI, Function *NewFn) {
     if (IsX86)
       Name = Name.substr(4);
 
+    if (IsX86 && Name.startswith("sse4a.movnt.")) {
+      Module *M = F->getParent();
+      SmallVector<Metadata *, 1> Elts;
+      Elts.push_back(
+          ConstantAsMetadata::get(ConstantInt::get(Type::getInt32Ty(C), 1)));
+      MDNode *Node = MDNode::get(C, Elts);
+
+      Value *Arg0 = CI->getArgOperand(0);
+      Value *Arg1 = CI->getArgOperand(1);
+
+      // Nontemporal (unaligned) store of the 0'th element of the float/double
+      // vector.
+      Type *SrcEltTy = cast<VectorType>(Arg1->getType())->getElementType();
+      PointerType *EltPtrTy = PointerType::getUnqual(SrcEltTy);
+      Value *Addr = Builder.CreateBitCast(Arg0, EltPtrTy, "cast");
+      Value *Extract =
+          Builder.CreateExtractElement(Arg1, (uint64_t)0, "extractelement");
+
+      StoreInst *SI = Builder.CreateAlignedStore(Extract, Addr, 1);
+      SI->setMetadata(M->getMDKindID("nontemporal"), Node);
+
+      // Remove intrinsic.
+      CI->eraseFromParent();
+      return;
+    }
+
+    if (IsX86 && (Name.startswith("avx.movnt.") ||
+                  Name.startswith("avx512.storent."))) {
+      Module *M = F->getParent();
+      SmallVector<Metadata *, 1> Elts;
+      Elts.push_back(
+          ConstantAsMetadata::get(ConstantInt::get(Type::getInt32Ty(C), 1)));
+      MDNode *Node = MDNode::get(C, Elts);
+
+      Value *Arg0 = CI->getArgOperand(0);
+      Value *Arg1 = CI->getArgOperand(1);
+
+      // Convert the type of the pointer to a pointer to the stored type.
+      Value *BC = Builder.CreateBitCast(Arg0,
+                                        PointerType::getUnqual(Arg1->getType()),
+                                        "cast");
+      VectorType *VTy = cast<VectorType>(Arg1->getType());
+      StoreInst *SI = Builder.CreateAlignedStore(Arg1, BC,
+                                                 VTy->getBitWidth() / 8);
+      SI->setMetadata(M->getMDKindID("nontemporal"), Node);
+
+      // Remove intrinsic.
+      CI->eraseFromParent();
+      return;
+    }
+
+    if (IsX86 && Name == "sse2.storel.dq") {
+      Value *Arg0 = CI->getArgOperand(0);
+      Value *Arg1 = CI->getArgOperand(1);
+
+      Type *NewVecTy = VectorType::get(Type::getInt64Ty(C), 2);
+      Value *BC0 = Builder.CreateBitCast(Arg1, NewVecTy, "cast");
+      Value *Elt = Builder.CreateExtractElement(BC0, (uint64_t)0);
+      Value *BC = Builder.CreateBitCast(Arg0,
+                                        PointerType::getUnqual(Elt->getType()),
+                                        "cast");
+      Builder.CreateAlignedStore(Elt, BC, 1);
+
+      // Remove intrinsic.
+      CI->eraseFromParent();
+      return;
+    }
+
+    if (IsX86 && (Name.startswith("sse.storeu.") ||
+                  Name.startswith("sse2.storeu.") ||
+                  Name.startswith("avx.storeu."))) {
+      Value *Arg0 = CI->getArgOperand(0);
+      Value *Arg1 = CI->getArgOperand(1);
+
+      Arg0 = Builder.CreateBitCast(Arg0,
+                                   PointerType::getUnqual(Arg1->getType()),
+                                   "cast");
+      Builder.CreateAlignedStore(Arg1, Arg0, 1);
+
+      // Remove intrinsic.
+      CI->eraseFromParent();
+      return;
+    }
+
+    if (IsX86 && (Name.startswith("avx512.mask.storeu."))) {
+      UpgradeMaskedStore(Builder, CI->getArgOperand(0), CI->getArgOperand(1),
+                         CI->getArgOperand(2), /*Aligned*/false);
+
+      // Remove intrinsic.
+      CI->eraseFromParent();
+      return;
+    }
+
+    if (IsX86 && (Name.startswith("avx512.mask.store."))) {
+      UpgradeMaskedStore(Builder, CI->getArgOperand(0), CI->getArgOperand(1),
+                         CI->getArgOperand(2), /*Aligned*/true);
+
+      // Remove intrinsic.
+      CI->eraseFromParent();
+      return;
+    }
+
     Value *Rep;
     // Upgrade packed integer vector compare intrinsics to compare instructions.
     if (IsX86 && (Name.startswith("sse2.pcmpeq.") ||
@@ -853,96 +956,6 @@ void llvm::UpgradeIntrinsicCall(CallInst *CI, Function *NewFn) {
       if (CI->getNumArgOperands() == 3)
         Rep = EmitX86Select(Builder, CI->getArgOperand(2), Rep,
                             CI->getArgOperand(1));
-    } else if (IsX86 && Name.startswith("sse4a.movnt.")) {
-      Module *M = F->getParent();
-      SmallVector<Metadata *, 1> Elts;
-      Elts.push_back(
-          ConstantAsMetadata::get(ConstantInt::get(Type::getInt32Ty(C), 1)));
-      MDNode *Node = MDNode::get(C, Elts);
-
-      Value *Arg0 = CI->getArgOperand(0);
-      Value *Arg1 = CI->getArgOperand(1);
-
-      // Nontemporal (unaligned) store of the 0'th element of the float/double
-      // vector.
-      Type *SrcEltTy = cast<VectorType>(Arg1->getType())->getElementType();
-      PointerType *EltPtrTy = PointerType::getUnqual(SrcEltTy);
-      Value *Addr = Builder.CreateBitCast(Arg0, EltPtrTy, "cast");
-      Value *Extract =
-          Builder.CreateExtractElement(Arg1, (uint64_t)0, "extractelement");
-
-      StoreInst *SI = Builder.CreateAlignedStore(Extract, Addr, 1);
-      SI->setMetadata(M->getMDKindID("nontemporal"), Node);
-
-      // Remove intrinsic.
-      CI->eraseFromParent();
-      return;
-    } else if (IsX86 && (Name.startswith("avx.movnt.") ||
-                         Name.startswith("avx512.storent."))) {
-      Module *M = F->getParent();
-      SmallVector<Metadata *, 1> Elts;
-      Elts.push_back(
-          ConstantAsMetadata::get(ConstantInt::get(Type::getInt32Ty(C), 1)));
-      MDNode *Node = MDNode::get(C, Elts);
-
-      Value *Arg0 = CI->getArgOperand(0);
-      Value *Arg1 = CI->getArgOperand(1);
-
-      // Convert the type of the pointer to a pointer to the stored type.
-      Value *BC = Builder.CreateBitCast(Arg0,
-                                        PointerType::getUnqual(Arg1->getType()),
-                                        "cast");
-      VectorType *VTy = cast<VectorType>(Arg1->getType());
-      StoreInst *SI = Builder.CreateAlignedStore(Arg1, BC,
-                                                 VTy->getBitWidth() / 8);
-      SI->setMetadata(M->getMDKindID("nontemporal"), Node);
-
-      // Remove intrinsic.
-      CI->eraseFromParent();
-      return;
-    } else if (IsX86 && Name == "sse2.storel.dq") {
-      Value *Arg0 = CI->getArgOperand(0);
-      Value *Arg1 = CI->getArgOperand(1);
-
-      Type *NewVecTy = VectorType::get(Type::getInt64Ty(C), 2);
-      Value *BC0 = Builder.CreateBitCast(Arg1, NewVecTy, "cast");
-      Value *Elt = Builder.CreateExtractElement(BC0, (uint64_t)0);
-      Value *BC = Builder.CreateBitCast(Arg0,
-                                        PointerType::getUnqual(Elt->getType()),
-                                        "cast");
-      Builder.CreateAlignedStore(Elt, BC, 1);
-
-      // Remove intrinsic.
-      CI->eraseFromParent();
-      return;
-    } else if (IsX86 && (Name.startswith("sse.storeu.") ||
-                         Name.startswith("sse2.storeu.") ||
-                         Name.startswith("avx.storeu."))) {
-      Value *Arg0 = CI->getArgOperand(0);
-      Value *Arg1 = CI->getArgOperand(1);
-
-      Arg0 = Builder.CreateBitCast(Arg0,
-                                   PointerType::getUnqual(Arg1->getType()),
-                                   "cast");
-      Builder.CreateAlignedStore(Arg1, Arg0, 1);
-
-      // Remove intrinsic.
-      CI->eraseFromParent();
-      return;
-    } else if (IsX86 && (Name.startswith("avx512.mask.storeu."))) {
-      UpgradeMaskedStore(Builder, CI->getArgOperand(0), CI->getArgOperand(1),
-                         CI->getArgOperand(2), /*Aligned*/false);
-
-      // Remove intrinsic.
-      CI->eraseFromParent();
-      return;
-    } else if (IsX86 && (Name.startswith("avx512.mask.store."))) {
-      UpgradeMaskedStore(Builder, CI->getArgOperand(0), CI->getArgOperand(1),
-                         CI->getArgOperand(2), /*Aligned*/true);
-
-      // Remove intrinsic.
-      CI->eraseFromParent();
-      return;
     } else if (IsX86 && (Name.startswith("avx512.mask.loadu."))) {
       Rep = UpgradeMaskedLoad(Builder, CI->getArgOperand(0),
                               CI->getArgOperand(1), CI->getArgOperand(2),
@@ -1081,11 +1094,19 @@ void llvm::UpgradeIntrinsicCall(CallInst *CI, Function *NewFn) {
         Rep = EmitX86Select(Builder, CI->getArgOperand(2), Rep,
                             CI->getArgOperand(1));
     } else if (IsX86 && Name.startswith("avx512.mask.palignr.")) {
-      Rep = UpgradeX86PALIGNRIntrinsics(Builder, CI->getArgOperand(0),
-                                        CI->getArgOperand(1),
-                                        CI->getArgOperand(2),
-                                        CI->getArgOperand(3),
-                                        CI->getArgOperand(4));
+      Rep = UpgradeX86ALIGNIntrinsics(Builder, CI->getArgOperand(0),
+                                      CI->getArgOperand(1),
+                                      CI->getArgOperand(2),
+                                      CI->getArgOperand(3),
+                                      CI->getArgOperand(4),
+                                      false);
+    } else if (IsX86 && Name.startswith("avx512.mask.valign.")) {
+      Rep = UpgradeX86ALIGNIntrinsics(Builder, CI->getArgOperand(0),
+                                      CI->getArgOperand(1),
+                                      CI->getArgOperand(2),
+                                      CI->getArgOperand(3),
+                                      CI->getArgOperand(4),
+                                      true);
     } else if (IsX86 && (Name == "sse2.psll.dq" ||
                          Name == "avx2.psll.dq")) {
       // 128/256-bit shift left specified in bits.
@@ -1426,6 +1447,8 @@ void llvm::UpgradeIntrinsicCall(CallInst *CI, Function *NewFn) {
         IID = Intrinsic::x86_ssse3_pshuf_b_128;
       else if (VecTy->getPrimitiveSizeInBits() == 256)
         IID = Intrinsic::x86_avx2_pshuf_b;
+      else if (VecTy->getPrimitiveSizeInBits() == 512)
+        IID = Intrinsic::x86_avx512_pshuf_b_512;
       else
         llvm_unreachable("Unexpected intrinsic");
 
@@ -1439,7 +1462,8 @@ void llvm::UpgradeIntrinsicCall(CallInst *CI, Function *NewFn) {
       bool IsVariable = Name[16] == 'v';
       char Size = Name[16] == '.' ? Name[17] :
                   Name[17] == '.' ? Name[18] :
-                                    Name[19];
+                  Name[18] == '.' ? Name[19] :
+                                    Name[20];
 
       Intrinsic::ID IID;
       if (IsVariable && Name[17] != '.') {
@@ -1451,6 +1475,12 @@ void llvm::UpgradeIntrinsicCall(CallInst *CI, Function *NewFn) {
           IID = Intrinsic::x86_avx2_psllv_d;
         else if (Size == 's' && Name[17] == '8') // avx512.mask.psllv8.si
           IID = Intrinsic::x86_avx2_psllv_d_256;
+        else if (Size == 'h' && Name[17] == '8') // avx512.mask.psllv8.hi
+          IID = Intrinsic::x86_avx512_psllv_w_128;
+        else if (Size == 'h' && Name[17] == '1') // avx512.mask.psllv16.hi
+          IID = Intrinsic::x86_avx512_psllv_w_256;
+        else if (Name[17] == '3' && Name[18] == '2') // avx512.mask.psllv32hi
+          IID = Intrinsic::x86_avx512_psllv_w_512;
         else
           llvm_unreachable("Unexpected size");
       } else if (Name.endswith(".128")) {
@@ -1500,7 +1530,8 @@ void llvm::UpgradeIntrinsicCall(CallInst *CI, Function *NewFn) {
       bool IsVariable = Name[16] == 'v';
       char Size = Name[16] == '.' ? Name[17] :
                   Name[17] == '.' ? Name[18] :
-                                    Name[19];
+                  Name[18] == '.' ? Name[19] :
+                                    Name[20];
 
       Intrinsic::ID IID;
       if (IsVariable && Name[17] != '.') {
@@ -1512,6 +1543,12 @@ void llvm::UpgradeIntrinsicCall(CallInst *CI, Function *NewFn) {
           IID = Intrinsic::x86_avx2_psrlv_d;
         else if (Size == 's' && Name[17] == '8') // avx512.mask.psrlv8.si
           IID = Intrinsic::x86_avx2_psrlv_d_256;
+        else if (Size == 'h' && Name[17] == '8') // avx512.mask.psrlv8.hi
+          IID = Intrinsic::x86_avx512_psrlv_w_128;
+        else if (Size == 'h' && Name[17] == '1') // avx512.mask.psrlv16.hi
+          IID = Intrinsic::x86_avx512_psrlv_w_256;
+        else if (Name[17] == '3' && Name[18] == '2') // avx512.mask.psrlv32hi
+          IID = Intrinsic::x86_avx512_psrlv_w_512;
         else
           llvm_unreachable("Unexpected size");
       } else if (Name.endswith(".128")) {
@@ -1561,7 +1598,8 @@ void llvm::UpgradeIntrinsicCall(CallInst *CI, Function *NewFn) {
       bool IsVariable = Name[16] == 'v';
       char Size = Name[16] == '.' ? Name[17] :
                   Name[17] == '.' ? Name[18] :
-                                    Name[19];
+                  Name[18] == '.' ? Name[19] :
+                                    Name[20];
 
       Intrinsic::ID IID;
       if (IsVariable && Name[17] != '.') {
@@ -1569,6 +1607,12 @@ void llvm::UpgradeIntrinsicCall(CallInst *CI, Function *NewFn) {
           IID = Intrinsic::x86_avx2_psrav_d;
         else if (Size == 's' && Name[17] == '8') // avx512.mask.psrav8.si
           IID = Intrinsic::x86_avx2_psrav_d_256;
+        else if (Size == 'h' && Name[17] == '8') // avx512.mask.psrav8.hi
+          IID = Intrinsic::x86_avx512_psrav_w_128;
+        else if (Size == 'h' && Name[17] == '1') // avx512.mask.psrav16.hi
+          IID = Intrinsic::x86_avx512_psrav_w_256;
+        else if (Name[17] == '3' && Name[18] == '2') // avx512.mask.psrav32hi
+          IID = Intrinsic::x86_avx512_psrav_w_512;
         else
           llvm_unreachable("Unexpected size");
       } else if (Name.endswith(".128")) {
@@ -1616,6 +1660,28 @@ void llvm::UpgradeIntrinsicCall(CallInst *CI, Function *NewFn) {
       Rep = UpgradeX86MaskedShift(Builder, *CI, IID);
     } else if (IsX86 && Name.startswith("avx512.mask.move.s")) {
       Rep = upgradeMaskedMove(Builder, *CI);
+    } else if (IsX86 && Name.startswith("avx512.mask.vpermilvar.")) {
+      Intrinsic::ID IID;
+      if (Name.endswith("ps.128"))
+        IID = Intrinsic::x86_avx_vpermilvar_ps;
+      else if (Name.endswith("pd.128"))
+        IID = Intrinsic::x86_avx_vpermilvar_pd;
+      else if (Name.endswith("ps.256"))
+        IID = Intrinsic::x86_avx_vpermilvar_ps_256;
+      else if (Name.endswith("pd.256"))
+        IID = Intrinsic::x86_avx_vpermilvar_pd_256;
+      else if (Name.endswith("ps.512"))
+        IID = Intrinsic::x86_avx512_vpermilvar_ps_512;
+      else if (Name.endswith("pd.512"))
+        IID = Intrinsic::x86_avx512_vpermilvar_pd_512;
+      else
+        llvm_unreachable("Unexpected vpermilvar intrinsic");
+
+      Function *Intrin = Intrinsic::getDeclaration(F->getParent(), IID);
+      Rep = Builder.CreateCall(Intrin,
+                               { CI->getArgOperand(0), CI->getArgOperand(1) });
+      Rep = EmitX86Select(Builder, CI->getArgOperand(3), Rep,
+                          CI->getArgOperand(2));
     } else {
       llvm_unreachable("Unknown function for CallInst upgrade.");
     }

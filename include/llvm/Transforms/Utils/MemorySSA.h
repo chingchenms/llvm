@@ -387,6 +387,14 @@ public:
     return block_begin() + getNumOperands();
   }
 
+  iterator_range<block_iterator> blocks() {
+    return make_range(block_begin(), block_end());
+  }
+
+  iterator_range<const_block_iterator> blocks() const {
+    return make_range(block_begin(), block_end());
+  }
+
   op_range incoming_values() { return operands(); }
 
   const_op_range incoming_values() const { return operands(); }
@@ -629,7 +637,8 @@ private:
   MemoryAccess *findDominatingDef(BasicBlock *, enum InsertionPlace);
   void removeFromLookups(MemoryAccess *);
 
-  void placePHINodes(const SmallPtrSetImpl<BasicBlock *> &);
+  void placePHINodes(const SmallPtrSetImpl<BasicBlock *> &,
+                     const DenseMap<const BasicBlock *, unsigned int> &);
   MemoryAccess *renameBlock(BasicBlock *, MemoryAccess *);
   void renamePass(DomTreeNode *, MemoryAccess *IncomingVal,
                   SmallPtrSet<BasicBlock *, 16> &Visited);
@@ -671,7 +680,7 @@ public:
 ///
 class MemorySSAAnalysis : public AnalysisInfoMixin<MemorySSAAnalysis> {
   friend AnalysisInfoMixin<MemorySSAAnalysis>;
-  static char PassID;
+  static AnalysisKey Key;
 
 public:
   // Wrap MemorySSA result to ensure address stability of internal MemorySSA

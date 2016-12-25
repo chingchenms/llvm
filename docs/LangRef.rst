@@ -3998,10 +3998,13 @@ DIFile
 
 .. code-block:: llvm
 
-    !0 = !DIFile(filename: "path/to/file", directory: "/path/to/dir")
+    !0 = !DIFile(filename: "path/to/file", directory: "/path/to/dir",
+                 checksumkind: CSK_MD5,
+                 checksum: "000102030405060708090a0b0c0d0e0f")
 
 Files are sometimes used in ``scope:`` fields, and are the only valid target
 for ``file:`` fields.
+Valid values for ``checksumkind:`` field are: {CSK_None, CSK_MD5, CSK_SHA1}
 
 .. _DIBasicType:
 
@@ -4588,6 +4591,25 @@ Examples:
     !1 = !{ i8 255, i8 2 }
     !2 = !{ i8 0, i8 2, i8 3, i8 6 }
     !3 = !{ i8 -2, i8 0, i8 3, i8 6 }
+
+'``absolute_symbol``' Metadata
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+``absolute_symbol`` metadata may be attached to a global variable
+declaration. It marks the declaration as a reference to an absolute symbol,
+which causes the backend to use absolute relocations for the symbol even
+in position independent code, and expresses the possible ranges that the
+global variable's *address* (not its value) is in, in the same format as
+``range`` metadata.
+
+Example:
+
+.. code-block:: llvm
+
+      @a = external global i8, !absolute_symbol !0 ; Absolute symbol in range [0,256)
+
+    ...
+    !0 = !{ i64 0, i64 256 }
 
 '``unpredictable``' Metadata
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -10813,7 +10835,7 @@ bitpattern of an integer value; for example ``0b10110110`` becomes
 Semantics:
 """"""""""
 
-The ``llvm.bitreverse.iN`` intrinsic returns an i16 value that has bit
+The ``llvm.bitreverse.iN`` intrinsic returns an iN value that has bit
 ``M`` in the input moved to bit ``N-M`` in the output.
 
 '``llvm.bswap.*``' Intrinsics

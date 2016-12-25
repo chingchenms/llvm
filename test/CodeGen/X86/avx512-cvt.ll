@@ -84,14 +84,12 @@ define <2 x float> @sltof2f32(<2 x i64> %a) {
 ; KNL-NEXT:    vcvtsi2ssq %rax, %xmm2, %xmm0
 ; KNL-NEXT:    vinsertps {{.*#+}} xmm0 = xmm0[0],xmm1[0],xmm0[2,3]
 ; KNL-NEXT:    vcvtsi2ssq %rax, %xmm2, %xmm1
-; KNL-NEXT:    vinsertps {{.*#+}} xmm0 = xmm0[0,1],xmm1[0],xmm0[3]
-; KNL-NEXT:    vinsertps {{.*#+}} xmm0 = xmm0[0,1,2],xmm1[0]
+; KNL-NEXT:    vshufps {{.*#+}} xmm0 = xmm0[0,1],xmm1[0,0]
 ; KNL-NEXT:    retq
 ;
 ; SKX-LABEL: sltof2f32:
 ; SKX:       ## BB#0:
-; SKX-NEXT:    ## kill: %XMM0<def> %XMM0<kill> %YMM0<def>
-; SKX-NEXT:    vcvtqq2ps %ymm0, %xmm0
+; SKX-NEXT:    vcvtqq2ps %xmm0, %xmm0
 ; SKX-NEXT:    retq
   %b = sitofp <2 x i64> %a to <2 x float>
   ret <2 x float>%b
@@ -924,9 +922,7 @@ define <2 x float> @sitofp_2i1_float(<2 x float> %a) {
 ; KNL:       ## BB#0:
 ; KNL-NEXT:    vxorps %xmm1, %xmm1, %xmm1
 ; KNL-NEXT:    vcmpltps %xmm0, %xmm1, %xmm0
-; KNL-NEXT:    vpmovzxdq {{.*#+}} xmm0 = xmm0[0],zero,xmm0[1],zero
-; KNL-NEXT:    vpsllq $32, %xmm0, %xmm0
-; KNL-NEXT:    vpshufd {{.*#+}} xmm0 = xmm0[1,3,2,3]
+; KNL-NEXT:    vinsertps {{.*#+}} xmm0 = xmm0[0,1],zero,xmm0[1]
 ; KNL-NEXT:    vcvtdq2ps %xmm0, %xmm0
 ; KNL-NEXT:    retq
 ;

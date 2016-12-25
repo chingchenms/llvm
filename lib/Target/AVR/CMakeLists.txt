@@ -21,16 +21,19 @@ add_llvm_target(AVRCodeGen
   AVRExpandPseudoInsts.cpp
   AVRFrameLowering.cpp
   AVRInstrInfo.cpp
+  AVRInstrumentFunctions.cpp
   AVRISelDAGToDAG.cpp
   AVRISelLowering.cpp
   AVRMCInstLower.cpp
+  AVRRelaxMemOperations.cpp
   AVRRegisterInfo.cpp
   AVRSubtarget.cpp
   AVRTargetMachine.cpp
   AVRTargetObjectFile.cpp
-)
 
-add_dependencies(LLVMAVRCodeGen intrinsics_gen)
+  DEPENDS
+  intrinsics_gen
+)
 
 add_subdirectory(AsmParser)
 add_subdirectory(Disassembler)

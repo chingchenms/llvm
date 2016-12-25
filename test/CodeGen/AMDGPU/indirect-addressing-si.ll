@@ -97,10 +97,10 @@ entry:
 ; MOVREL: v_movrels_b32_e32 v{{[0-9]}}, v0
 
 ; IDXMODE: s_addk_i32 [[ADD_IDX:s[0-9]+]], 0xfe00{{$}}
-; IDXMODE-DAG: v_mov_b32_e32 v1,
-; IDXMODE-DAG: v_mov_b32_e32 v2,
-; IDXMODE-DAG: v_mov_b32_e32 v3,
 ; IDXMODE: v_mov_b32_e32 v0,
+; IDXMODE: v_mov_b32_e32 v1,
+; IDXMODE: v_mov_b32_e32 v2,
+; IDXMODE: v_mov_b32_e32 v3,
 ; IDXMODE-NEXT: s_set_gpr_idx_on [[ADD_IDX]], src0{{$}}
 ; IDXMODE-NEXT: v_mov_b32_e32 v{{[0-9]+}}, v{{[0-9]+}}
 ; IDXMODE-NEXT: s_set_gpr_idx_off
@@ -506,11 +506,13 @@ bb:
 bb1:
   %tmp2 = load volatile <4 x float>, <4 x float> addrspace(1)* undef
   %tmp3 = extractelement <4 x float> %tmp2, i32 undef
+  call void asm sideeffect "; reg use $0", "v"(<4 x float> %tmp2) #0 ; Prevent block optimize out
   br label %bb7
 
 bb4:
   %tmp5 = load volatile <4 x float>, <4 x float> addrspace(1)* undef
   %tmp6 = extractelement <4 x float> %tmp5, i32 undef
+  call void asm sideeffect "; reg use $0", "v"(<4 x float> %tmp5) #0 ; Prevent block optimize out
   br label %bb7
 
 bb7:
@@ -554,11 +556,13 @@ bb:
 bb1:                                              ; preds = %bb
   %tmp2 = load volatile <4 x float>, <4 x float> addrspace(1)* undef
   %tmp3 = insertelement <4 x float> %tmp2, float %val0, i32 undef
+  call void asm sideeffect "; reg use $0", "v"(<4 x float> %tmp3) #0 ; Prevent block optimize out
   br label %bb7
 
 bb4:                                              ; preds = %bb
   %tmp5 = load volatile <4 x float>, <4 x float> addrspace(1)* undef
   %tmp6 = insertelement <4 x float> %tmp5, float %val0, i32 undef
+  call void asm sideeffect "; reg use $0", "v"(<4 x float> %tmp6) #0 ; Prevent block optimize out
   br label %bb7
 
 bb7:                                              ; preds = %bb4, %bb1
@@ -745,6 +749,8 @@ bb8:                                              ; preds = %bb2
 }
 
 declare i32 @llvm.amdgcn.workitem.id.x() #1
+declare void @llvm.amdgcn.s.barrier() #2
 
 attributes #0 = { nounwind }
 attributes #1 = { nounwind readnone }
+attributes #2 = { nounwind convergent }

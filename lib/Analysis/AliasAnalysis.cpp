@@ -460,7 +460,8 @@ ModRefInfo AAResults::callCapturesBefore(const Instruction *I,
     // pointer were passed to arguments that were neither of these, then it
     // couldn't be no-capture.
     if (!(*CI)->getType()->isPointerTy() ||
-        (!CS.doesNotCapture(ArgNo) && !CS.isByValArgument(ArgNo)))
+        (!CS.doesNotCapture(ArgNo) &&
+         ArgNo < CS.getNumArgOperands() && !CS.isByValArgument(ArgNo)))
       continue;
 
     // If this is a no-capture pointer argument, see if we can tell that it
@@ -513,7 +514,7 @@ bool AAResults::canInstructionRangeModRef(const Instruction &I1,
 AAResults::Concept::~Concept() {}
 
 // Provide a definition for the static object used to identify passes.
-char AAManager::PassID;
+AnalysisKey AAManager::Key;
 
 namespace {
 /// A wrapper pass for external alias analyses. This just squirrels away the

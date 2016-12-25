@@ -551,11 +551,11 @@ int X86TTIImpl::getArithmeticInstrCost(
     { ISD::SUB,     MVT::v4i64,    4 },
     { ISD::ADD,     MVT::v4i64,    4 },
     // A v4i64 multiply is custom lowered as two split v2i64 vectors that then
-    // are lowered as a series of long multiplies(3), shifts(4) and adds(2)
+    // are lowered as a series of long multiplies(3), shifts(3) and adds(2)
     // Because we believe v4i64 to be a legal type, we must also include the
-    // split factor of two in the cost table. Therefore, the cost here is 18
-    // instead of 9.
-    { ISD::MUL,     MVT::v4i64,    18 },
+    // split factor of two in the cost table. Therefore, the cost here is 16
+    // instead of 8.
+    { ISD::MUL,     MVT::v4i64,    16 },
   };
 
   // Look for AVX1 lowering tricks.
@@ -569,10 +569,10 @@ int X86TTIImpl::getArithmeticInstrCost(
   // Custom lowering of vectors.
   static const CostTblEntry CustomLowered[] = {
     // A v2i64/v4i64 and multiply is custom lowered as a series of long
-    // multiplies(3), shifts(4) and adds(2).
-    { ISD::MUL,     MVT::v2i64,    9 },
-    { ISD::MUL,     MVT::v4i64,    9 },
-    { ISD::MUL,     MVT::v8i64,    9 }
+    // multiplies(3), shifts(3) and adds(2).
+    { ISD::MUL,     MVT::v2i64,    8 },
+    { ISD::MUL,     MVT::v4i64,    8 },
+    { ISD::MUL,     MVT::v8i64,    8 }
   };
   if (const auto *Entry = CostTableLookup(CustomLowered, ISD, LT.second))
     return LT.first * Entry->Cost;
@@ -604,12 +604,102 @@ int X86TTIImpl::getShuffleCost(TTI::ShuffleKind Kind, Type *Tp, int Index,
 
   if (Kind == TTI::SK_Reverse) {
     std::pair<int, MVT> LT = TLI->getTypeLegalizationCost(DL, Tp);
-    int Cost = 1;
-    if (LT.second.getSizeInBits() > 128)
-      Cost = 3; // Extract + insert + copy.
 
-    // Multiple by the number of parts.
-    return Cost * LT.first;
+    static const CostTblEntry AVX512VBMIShuffleTbl[] = {
+      { ISD::VECTOR_SHUFFLE, MVT::v64i8,  1 }, // vpermb
+      { ISD::VECTOR_SHUFFLE, MVT::v32i8,  1 }  // vpermb
+    };
+
+    if (ST->hasVBMI())
+      if (const auto *Entry = CostTableLookup(AVX512VBMIShuffleTbl,
+                                              ISD::VECTOR_SHUFFLE, LT.second))
+        return LT.first * Entry->Cost;
+
+    static const CostTblEntry AVX512BWShuffleTbl[] = {
+      { ISD::VECTOR_SHUFFLE, MVT::v32i16, 1 }, // vpermw
+      { ISD::VECTOR_SHUFFLE, MVT::v64i8,  6 }  // vextracti64x4 + 2*vperm2i128
+                                               // + 2*pshufb + vinserti64x4
+    };
+
+    if (ST->hasBWI())
+      if (const auto *Entry = CostTableLookup(AVX512BWShuffleTbl,
+                                              ISD::VECTOR_SHUFFLE, LT.second))
+        return LT.first * Entry->Cost;
+
+    static const CostTblEntry AVX512ShuffleTbl[] = {
+      { ISD::VECTOR_SHUFFLE, MVT::v8f64,  1 }, // vpermpd
+      { ISD::VECTOR_SHUFFLE, MVT::v16f32, 1 }, // vpermps
+      { ISD::VECTOR_SHUFFLE, MVT::v8i64,  1 }, // vpermq
+      { ISD::VECTOR_SHUFFLE, MVT::v16i32, 1 }, // vpermd
+    };
+
+    if (ST->hasAVX512())
+      if (const auto *Entry =
+              CostTableLookup(AVX512ShuffleTbl, ISD::VECTOR_SHUFFLE, LT.second))
+        return LT.first * Entry->Cost;
+
+    static const CostTblEntry AVX2ShuffleTbl[] = {
+      { ISD::VECTOR_SHUFFLE, MVT::v4f64,  1 }, // vpermpd
+      { ISD::VECTOR_SHUFFLE, MVT::v8f32,  1 }, // vpermps
+      { ISD::VECTOR_SHUFFLE, MVT::v4i64,  1 }, // vpermq
+      { ISD::VECTOR_SHUFFLE, MVT::v8i32,  1 }, // vpermd
+      { ISD::VECTOR_SHUFFLE, MVT::v16i16, 2 }, // vperm2i128 + pshufb
+      { ISD::VECTOR_SHUFFLE, MVT::v32i8,  2 }  // vperm2i128 + pshufb
+    };
+
+    if (ST->hasAVX2())
+      if (const auto *Entry =
+              CostTableLookup(AVX2ShuffleTbl, ISD::VECTOR_SHUFFLE, LT.second))
+        return LT.first * Entry->Cost;
+
+    static const CostTblEntry AVX1ShuffleTbl[] = {
+      { ISD::VECTOR_SHUFFLE, MVT::v4f64,  2 }, // vperm2f128 + vpermilpd
+      { ISD::VECTOR_SHUFFLE, MVT::v8f32,  2 }, // vperm2f128 + vpermilps
+      { ISD::VECTOR_SHUFFLE, MVT::v4i64,  2 }, // vperm2f128 + vpermilpd
+      { ISD::VECTOR_SHUFFLE, MVT::v8i32,  2 }, // vperm2f128 + vpermilps
+      { ISD::VECTOR_SHUFFLE, MVT::v16i16, 4 }, // vextractf128 + 2*pshufb
+                                               // + vinsertf128
+      { ISD::VECTOR_SHUFFLE, MVT::v32i8,  4 }  // vextractf128 + 2*pshufb
+                                               // + vinsertf128
+    };
+
+    if (ST->hasAVX())
+      if (const auto *Entry =
+              CostTableLookup(AVX1ShuffleTbl, ISD::VECTOR_SHUFFLE, LT.second))
+        return LT.first * Entry->Cost;
+
+    static const CostTblEntry SSSE3ShuffleTbl[] = {
+      { ISD::VECTOR_SHUFFLE, MVT::v8i16, 1 }, // pshufb
+      { ISD::VECTOR_SHUFFLE, MVT::v16i8, 1 }  // pshufb
+    };
+
+    if (ST->hasSSSE3())
+      if (const auto *Entry =
+              CostTableLookup(SSSE3ShuffleTbl, ISD::VECTOR_SHUFFLE, LT.second))
+        return LT.first * Entry->Cost;
+
+    static const CostTblEntry SSE2ShuffleTbl[] = {
+      { ISD::VECTOR_SHUFFLE, MVT::v2f64, 1 }, // shufpd
+      { ISD::VECTOR_SHUFFLE, MVT::v2i64, 1 }, // pshufd
+      { ISD::VECTOR_SHUFFLE, MVT::v4i32, 1 }, // pshufd
+      { ISD::VECTOR_SHUFFLE, MVT::v8i16, 3 }, // pshuflw + pshufhw  + pshufd
+      { ISD::VECTOR_SHUFFLE, MVT::v16i8, 9 }  // 2*pshuflw + 2*pshufhw
+                                              // + 2*pshufd + 2*unpck + packus
+    };
+
+    if (ST->hasSSE2())
+      if (const auto *Entry =
+              CostTableLookup(SSE2ShuffleTbl, ISD::VECTOR_SHUFFLE, LT.second))
+        return LT.first * Entry->Cost;
+
+    static const CostTblEntry SSE1ShuffleTbl[] = {
+        { ISD::VECTOR_SHUFFLE, MVT::v4f32, 1 }, // shufps
+    };
+
+    if (ST->hasSSE1())
+      if (const auto *Entry =
+              CostTableLookup(SSE1ShuffleTbl, ISD::VECTOR_SHUFFLE, LT.second))
+        return LT.first * Entry->Cost;
   }
 
   if (Kind == TTI::SK_Alternate) {
@@ -716,6 +806,13 @@ int X86TTIImpl::getCastInstrCost(unsigned Opcode, Type *Dst, Type *Src) {
   // potential massive combinations (elem_num x src_type x dst_type).
 
   static const TypeConversionCostTblEntry AVX512DQConversionTbl[] = {
+    { ISD::SINT_TO_FP,  MVT::v2f32,  MVT::v2i64,  1 },
+    { ISD::SINT_TO_FP,  MVT::v2f64,  MVT::v2i64,  1 },
+    { ISD::SINT_TO_FP,  MVT::v4f32,  MVT::v4i64,  1 },
+    { ISD::SINT_TO_FP,  MVT::v4f64,  MVT::v4i64,  1 },
+    { ISD::SINT_TO_FP,  MVT::v8f32,  MVT::v8i64,  1 },
+    { ISD::SINT_TO_FP,  MVT::v8f64,  MVT::v8i64,  1 },
+
     { ISD::UINT_TO_FP,  MVT::v2f32,  MVT::v2i64,  1 },
     { ISD::UINT_TO_FP,  MVT::v2f64,  MVT::v2i64,  1 },
     { ISD::UINT_TO_FP,  MVT::v4f32,  MVT::v4i64,  1 },
@@ -723,12 +820,19 @@ int X86TTIImpl::getCastInstrCost(unsigned Opcode, Type *Dst, Type *Src) {
     { ISD::UINT_TO_FP,  MVT::v8f32,  MVT::v8i64,  1 },
     { ISD::UINT_TO_FP,  MVT::v8f64,  MVT::v8i64,  1 },
 
-    { ISD::FP_TO_UINT,  MVT::v2i64, MVT::v2f32, 1 },
-    { ISD::FP_TO_UINT,  MVT::v4i64, MVT::v4f32, 1 },
-    { ISD::FP_TO_UINT,  MVT::v8i64, MVT::v8f32, 1 },
-    { ISD::FP_TO_UINT,  MVT::v2i64, MVT::v2f64, 1 },
-    { ISD::FP_TO_UINT,  MVT::v4i64, MVT::v4f64, 1 },
-    { ISD::FP_TO_UINT,  MVT::v8i64, MVT::v8f64, 1 },
+    { ISD::FP_TO_SINT,  MVT::v2i64,  MVT::v2f32,  1 },
+    { ISD::FP_TO_SINT,  MVT::v4i64,  MVT::v4f32,  1 },
+    { ISD::FP_TO_SINT,  MVT::v8i64,  MVT::v8f32,  1 },
+    { ISD::FP_TO_SINT,  MVT::v2i64,  MVT::v2f64,  1 },
+    { ISD::FP_TO_SINT,  MVT::v4i64,  MVT::v4f64,  1 },
+    { ISD::FP_TO_SINT,  MVT::v8i64,  MVT::v8f64,  1 },
+
+    { ISD::FP_TO_UINT,  MVT::v2i64,  MVT::v2f32,  1 },
+    { ISD::FP_TO_UINT,  MVT::v4i64,  MVT::v4f32,  1 },
+    { ISD::FP_TO_UINT,  MVT::v8i64,  MVT::v8f32,  1 },
+    { ISD::FP_TO_UINT,  MVT::v2i64,  MVT::v2f64,  1 },
+    { ISD::FP_TO_UINT,  MVT::v4i64,  MVT::v4f64,  1 },
+    { ISD::FP_TO_UINT,  MVT::v8i64,  MVT::v8f64,  1 },
   };
 
   // TODO: For AVX512DQ + AVX512VL, we also have cheap casts for 128-bit and

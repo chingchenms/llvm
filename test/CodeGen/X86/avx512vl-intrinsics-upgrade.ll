@@ -4615,3 +4615,161 @@ define <4 x double>@test_int_x86_avx512_mask_cvt_udq2pd_256(<4 x i32> %x0, <4 x 
   %res2 = fadd <4 x double> %res, %res1
   ret <4 x double> %res2
 }
+
+declare <4 x i32> @llvm.x86.avx512.mask.valign.d.128(<4 x i32>, <4 x i32>, i32, <4 x i32>, i8)
+
+define <4 x i32>@test_int_x86_avx512_mask_valign_d_128(<4 x i32> %x0, <4 x i32> %x1,<4 x i32> %x3, i8 %x4) {
+; CHECK-LABEL: test_int_x86_avx512_mask_valign_d_128:
+; CHECK:       ## BB#0:
+; CHECK-NEXT:    valignd $2, %xmm1, %xmm0, %xmm3 ## encoding: [0x62,0xf3,0x7d,0x08,0x03,0xd9,0x02]
+; CHECK-NEXT:    ## xmm3 = xmm1[2,3],xmm0[0,1]
+; CHECK-NEXT:    kmovw %edi, %k1 ## encoding: [0xc5,0xf8,0x92,0xcf]
+; CHECK-NEXT:    valignd $2, %xmm1, %xmm0, %xmm2 {%k1} ## encoding: [0x62,0xf3,0x7d,0x09,0x03,0xd1,0x02]
+; CHECK-NEXT:    ## xmm2 {%k1} = xmm1[2,3],xmm0[0,1]
+; CHECK-NEXT:    valignd $2, %xmm1, %xmm0, %xmm0 {%k1} {z} ## encoding: [0x62,0xf3,0x7d,0x89,0x03,0xc1,0x02]
+; CHECK-NEXT:    ## xmm0 {%k1} {z} = xmm1[2,3],xmm0[0,1]
+; CHECK-NEXT:    vpaddd %xmm3, %xmm2, %xmm1 ## encoding: [0x62,0xf1,0x6d,0x08,0xfe,0xcb]
+; CHECK-NEXT:    vpaddd %xmm0, %xmm1, %xmm0 ## encoding: [0x62,0xf1,0x75,0x08,0xfe,0xc0]
+; CHECK-NEXT:    retq ## encoding: [0xc3]
+  %res = call <4 x i32> @llvm.x86.avx512.mask.valign.d.128(<4 x i32> %x0, <4 x i32> %x1, i32 2, <4 x i32> %x3, i8 %x4)
+  %res1 = call <4 x i32> @llvm.x86.avx512.mask.valign.d.128(<4 x i32> %x0, <4 x i32> %x1, i32 2, <4 x i32> %x3, i8 -1)
+  %res2 = call <4 x i32> @llvm.x86.avx512.mask.valign.d.128(<4 x i32> %x0, <4 x i32> %x1, i32 2, <4 x i32> zeroinitializer,i8 %x4)
+  %res3 = add <4 x i32> %res, %res1
+  %res4 = add <4 x i32> %res3, %res2
+  ret <4 x i32> %res4
+}
+
+declare <8 x i32> @llvm.x86.avx512.mask.valign.d.256(<8 x i32>, <8 x i32>, i32, <8 x i32>, i8)
+
+define <8 x i32>@test_int_x86_avx512_mask_valign_d_256(<8 x i32> %x0, <8 x i32> %x1, <8 x i32> %x3, i8 %x4) {
+; CHECK-LABEL: test_int_x86_avx512_mask_valign_d_256:
+; CHECK:       ## BB#0:
+; CHECK-NEXT:    valignd $6, %ymm1, %ymm0, %ymm3 ## encoding: [0x62,0xf3,0x7d,0x28,0x03,0xd9,0x06]
+; CHECK-NEXT:    ## ymm3 = ymm1[6,7],ymm0[0,1,2,3,4,5]
+; CHECK-NEXT:    kmovw %edi, %k1 ## encoding: [0xc5,0xf8,0x92,0xcf]
+; CHECK-NEXT:    valignd $6, %ymm1, %ymm0, %ymm2 {%k1} ## encoding: [0x62,0xf3,0x7d,0x29,0x03,0xd1,0x06]
+; CHECK-NEXT:    ## ymm2 {%k1} = ymm1[6,7],ymm0[0,1,2,3,4,5]
+; CHECK-NEXT:    vpaddd %ymm3, %ymm2, %ymm0 ## encoding: [0x62,0xf1,0x6d,0x28,0xfe,0xc3]
+; CHECK-NEXT:    retq ## encoding: [0xc3]
+  %res = call <8 x i32> @llvm.x86.avx512.mask.valign.d.256(<8 x i32> %x0, <8 x i32> %x1, i32 6, <8 x i32> %x3, i8 %x4)
+  %res1 = call <8 x i32> @llvm.x86.avx512.mask.valign.d.256(<8 x i32> %x0, <8 x i32> %x1, i32 6, <8 x i32> %x3, i8 -1)
+  %res2 = add <8 x i32> %res, %res1
+  ret <8 x i32> %res2
+}
+
+declare <2 x i64> @llvm.x86.avx512.mask.valign.q.128(<2 x i64>, <2 x i64>, i32, <2 x i64>, i8)
+
+define <2 x i64>@test_int_x86_avx512_mask_valign_q_128(<2 x i64> %x0, <2 x i64> %x1, <2 x i64> %x3, i8 %x4) {
+; CHECK-LABEL: test_int_x86_avx512_mask_valign_q_128:
+; CHECK:       ## BB#0:
+; CHECK-NEXT:    valignq $1, %xmm1, %xmm0, %xmm3 ## encoding: [0x62,0xf3,0xfd,0x08,0x03,0xd9,0x01]
+; CHECK-NEXT:    ## xmm3 = xmm1[1],xmm0[0]
+; CHECK-NEXT:    kmovw %edi, %k1 ## encoding: [0xc5,0xf8,0x92,0xcf]
+; CHECK-NEXT:    valignq $1, %xmm1, %xmm0, %xmm2 {%k1} ## encoding: [0x62,0xf3,0xfd,0x09,0x03,0xd1,0x01]
+; CHECK-NEXT:    ## xmm2 {%k1} = xmm1[1],xmm0[0]
+; CHECK-NEXT:    vpaddq %xmm3, %xmm2, %xmm0 ## encoding: [0x62,0xf1,0xed,0x08,0xd4,0xc3]
+; CHECK-NEXT:    retq ## encoding: [0xc3]
+  %res = call <2 x i64> @llvm.x86.avx512.mask.valign.q.128(<2 x i64> %x0, <2 x i64> %x1, i32 1, <2 x i64> %x3, i8 %x4)
+  %res1 = call <2 x i64> @llvm.x86.avx512.mask.valign.q.128(<2 x i64> %x0, <2 x i64> %x1, i32 1, <2 x i64> %x3, i8 -1)
+  %res2 = add <2 x i64> %res, %res1
+  ret <2 x i64> %res2
+}
+
+declare <4 x i64> @llvm.x86.avx512.mask.valign.q.256(<4 x i64>, <4 x i64>, i32, <4 x i64>, i8)
+
+define <4 x i64>@test_int_x86_avx512_mask_valign_q_256(<4 x i64> %x0, <4 x i64> %x1, <4 x i64> %x3, i8 %x4) {
+; CHECK-LABEL: test_int_x86_avx512_mask_valign_q_256:
+; CHECK:       ## BB#0:
+; CHECK-NEXT:    valignq $3, %ymm1, %ymm0, %ymm3 ## encoding: [0x62,0xf3,0xfd,0x28,0x03,0xd9,0x03]
+; CHECK-NEXT:    ## ymm3 = ymm1[3],ymm0[0,1,2]
+; CHECK-NEXT:    kmovw %edi, %k1 ## encoding: [0xc5,0xf8,0x92,0xcf]
+; CHECK-NEXT:    valignq $3, %ymm1, %ymm0, %ymm2 {%k1} ## encoding: [0x62,0xf3,0xfd,0x29,0x03,0xd1,0x03]
+; CHECK-NEXT:    ## ymm2 {%k1} = ymm1[3],ymm0[0,1,2]
+; CHECK-NEXT:    vpaddq %ymm3, %ymm2, %ymm0 ## encoding: [0x62,0xf1,0xed,0x28,0xd4,0xc3]
+; CHECK-NEXT:    retq ## encoding: [0xc3]
+  %res = call <4 x i64> @llvm.x86.avx512.mask.valign.q.256(<4 x i64> %x0, <4 x i64> %x1, i32 3, <4 x i64> %x3, i8 %x4)
+  %res1 = call <4 x i64> @llvm.x86.avx512.mask.valign.q.256(<4 x i64> %x0, <4 x i64> %x1, i32 3, <4 x i64> %x3, i8 -1)
+  %res2 = add <4 x i64> %res, %res1
+  ret <4 x i64> %res2
+}
+
+declare <4 x double> @llvm.x86.avx512.mask.vpermilvar.pd.256(<4 x double>, <4 x i64>, <4 x double>, i8)
+
+define <4 x double>@test_int_x86_avx512_mask_vpermilvar_pd_256(<4 x double> %x0, <4 x i64> %x1, <4 x double> %x2, i8 %x3) {
+; CHECK-LABEL: test_int_x86_avx512_mask_vpermilvar_pd_256:
+; CHECK:       ## BB#0:
+; CHECK-NEXT:    vpermilpd %ymm1, %ymm0, %ymm3 ## encoding: [0x62,0xf2,0xfd,0x28,0x0d,0xd9]
+; CHECK-NEXT:    kmovw %edi, %k1 ## encoding: [0xc5,0xf8,0x92,0xcf]
+; CHECK-NEXT:    vpermilpd %ymm1, %ymm0, %ymm2 {%k1} ## encoding: [0x62,0xf2,0xfd,0x29,0x0d,0xd1]
+; CHECK-NEXT:    vpermilpd %ymm1, %ymm0, %ymm0 {%k1} {z} ## encoding: [0x62,0xf2,0xfd,0xa9,0x0d,0xc1]
+; CHECK-NEXT:    vaddpd %ymm0, %ymm2, %ymm0 ## encoding: [0x62,0xf1,0xed,0x28,0x58,0xc0]
+; CHECK-NEXT:    vaddpd %ymm0, %ymm3, %ymm0 ## encoding: [0x62,0xf1,0xe5,0x28,0x58,0xc0]
+; CHECK-NEXT:    retq ## encoding: [0xc3]
+  %res = call <4 x double> @llvm.x86.avx512.mask.vpermilvar.pd.256(<4 x double> %x0, <4 x i64> %x1, <4 x double> %x2, i8 %x3)
+  %res1 = call <4 x double> @llvm.x86.avx512.mask.vpermilvar.pd.256(<4 x double> %x0, <4 x i64> %x1, <4 x double> zeroinitializer, i8 %x3)
+  %res2 = call <4 x double> @llvm.x86.avx512.mask.vpermilvar.pd.256(<4 x double> %x0, <4 x i64> %x1, <4 x double> %x2, i8 -1)
+  %res3 = fadd <4 x double> %res, %res1
+  %res4 = fadd <4 x double> %res2, %res3
+  ret <4 x double> %res4
+}
+
+declare <2 x double> @llvm.x86.avx512.mask.vpermilvar.pd.128(<2 x double>, <2 x i64>, <2 x double>, i8)
+
+define <2 x double>@test_int_x86_avx512_mask_vpermilvar_pd_128(<2 x double> %x0, <2 x i64> %x1, <2 x double> %x2, i8 %x3) {
+; CHECK-LABEL: test_int_x86_avx512_mask_vpermilvar_pd_128:
+; CHECK:       ## BB#0:
+; CHECK-NEXT:    vpermilpd %xmm1, %xmm0, %xmm3 ## encoding: [0x62,0xf2,0xfd,0x08,0x0d,0xd9]
+; CHECK-NEXT:    kmovw %edi, %k1 ## encoding: [0xc5,0xf8,0x92,0xcf]
+; CHECK-NEXT:    vpermilpd %xmm1, %xmm0, %xmm2 {%k1} ## encoding: [0x62,0xf2,0xfd,0x09,0x0d,0xd1]
+; CHECK-NEXT:    vpermilpd %xmm1, %xmm0, %xmm0 {%k1} {z} ## encoding: [0x62,0xf2,0xfd,0x89,0x0d,0xc1]
+; CHECK-NEXT:    vaddpd %xmm0, %xmm2, %xmm0 ## encoding: [0x62,0xf1,0xed,0x08,0x58,0xc0]
+; CHECK-NEXT:    vaddpd %xmm3, %xmm0, %xmm0 ## encoding: [0x62,0xf1,0xfd,0x08,0x58,0xc3]
+; CHECK-NEXT:    retq ## encoding: [0xc3]
+  %res = call <2 x double> @llvm.x86.avx512.mask.vpermilvar.pd.128(<2 x double> %x0, <2 x i64> %x1, <2 x double> %x2, i8 %x3)
+  %res1 = call <2 x double> @llvm.x86.avx512.mask.vpermilvar.pd.128(<2 x double> %x0, <2 x i64> %x1, <2 x double> zeroinitializer, i8 %x3)
+  %res2 = call <2 x double> @llvm.x86.avx512.mask.vpermilvar.pd.128(<2 x double> %x0, <2 x i64> %x1, <2 x double> %x2, i8 -1)
+  %res3 = fadd <2 x double> %res, %res1
+  %res4 = fadd <2 x double> %res3, %res2
+  ret <2 x double> %res4
+}
+
+declare <8 x float> @llvm.x86.avx512.mask.vpermilvar.ps.256(<8 x float>, <8 x i32>, <8 x float>, i8)
+
+define <8 x float>@test_int_x86_avx512_mask_vpermilvar_ps_256(<8 x float> %x0, <8 x i32> %x1, <8 x float> %x2, i8 %x3) {
+; CHECK-LABEL: test_int_x86_avx512_mask_vpermilvar_ps_256:
+; CHECK:       ## BB#0:
+; CHECK-NEXT:    vpermilps %ymm1, %ymm0, %ymm3 ## encoding: [0x62,0xf2,0x7d,0x28,0x0c,0xd9]
+; CHECK-NEXT:    kmovw %edi, %k1 ## encoding: [0xc5,0xf8,0x92,0xcf]
+; CHECK-NEXT:    vpermilps %ymm1, %ymm0, %ymm2 {%k1} ## encoding: [0x62,0xf2,0x7d,0x29,0x0c,0xd1]
+; CHECK-NEXT:    vpermilps %ymm1, %ymm0, %ymm0 {%k1} {z} ## encoding: [0x62,0xf2,0x7d,0xa9,0x0c,0xc1]
+; CHECK-NEXT:    vaddps %ymm0, %ymm2, %ymm0 ## encoding: [0x62,0xf1,0x6c,0x28,0x58,0xc0]
+; CHECK-NEXT:    vaddps %ymm3, %ymm0, %ymm0 ## encoding: [0x62,0xf1,0x7c,0x28,0x58,0xc3]
+; CHECK-NEXT:    retq ## encoding: [0xc3]
+  %res = call <8 x float> @llvm.x86.avx512.mask.vpermilvar.ps.256(<8 x float> %x0, <8 x i32> %x1, <8 x float> %x2, i8 %x3)
+  %res1 = call <8 x float> @llvm.x86.avx512.mask.vpermilvar.ps.256(<8 x float> %x0, <8 x i32> %x1, <8 x float> zeroinitializer, i8 %x3)
+  %res2 = call <8 x float> @llvm.x86.avx512.mask.vpermilvar.ps.256(<8 x float> %x0, <8 x i32> %x1, <8 x float> %x2, i8 -1)
+  %res3 = fadd <8 x float> %res, %res1
+  %res4 = fadd <8 x float> %res3, %res2
+  ret <8 x float> %res4
+}
+
+declare <4 x float> @llvm.x86.avx512.mask.vpermilvar.ps.128(<4 x float>, <4 x i32>, <4 x float>, i8)
+
+define <4 x float>@test_int_x86_avx512_mask_vpermilvar_ps_128(<4 x float> %x0, <4 x i32> %x1, <4 x float> %x2, i8 %x3) {
+; CHECK-LABEL: test_int_x86_avx512_mask_vpermilvar_ps_128:
+; CHECK:       ## BB#0:
+; CHECK-NEXT:    vpermilps %xmm1, %xmm0, %xmm3 ## encoding: [0x62,0xf2,0x7d,0x08,0x0c,0xd9]
+; CHECK-NEXT:    kmovw %edi, %k1 ## encoding: [0xc5,0xf8,0x92,0xcf]
+; CHECK-NEXT:    vpermilps %xmm1, %xmm0, %xmm2 {%k1} ## encoding: [0x62,0xf2,0x7d,0x09,0x0c,0xd1]
+; CHECK-NEXT:    vpermilps %xmm1, %xmm0, %xmm0 {%k1} {z} ## encoding: [0x62,0xf2,0x7d,0x89,0x0c,0xc1]
+; CHECK-NEXT:    vaddps %xmm0, %xmm2, %xmm0 ## encoding: [0x62,0xf1,0x6c,0x08,0x58,0xc0]
+; CHECK-NEXT:    vaddps %xmm0, %xmm3, %xmm0 ## encoding: [0x62,0xf1,0x64,0x08,0x58,0xc0]
+; CHECK-NEXT:    retq ## encoding: [0xc3]
+  %res = call <4 x float> @llvm.x86.avx512.mask.vpermilvar.ps.128(<4 x float> %x0, <4 x i32> %x1, <4 x float> %x2, i8 %x3)
+  %res1 = call <4 x float> @llvm.x86.avx512.mask.vpermilvar.ps.128(<4 x float> %x0, <4 x i32> %x1, <4 x float> zeroinitializer, i8 %x3)
+  %res2 = call <4 x float> @llvm.x86.avx512.mask.vpermilvar.ps.128(<4 x float> %x0, <4 x i32> %x1, <4 x float> %x2, i8 -1)
+  %res3 = fadd <4 x float> %res, %res1
+  %res4 = fadd <4 x float> %res2, %res3
+  ret <4 x float> %res4
+}
+
