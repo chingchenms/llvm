@@ -530,6 +530,7 @@ static void relocateStoreAndLoads(coro::Shape &Shape) {
     case Instruction::Store:
       I->moveBefore(InsertPt);
       break;
+    case Instruction::GetElementPtr:
     case Instruction::BitCast:
       break;
     default:
