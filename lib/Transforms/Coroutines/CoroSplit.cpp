@@ -511,12 +511,41 @@ static void simplifySuspendPoints(coro::Shape &Shape) {
   S.resize(N);
 }
 
+static void relocateStoreAndLoads(coro::Shape &Shape) {
+  CoroIdInst *CoroId = Shape.CoroBegin->getId();
+  Instruction* InsertPt = Shape.CoroBegin->getNextNode();
+  Instruction* I = CoroId->getPrevNode();
+  for (;;) {
+    if (I == nullptr) // Nothing to relocate.
+      return;
+    if (isa<AllocaInst>(I))
+      break;
+    I = I->getPrevNode();
+  }
+  I = I->getNextNode(); // Skip alloca instruction.
+  while (I != CoroId) {
+    Instruction* Next = I->getNextNode();
+    switch (I->getOpcode()) {
+    case Instruction::Load:
+    case Instruction::Store:
+      I->moveBefore(InsertPt);
+      break;
+    case Instruction::BitCast:
+      break;
+    default:
+      llvm_unreachable("unexpected instruction between alloca and coro.id");
+    }
+    I = Next;
+  }
+}
+
 static void splitCoroutine(Function &F, CallGraph &CG, CallGraphSCC &SCC) {
   coro::Shape Shape(F);
   if (!Shape.CoroBegin)
     return;
 
   simplifySuspendPoints(Shape);
+  relocateStoreAndLoads(Shape);
   buildCoroutineFrame(F, Shape);
   replaceFrameSize(Shape);
 
