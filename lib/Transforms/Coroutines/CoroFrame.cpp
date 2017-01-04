@@ -477,6 +477,53 @@ static Instruction *insertSpills(SpillInfo &Spills, coro::Shape &Shape) {
   return FramePtr;
 }
 
+static void setUnwindEdgeTo(TerminatorInst *TI, BasicBlock *Succ) {
+  if (auto *II = dyn_cast<InvokeInst>(TI))
+    II->setUnwindDest(Succ);
+  else if (auto *CS = dyn_cast<CatchSwitchInst>(TI))
+    CS->setUnwindDest(Succ);
+  else if (auto *CR = dyn_cast<CleanupReturnInst>(TI))
+    CR->setUnwindDest(Succ);
+  else
+    llvm_unreachable("unexpected terminator instruction");
+}
+
+static void updatePhiNodes(BasicBlock *DestBB, BasicBlock *OldPred,
+                           BasicBlock *NewPred) {
+  unsigned BBIdx = 0;
+  for (BasicBlock::iterator I = DestBB->begin(); isa<PHINode>(I); ++I) {
+    // We no longer enter through OldPred, now we come in through NewPred.
+    // Revector exactly one entry in the PHI node that used to come from
+    // OldPred to come from NewPred.
+    PHINode *PN = cast<PHINode>(I);
+
+    // Reuse the previous value of BBIdx if it lines up.  In cases where we
+    // have multiple phi nodes with *lots* of predecessors, this is a speed
+    // win because we don't have to scan the PHI looking for TIBB.  This
+    // happens because the BB list of PHI nodes are usually in the same
+    // order.
+    if (PN->getIncomingBlock(BBIdx) != OldPred)
+      BBIdx = PN->getBasicBlockIndex(OldPred);
+    PN->setIncomingBlock(BBIdx, NewPred);
+  }
+}
+
+static BasicBlock *ehAwareSplitEdge(BasicBlock *BB, BasicBlock *Succ) {
+  auto *PadInst = Succ->getFirstNonPHI();
+  if (!PadInst->isEHPad()) return SplitEdge(BB, Succ);
+
+  auto *NewBB = BasicBlock::Create(BB->getContext(), "", BB->getParent(), Succ);
+  setUnwindEdgeTo(BB->getTerminator(), NewBB);
+  updatePhiNodes(Succ, BB, NewBB);
+
+  if (auto *CPI = dyn_cast<CleanupPadInst>(PadInst)) {
+    auto *NewCP = CleanupPadInst::Create(CPI->getParentPad(), {}, "", NewBB);
+    CleanupReturnInst::Create(NewCP, Succ, NewBB);
+    return NewBB;
+  }
+  llvm_unreachable("handling for other EHPads not implemented yet");
+}
+
 static void rewritePHIs(BasicBlock &BB) {
   // For every incoming edge we will create a block holding all
   // incoming values in a single PHI nodes.
@@ -501,7 +548,7 @@ static void rewritePHIs(BasicBlock &BB) {
 
   SmallVector<BasicBlock *, 8> Preds(pred_begin(&BB), pred_end(&BB));
   for (BasicBlock *Pred : Preds) {
-    auto *IncomingBB = SplitEdge(Pred, &BB);
+    auto *IncomingBB = ehAwareSplitEdge(Pred, &BB);
     IncomingBB->setName(BB.getName() + Twine(".from.") + Pred->getName());
     auto *PN = cast<PHINode>(&BB.front());
     do {
