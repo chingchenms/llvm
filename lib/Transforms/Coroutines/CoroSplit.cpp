@@ -533,6 +533,11 @@ static void relocateStoreAndLoads(coro::Shape &Shape) {
     case Instruction::GetElementPtr:
     case Instruction::BitCast:
       break;
+    case Instruction::Call: {
+      if (isa<DbgDeclareInst>(I))
+        break;
+      LLVM_FALLTHROUGH;
+    }
     default:
       llvm_unreachable("unexpected instruction between alloca and coro.id");
     }
