@@ -534,7 +534,7 @@ static void relocateStoreAndLoads(coro::Shape &Shape) {
     case Instruction::BitCast:
       break;
     case Instruction::Call: {
-      if (isa<DbgDeclareInst>(I))
+      if (isa<DbgDeclareInst>(I) || isa<DbgValueInst>(I))
         break;
       LLVM_FALLTHROUGH;
     }
