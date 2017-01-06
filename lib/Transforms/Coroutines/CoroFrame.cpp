@@ -420,14 +420,28 @@ static Instruction *insertSpills(SpillInfo &Spills, coro::Shape &Shape) {
           report_fatal_error("Coroutines cannot handle non static allocas yet");
       } else {
         // Otherwise, create a store instruction storing the value into the
-        // coroutine frame. For, argument, we will place the store instruction
-        // right after the coroutine frame pointer instruction, i.e. bitcase of
-        // coro.begin from i8* to %f.frame*. For all other values, the spill is
-        // placed immediately after the definition.
-        Builder.SetInsertPoint(
-            isa<Argument>(CurrentValue)
-                ? FramePtr->getNextNode()
-                : dyn_cast<Instruction>(E.def())->getNextNode());
+        // coroutine frame.
+
+        Instruction *InsertPt = nullptr;
+        if (isa<Argument>(CurrentValue)) {
+          // For, argument, we will place the store instruction right after
+          // the coroutine frame pointer instruction, i.e. bitcase of
+          // coro.begin from i8* to %f.frame*.
+          InsertPt = FramePtr->getNextNode();
+        }
+        else if (auto *II = dyn_cast<InvokeInst>(CurrentValue)) {
+          // If we are spilling the result of the invoke instruction, split the
+          // normal edge and insert the spill in the new block.
+          auto NewBB = SplitEdge(II->getParent(), II->getNormalDest());
+          InsertPt = NewBB->getTerminator();
+        }
+        else {
+          // For all other values, the spill is placed immediately after
+          // the definition.
+          InsertPt = cast<Instruction>(E.def())->getNextNode();
+        }
+
+        Builder.SetInsertPoint(InsertPt);
 
         auto *G = Builder.CreateConstInBoundsGEP2_32(
             FrameTy, FramePtr, 0, Index,
