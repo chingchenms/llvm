@@ -16991,9 +16991,16 @@ SDValue X86TargetLowering::LowerSELECT(SDValue Op, SelectionDAG &DAG) const {
     return DAG.getNode(ISD::EXTRACT_SUBVECTOR, DL, VT, newSelect, zeroConst);
   }
 
-  if (Cond.getOpcode() == ISD::SETCC)
-    if (SDValue NewCond = LowerSETCC(Cond, DAG))
+  if (Cond.getOpcode() == ISD::SETCC) {
+    if (SDValue NewCond = LowerSETCC(Cond, DAG)) {
       Cond = NewCond;
+      // If the condition was updated, it's possible that the operands of the
+      // select were also updated (for example, EmitTest has a RAUW). Refresh
+      // the local references to the select operands in case they got stale.
+      Op1 = Op.getOperand(1);
+      Op2 = Op.getOperand(2);
+    }
+  }
 
   // (select (x == 0), -1, y) -> (sign_bit (x - 1)) | y
   // (select (x == 0), y, -1) -> ~(sign_bit (x - 1)) | y
@@ -17199,22 +17206,26 @@ static SDValue LowerSIGN_EXTEND_AVX512(SDValue Op,
   if (NumElts != 8 && NumElts != 16 && !Subtarget.hasBWI())
     return SDValue();
 
-  if (VT.is512BitVector() && InVT.getVectorElementType() != MVT::i1) {
+  if (VT.is512BitVector() && InVTElt != MVT::i1) {
     if (In.getOpcode() == X86ISD::VSEXT || In.getOpcode() == X86ISD::VZEXT)
       return DAG.getNode(In.getOpcode(), dl, VT, In.getOperand(0));
     return DAG.getNode(X86ISD::VSEXT, dl, VT, In);
   }
 
-  assert (InVT.getVectorElementType() == MVT::i1 && "Unexpected vector type");
+  assert (InVTElt == MVT::i1 && "Unexpected vector type");
   MVT ExtVT = MVT::getVectorVT(MVT::getIntegerVT(512/NumElts), NumElts);
-  SDValue NegOne = DAG.getConstant(
-      APInt::getAllOnesValue(ExtVT.getScalarSizeInBits()), dl, ExtVT);
-  SDValue Zero = DAG.getConstant(
-      APInt::getNullValue(ExtVT.getScalarSizeInBits()), dl, ExtVT);
+  SDValue V;
+  if (Subtarget.hasDQI()) {
+    V = DAG.getNode(X86ISD::VSEXT, dl, ExtVT, In);
+    assert(!VT.is512BitVector() && "Unexpected vector type");
+  } else {
+    SDValue NegOne = getOnesVector(ExtVT, Subtarget, DAG, dl);
+    SDValue Zero = getZeroVector(ExtVT, Subtarget, DAG, dl);
+    V = DAG.getNode(ISD::VSELECT, dl, ExtVT, In, NegOne, Zero);
+    if (VT.is512BitVector())
+      return V;
+  }
 
-  SDValue V = DAG.getNode(ISD::VSELECT, dl, ExtVT, In, NegOne, Zero);
-  if (VT.is512BitVector())
-    return V;
   return DAG.getNode(X86ISD::VTRUNC, dl, VT, V);
 }
 
@@ -21534,6 +21545,23 @@ static SDValue LowerShift(SDValue Op, const X86Subtarget &Subtarget,
     return DAG.getVectorShuffle(VT, dl, R02, R13, {0, 5, 2, 7});
   }
 
+  // It's worth extending once and using the vXi16/vXi32 shifts for smaller
+  // types, but without AVX512 the extra overheads to get from vXi8 to vXi32
+  // make the existing SSE solution better.
+  if ((Subtarget.hasInt256() && VT == MVT::v8i16) ||
+      (Subtarget.hasAVX512() && VT == MVT::v16i16) ||
+      (Subtarget.hasAVX512() && VT == MVT::v16i8) ||
+      (Subtarget.hasBWI() && VT == MVT::v32i8)) {
+    MVT EvtSVT = (VT == MVT::v32i8 ? MVT::i16 : MVT::i32);
+    MVT ExtVT = MVT::getVectorVT(EvtSVT, VT.getVectorNumElements());
+    unsigned ExtOpc =
+        Op.getOpcode() == ISD::SRA ? ISD::SIGN_EXTEND : ISD::ZERO_EXTEND;
+    R = DAG.getNode(ExtOpc, dl, ExtVT, R);
+    Amt = DAG.getNode(ISD::ANY_EXTEND, dl, ExtVT, Amt);
+    return DAG.getNode(ISD::TRUNCATE, dl, VT,
+                       DAG.getNode(Op.getOpcode(), dl, ExtVT, R, Amt));
+  }
+
   if (VT == MVT::v16i8 ||
       (VT == MVT::v32i8 && Subtarget.hasInt256() && !Subtarget.hasXOP())) {
     MVT ExtVT = MVT::getVectorVT(MVT::i16, VT.getVectorNumElements() / 2);
@@ -21640,19 +21668,6 @@ static SDValue LowerShift(SDValue Op, const X86Subtarget &Subtarget,
           DAG.getNode(ISD::SRL, dl, ExtVT, RHi, DAG.getConstant(8, dl, ExtVT));
       return DAG.getNode(X86ISD::PACKUS, dl, VT, RLo, RHi);
     }
-  }
-
-  // It's worth extending once and using the v8i32 shifts for 16-bit types, but
-  // the extra overheads to get from v16i8 to v8i32 make the existing SSE
-  // solution better.
-  if (Subtarget.hasInt256() && VT == MVT::v8i16) {
-    MVT ExtVT = MVT::v8i32;
-    unsigned ExtOpc =
-        Op.getOpcode() == ISD::SRA ? ISD::SIGN_EXTEND : ISD::ZERO_EXTEND;
-    R = DAG.getNode(ExtOpc, dl, ExtVT, R);
-    Amt = DAG.getNode(ISD::ANY_EXTEND, dl, ExtVT, Amt);
-    return DAG.getNode(ISD::TRUNCATE, dl, VT,
-                       DAG.getNode(Op.getOpcode(), dl, ExtVT, R, Amt));
   }
 
   if (Subtarget.hasInt256() && !Subtarget.hasXOP() && VT == MVT::v16i16) {

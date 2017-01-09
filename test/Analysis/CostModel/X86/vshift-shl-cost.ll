@@ -57,8 +57,8 @@ define <8 x i64> @var_shift_v8i64(<8 x i64> %a, <8 x i64> %b) {
 define <4 x i32> @var_shift_v4i32(<4 x i32> %a, <4 x i32> %b) {
 ; CHECK: 'Cost Model Analysis' for function 'var_shift_v4i32':
 ; SSE2: Found an estimated cost of 10 for instruction:   %shift
-; SSE41: Found an estimated cost of 10 for instruction:   %shift
-; AVX: Found an estimated cost of 10 for instruction:   %shift
+; SSE41: Found an estimated cost of 4 for instruction:   %shift
+; AVX: Found an estimated cost of 4 for instruction:   %shift
 ; AVX2: Found an estimated cost of 1 for instruction:   %shift
 ; AVX512: Found an estimated cost of 1 for instruction:   %shift
 ; XOPAVX: Found an estimated cost of 1 for instruction:   %shift
@@ -70,8 +70,8 @@ define <4 x i32> @var_shift_v4i32(<4 x i32> %a, <4 x i32> %b) {
 define <8 x i32> @var_shift_v8i32(<8 x i32> %a, <8 x i32> %b) {
 ; CHECK: 'Cost Model Analysis' for function 'var_shift_v8i32':
 ; SSE2: Found an estimated cost of 20 for instruction:   %shift
-; SSE41: Found an estimated cost of 20 for instruction:   %shift
-; AVX: Found an estimated cost of 20 for instruction:   %shift
+; SSE41: Found an estimated cost of 8 for instruction:   %shift
+; AVX: Found an estimated cost of 8 for instruction:   %shift
 ; AVX2: Found an estimated cost of 1 for instruction:   %shift
 ; AVX512: Found an estimated cost of 1 for instruction:   %shift
 ; XOPAVX: Found an estimated cost of 2 for instruction:   %shift
@@ -83,8 +83,8 @@ define <8 x i32> @var_shift_v8i32(<8 x i32> %a, <8 x i32> %b) {
 define <16 x i32> @var_shift_v16i32(<16 x i32> %a, <16 x i32> %b) {
 ; CHECK: 'Cost Model Analysis' for function 'var_shift_v16i32':
 ; SSE2: Found an estimated cost of 40 for instruction:   %shift
-; SSE41: Found an estimated cost of 40 for instruction:   %shift
-; AVX: Found an estimated cost of 40 for instruction:   %shift
+; SSE41: Found an estimated cost of 16 for instruction:   %shift
+; AVX: Found an estimated cost of 16 for instruction:   %shift
 ; AVX2: Found an estimated cost of 2 for instruction:   %shift
 ; AVX512: Found an estimated cost of 1 for instruction:   %shift
 ; XOPAVX: Found an estimated cost of 4 for instruction:   %shift
@@ -216,8 +216,8 @@ define <8 x i64> @splatvar_shift_v8i64(<8 x i64> %a, <8 x i64> %b) {
 define <4 x i32> @splatvar_shift_v4i32(<4 x i32> %a, <4 x i32> %b) {
 ; CHECK: 'Cost Model Analysis' for function 'splatvar_shift_v4i32':
 ; SSE2: Found an estimated cost of 10 for instruction:   %shift
-; SSE41: Found an estimated cost of 10 for instruction:   %shift
-; AVX: Found an estimated cost of 10 for instruction:   %shift
+; SSE41: Found an estimated cost of 4 for instruction:   %shift
+; AVX: Found an estimated cost of 4 for instruction:   %shift
 ; AVX2: Found an estimated cost of 1 for instruction:   %shift
 ; AVX512: Found an estimated cost of 1 for instruction:   %shift
 ; XOPAVX: Found an estimated cost of 1 for instruction:   %shift
@@ -230,8 +230,8 @@ define <4 x i32> @splatvar_shift_v4i32(<4 x i32> %a, <4 x i32> %b) {
 define <8 x i32> @splatvar_shift_v8i32(<8 x i32> %a, <8 x i32> %b) {
 ; CHECK: 'Cost Model Analysis' for function 'splatvar_shift_v8i32':
 ; SSE2: Found an estimated cost of 20 for instruction:   %shift
-; SSE41: Found an estimated cost of 20 for instruction:   %shift
-; AVX: Found an estimated cost of 20 for instruction:   %shift
+; SSE41: Found an estimated cost of 8 for instruction:   %shift
+; AVX: Found an estimated cost of 8 for instruction:   %shift
 ; AVX2: Found an estimated cost of 1 for instruction:   %shift
 ; AVX512: Found an estimated cost of 1 for instruction:   %shift
 ; XOPAVX: Found an estimated cost of 2 for instruction:   %shift
@@ -244,8 +244,8 @@ define <8 x i32> @splatvar_shift_v8i32(<8 x i32> %a, <8 x i32> %b) {
 define <16 x i32> @splatvar_shift_v16i32(<16 x i32> %a, <16 x i32> %b) {
 ; CHECK: 'Cost Model Analysis' for function 'splatvar_shift_v16i32':
 ; SSE2: Found an estimated cost of 40 for instruction:   %shift
-; SSE41: Found an estimated cost of 40 for instruction:   %shift
-; AVX: Found an estimated cost of 40 for instruction:   %shift
+; SSE41: Found an estimated cost of 16 for instruction:   %shift
+; AVX: Found an estimated cost of 16 for instruction:   %shift
 ; AVX2: Found an estimated cost of 2 for instruction:   %shift
 ; AVX512: Found an estimated cost of 1 for instruction:   %shift
 ; XOPAVX: Found an estimated cost of 4 for instruction:   %shift
@@ -616,37 +616,39 @@ define <32 x i16> @splatconstant_shift_v32i16(<32 x i16> %a) {
 
 define <16 x i8> @splatconstant_shift_v16i8(<16 x i8> %a) {
 ; CHECK: 'Cost Model Analysis' for function 'splatconstant_shift_v16i8':
-; SSE2: Found an estimated cost of 1 for instruction:   %shift
-; SSE41: Found an estimated cost of 1 for instruction:   %shift
-; AVX: Found an estimated cost of 1 for instruction:   %shift
-; AVX2: Found an estimated cost of 1 for instruction:   %shift
-; AVX512: Found an estimated cost of 1 for instruction:   %shift
-; XOP: Found an estimated cost of 1 for instruction:   %shift
+; SSE2: Found an estimated cost of 2 for instruction:   %shift
+; SSE41: Found an estimated cost of 2 for instruction:   %shift
+; AVX: Found an estimated cost of 2 for instruction:   %shift
+; AVX2: Found an estimated cost of 2 for instruction:   %shift
+; AVX512: Found an estimated cost of 2 for instruction:   %shift
+; XOP: Found an estimated cost of 2 for instruction:   %shift
   %shift = shl <16 x i8> %a, <i8 3, i8 3, i8 3, i8 3, i8 3, i8 3, i8 3, i8 3, i8 3, i8 3, i8 3, i8 3, i8 3, i8 3, i8 3, i8 3>
   ret <16 x i8> %shift
 }
 
 define <32 x i8> @splatconstant_shift_v32i8(<32 x i8> %a) {
 ; CHECK: 'Cost Model Analysis' for function 'splatconstant_shift_v32i8':
-; SSE2: Found an estimated cost of 2 for instruction:   %shift
-; SSE41: Found an estimated cost of 2 for instruction:   %shift
-; AVX: Found an estimated cost of 2 for instruction:   %shift
-; AVX2: Found an estimated cost of 11 for instruction:   %shift
-; AVX512: Found an estimated cost of 11 for instruction:   %shift
-; XOP: Found an estimated cost of 2 for instruction:   %shift
+; SSE2: Found an estimated cost of 4 for instruction:   %shift
+; SSE41: Found an estimated cost of 4 for instruction:   %shift
+; AVX: Found an estimated cost of 4 for instruction:   %shift
+; AVX2: Found an estimated cost of 2 for instruction:   %shift
+; AVX512: Found an estimated cost of 2 for instruction:   %shift
+; XOPAVX: Found an estimated cost of 4 for instruction:   %shift
+; XOPAVX2: Found an estimated cost of 2 for instruction:   %shift
   %shift = shl <32 x i8> %a, <i8 3, i8 3, i8 3, i8 3, i8 3, i8 3, i8 3, i8 3, i8 3, i8 3, i8 3, i8 3, i8 3, i8 3, i8 3, i8 3, i8 3, i8 3, i8 3, i8 3, i8 3, i8 3, i8 3, i8 3, i8 3, i8 3, i8 3, i8 3, i8 3, i8 3, i8 3, i8 3>
   ret <32 x i8> %shift
 }
 
 define <64 x i8> @splatconstant_shift_v64i8(<64 x i8> %a) {
 ; CHECK: 'Cost Model Analysis' for function 'splatconstant_shift_v64i8':
-; SSE2: Found an estimated cost of 4 for instruction:   %shift
-; SSE41: Found an estimated cost of 4 for instruction:   %shift
-; AVX: Found an estimated cost of 4 for instruction:   %shift
-; AVX2: Found an estimated cost of 22 for instruction:   %shift
-; AVX512F: Found an estimated cost of 22 for instruction:   %shift
+; SSE2: Found an estimated cost of 8 for instruction:   %shift
+; SSE41: Found an estimated cost of 8 for instruction:   %shift
+; AVX: Found an estimated cost of 8 for instruction:   %shift
+; AVX2: Found an estimated cost of 4 for instruction:   %shift
+; AVX512F: Found an estimated cost of 4 for instruction:   %shift
 ; AVX512BW: Found an estimated cost of 2 for instruction:   %shift
-; XOP: Found an estimated cost of 4 for instruction:   %shift
+; XOPAVX: Found an estimated cost of 8 for instruction:   %shift
+; XOPAVX2: Found an estimated cost of 4 for instruction:   %shift
   %shift = shl <64 x i8> %a, <i8 3, i8 3, i8 3, i8 3, i8 3, i8 3, i8 3, i8 3, i8 3, i8 3, i8 3, i8 3, i8 3, i8 3, i8 3, i8 3, i8 3, i8 3, i8 3, i8 3, i8 3, i8 3, i8 3, i8 3, i8 3, i8 3, i8 3, i8 3, i8 3, i8 3, i8 3, i8 3, i8 3, i8 3, i8 3, i8 3, i8 3, i8 3, i8 3, i8 3, i8 3, i8 3, i8 3, i8 3, i8 3, i8 3, i8 3, i8 3, i8 3, i8 3, i8 3, i8 3, i8 3, i8 3, i8 3, i8 3, i8 3, i8 3, i8 3, i8 3, i8 3, i8 3, i8 3, i8 3>
   ret <64 x i8> %shift
 }

@@ -1561,7 +1561,6 @@ Error MetadataLoader::MetadataLoaderImpl::parseMetadataAttachment(
     return error("Invalid record");
 
   SmallVector<uint64_t, 64> Record;
-
   PlaceholderQueue Placeholders;
 
   while (true) {
@@ -1608,10 +1607,12 @@ Error MetadataLoader::MetadataLoaderImpl::parseMetadataAttachment(
 
         auto Idx = Record[i + 1];
         if (Idx < (MDStringRef.size() + GlobalMetadataBitPosIndex.size()) &&
-            !MetadataList.lookup(Idx))
+            !MetadataList.lookup(Idx)) {
           // Load the attachment if it is in the lazy-loadable range and hasn't
           // been loaded yet.
           lazyLoadOneMetadata(Idx, Placeholders);
+          resolveForwardRefsAndPlaceholders(Placeholders);
+        }
 
         Metadata *Node = MetadataList.getMetadataFwdRef(Idx);
         if (isa<LocalAsMetadata>(Node))
