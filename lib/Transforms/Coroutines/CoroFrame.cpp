@@ -522,15 +522,24 @@ static void updatePhiNodes(BasicBlock *DestBB, BasicBlock *OldPred,
   }
 }
 
-static BasicBlock *ehAwareSplitEdge(BasicBlock *BB, BasicBlock *Succ) {
+static BasicBlock *ehAwareSplitEdge(BasicBlock *BB, BasicBlock *Succ,
+                                    PHINode *LandingPadReplacement) {
   auto *PadInst = Succ->getFirstNonPHI();
-  if (!PadInst->isEHPad()) return SplitEdge(BB, Succ);
+  if (!LandingPadReplacement && !PadInst->isEHPad()) return SplitEdge(BB, Succ);
 
   auto *NewBB = BasicBlock::Create(BB->getContext(), "", BB->getParent(), Succ);
   setUnwindEdgeTo(BB->getTerminator(), NewBB);
   updatePhiNodes(Succ, BB, NewBB);
 
-  if (auto *CPI = dyn_cast<CleanupPadInst>(PadInst)) {
+  if (LandingPadReplacement) {
+    auto *NewLP =
+        LandingPadInst::Create(LandingPadReplacement->getType(), 0, "", NewBB);
+    BranchInst::Create(Succ, NewBB);
+    LandingPadReplacement->addIncoming(NewLP, NewBB);
+    NewLP->setCleanup(true);
+    return NewBB;
+
+  } else if (auto *CPI = dyn_cast<CleanupPadInst>(PadInst)) {
     auto *NewCP = CleanupPadInst::Create(CPI->getParentPad(), {}, "", NewBB);
     CleanupReturnInst::Create(NewCP, Succ, NewBB);
     return NewBB;
@@ -560,9 +569,21 @@ static void rewritePHIs(BasicBlock &BB) {
   // TODO: Simplify PHINodes in the basic block to remove duplicate
   // predecessors.
 
+  PHINode *ReplPHI = nullptr;
+  if (auto *LPI = dyn_cast_or_null<LandingPadInst>(BB.getFirstNonPHI())) {
+    if (!LPI->isCleanup()) {
+      llvm_unreachable(
+          "handling of non cleanup landing pads is not implemented yet");
+    }
+    ReplPHI = PHINode::Create(LPI->getType(), 1, "", LPI);
+    ReplPHI->takeName(LPI);
+    LPI->replaceAllUsesWith(ReplPHI);
+    LPI->eraseFromParent();
+  }
+
   SmallVector<BasicBlock *, 8> Preds(pred_begin(&BB), pred_end(&BB));
   for (BasicBlock *Pred : Preds) {
-    auto *IncomingBB = ehAwareSplitEdge(Pred, &BB);
+    auto *IncomingBB = ehAwareSplitEdge(Pred, &BB, ReplPHI);
     IncomingBB->setName(BB.getName() + Twine(".from.") + Pred->getName());
     auto *PN = cast<PHINode>(&BB.front());
     do {
@@ -574,7 +595,7 @@ static void rewritePHIs(BasicBlock &BB) {
       InputV->addIncoming(V, Pred);
       PN->setIncomingValue(Index, InputV);
       PN = dyn_cast<PHINode>(PN->getNextNode());
-    } while (PN);
+    } while (PN != ReplPHI);
   }
 }
 
@@ -726,9 +747,10 @@ void coro::buildCoroutineFrame(Function &F, Shape &Shape) {
     splitAround(CSI, "CoroSuspend");
   }
 
-  // Put fallthrough CoroEnd into its own block. Note: Shape::buildFrom places
-  // the fallthrough coro.end as the first element of CoroEnds array.
-  splitAround(Shape.CoroEnds.front(), "CoroEnd");
+  // Put CoroEnds into their own blocks.
+  for (CoroEndInst *CE : Shape.CoroEnds) {
+    splitAround(CE, "CoroEnd");
+  }
 
   // Transforms multi-edge PHI Nodes, so that any value feeding into a PHI will
   // never has its definition separated from the PHI by the suspend point.
