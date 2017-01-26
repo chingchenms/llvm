@@ -428,14 +428,16 @@ static Instruction *insertSpills(SpillInfo &Spills, coro::Shape &Shape) {
           // the coroutine frame pointer instruction, i.e. bitcase of
           // coro.begin from i8* to %f.frame*.
           InsertPt = FramePtr->getNextNode();
-        }
-        else if (auto *II = dyn_cast<InvokeInst>(CurrentValue)) {
+        } else if (auto *II = dyn_cast<InvokeInst>(CurrentValue)) {
           // If we are spilling the result of the invoke instruction, split the
           // normal edge and insert the spill in the new block.
           auto NewBB = SplitEdge(II->getParent(), II->getNormalDest());
           InsertPt = NewBB->getTerminator();
-        }
-        else {
+        } else if (dyn_cast<PHINode>(CurrentValue)) {
+          // Skip the PHINodes and EH pads instructions.
+          InsertPt =
+              &*cast<Instruction>(E.def())->getParent()->getFirstInsertionPt();
+        } else {
           // For all other values, the spill is placed immediately after
           // the definition.
           InsertPt = cast<Instruction>(E.def())->getNextNode();
@@ -579,7 +581,7 @@ static void rewritePHIs(BasicBlock &BB) {
 
   LandingPadInst *LandingPad = nullptr;
   PHINode *ReplPHI = nullptr;
-  if (LandingPad = dyn_cast_or_null<LandingPadInst>(BB.getFirstNonPHI())) {
+  if ((LandingPad = dyn_cast_or_null<LandingPadInst>(BB.getFirstNonPHI()))) {
     ReplPHI = PHINode::Create(LandingPad->getType(), 1, "", LandingPad);
     ReplPHI->takeName(LandingPad);
     LandingPad->replaceAllUsesWith(ReplPHI);
