@@ -503,13 +503,19 @@ static void setUnwindEdgeTo(TerminatorInst *TI, BasicBlock *Succ) {
 }
 
 static void updatePhiNodes(BasicBlock *DestBB, BasicBlock *OldPred,
-                           BasicBlock *NewPred) {
+                           BasicBlock *NewPred,
+                           PHINode *LandingPadReplacement) {
   unsigned BBIdx = 0;
   for (BasicBlock::iterator I = DestBB->begin(); isa<PHINode>(I); ++I) {
     // We no longer enter through OldPred, now we come in through NewPred.
     // Revector exactly one entry in the PHI node that used to come from
     // OldPred to come from NewPred.
     PHINode *PN = cast<PHINode>(I);
+
+    // We manually update the LandingPadReplacement PHINode and it is the last
+    // PHI Node. So, if we find it, we are done.
+    if (LandingPadReplacement == PN)
+      break;
 
     // Reuse the previous value of BBIdx if it lines up.  In cases where we
     // have multiple phi nodes with *lots* of predecessors, this is a speed
@@ -518,6 +524,8 @@ static void updatePhiNodes(BasicBlock *DestBB, BasicBlock *OldPred,
     // order.
     if (PN->getIncomingBlock(BBIdx) != OldPred)
       BBIdx = PN->getBasicBlockIndex(OldPred);
+
+    assert(BBIdx != (unsigned)-1 && "Invalid PHI Index!");
     PN->setIncomingBlock(BBIdx, NewPred);
   }
 }
@@ -529,7 +537,7 @@ static BasicBlock *ehAwareSplitEdge(BasicBlock *BB, BasicBlock *Succ,
 
   auto *NewBB = BasicBlock::Create(BB->getContext(), "", BB->getParent(), Succ);
   setUnwindEdgeTo(BB->getTerminator(), NewBB);
-  updatePhiNodes(Succ, BB, NewBB);
+  updatePhiNodes(Succ, BB, NewBB, LandingPadReplacement);
 
   if (LandingPadReplacement) {
     auto *NewLP =
