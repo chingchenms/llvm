@@ -531,6 +531,7 @@ static void updatePhiNodes(BasicBlock *DestBB, BasicBlock *OldPred,
 }
 
 static BasicBlock *ehAwareSplitEdge(BasicBlock *BB, BasicBlock *Succ,
+                                    LandingPadInst *OriginalPad,
                                     PHINode *LandingPadReplacement) {
   auto *PadInst = Succ->getFirstNonPHI();
   if (!LandingPadReplacement && !PadInst->isEHPad()) return SplitEdge(BB, Succ);
@@ -540,14 +541,13 @@ static BasicBlock *ehAwareSplitEdge(BasicBlock *BB, BasicBlock *Succ,
   updatePhiNodes(Succ, BB, NewBB, LandingPadReplacement);
 
   if (LandingPadReplacement) {
-    auto *NewLP =
-        LandingPadInst::Create(LandingPadReplacement->getType(), 0, "", NewBB);
-    BranchInst::Create(Succ, NewBB);
+    auto *NewLP = OriginalPad->clone();
+    auto *Terminator = BranchInst::Create(Succ, NewBB);
+    NewLP->insertBefore(Terminator);
     LandingPadReplacement->addIncoming(NewLP, NewBB);
-    NewLP->setCleanup(true);
     return NewBB;
-
-  } else if (auto *CPI = dyn_cast<CleanupPadInst>(PadInst)) {
+  }
+  if (auto *CPI = dyn_cast<CleanupPadInst>(PadInst)) {
     auto *NewCP = CleanupPadInst::Create(CPI->getParentPad(), {}, "", NewBB);
     CleanupReturnInst::Create(NewCP, Succ, NewBB);
     return NewBB;
@@ -577,21 +577,19 @@ static void rewritePHIs(BasicBlock &BB) {
   // TODO: Simplify PHINodes in the basic block to remove duplicate
   // predecessors.
 
+  LandingPadInst *LandingPad = nullptr;
   PHINode *ReplPHI = nullptr;
-  if (auto *LPI = dyn_cast_or_null<LandingPadInst>(BB.getFirstNonPHI())) {
-    if (!LPI->isCleanup()) {
-      llvm_unreachable(
-          "handling of non cleanup landing pads is not implemented yet");
-    }
-    ReplPHI = PHINode::Create(LPI->getType(), 1, "", LPI);
-    ReplPHI->takeName(LPI);
-    LPI->replaceAllUsesWith(ReplPHI);
-    LPI->eraseFromParent();
+  if (LandingPad = dyn_cast_or_null<LandingPadInst>(BB.getFirstNonPHI())) {
+    ReplPHI = PHINode::Create(LandingPad->getType(), 1, "", LandingPad);
+    ReplPHI->takeName(LandingPad);
+    LandingPad->replaceAllUsesWith(ReplPHI);
+    // We will erase it at the end of the function once ehAwareSplitEdge
+    // cloned it in the transition blocks.
   }
 
   SmallVector<BasicBlock *, 8> Preds(pred_begin(&BB), pred_end(&BB));
   for (BasicBlock *Pred : Preds) {
-    auto *IncomingBB = ehAwareSplitEdge(Pred, &BB, ReplPHI);
+    auto *IncomingBB = ehAwareSplitEdge(Pred, &BB, LandingPad, ReplPHI);
     IncomingBB->setName(BB.getName() + Twine(".from.") + Pred->getName());
     auto *PN = cast<PHINode>(&BB.front());
     do {
@@ -604,6 +602,12 @@ static void rewritePHIs(BasicBlock &BB) {
       PN->setIncomingValue(Index, InputV);
       PN = dyn_cast<PHINode>(PN->getNextNode());
     } while (PN != ReplPHI);
+  }
+
+  if (LandingPad) {
+    // Calls to ehAwareSplitEdge function cloned the original lading pad.
+    // No longer needed it.
+    LandingPad->eraseFromParent();
   }
 }
 
