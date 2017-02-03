@@ -532,6 +532,7 @@ static void relocateStoreAndLoads(coro::Shape &Shape) {
       break;
     case Instruction::GetElementPtr:
     case Instruction::BitCast:
+    case Instruction::ZExt:
       break;
     case Instruction::Call: {
       if (isa<DbgDeclareInst>(I) || isa<DbgValueInst>(I))
