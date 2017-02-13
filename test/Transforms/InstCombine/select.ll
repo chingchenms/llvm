@@ -190,7 +190,7 @@ define <2 x i1> @test62vec(<2 x i1> %A, <2 x i1> %B) {
 define i1 @test63(i1 %A, i1 %B) {
 ; CHECK-LABEL: @test63(
 ; CHECK-NEXT:    [[NOT:%.*]] = xor i1 %A, true
-; CHECK-NEXT:    [[C:%.*]] = or i1 %B, [[NOT]]
+; CHECK-NEXT:    [[C:%.*]] = or i1 [[NOT]], %B
 ; CHECK-NEXT:    ret i1 [[C]]
 ;
   %not = xor i1 %A, true
@@ -201,7 +201,7 @@ define i1 @test63(i1 %A, i1 %B) {
 define <2 x i1> @test63vec(<2 x i1> %A, <2 x i1> %B) {
 ; CHECK-LABEL: @test63vec(
 ; CHECK-NEXT:    [[NOT:%.*]] = xor <2 x i1> %A, <i1 true, i1 true>
-; CHECK-NEXT:    [[C:%.*]] = or <2 x i1> %B, [[NOT]]
+; CHECK-NEXT:    [[C:%.*]] = or <2 x i1> [[NOT]], %B
 ; CHECK-NEXT:    ret <2 x i1> [[C]]
 ;
   %not = xor <2 x i1> %A, <i1 true, i1 true>
@@ -1330,5 +1330,31 @@ define <4 x i32> @cannot_canonicalize_to_shuffle2(<4 x i32> %a, <4 x i32> %b) {
 ;
   %sel = select <4 x i1> <i1 true, i1 undef, i1 false, i1 icmp sle (i16 ptrtoint (i32* @g to i16), i16 4)>, <4 x i32> %a, <4 x i32> %b
   ret <4 x i32> %sel
+}
+
+declare void @llvm.assume(i1)
+
+define i8 @assume_cond_true(i1 %cond, i8 %x, i8 %y) {
+; CHECK-LABEL: @assume_cond_true(
+; CHECK-NEXT:    call void @llvm.assume(i1 %cond)
+; CHECK-NEXT:    ret i8 %x
+;
+  call void @llvm.assume(i1 %cond)
+  %sel = select i1 %cond, i8 %x, i8 %y
+  ret i8 %sel
+}
+
+; computeKnownBitsFromAssume() understands the 'not' of an assumed condition.
+
+define i8 @assume_cond_false(i1 %cond, i8 %x, i8 %y) {
+; CHECK-LABEL: @assume_cond_false(
+; CHECK-NEXT:    [[NOTCOND:%.*]] = xor i1 %cond, true
+; CHECK-NEXT:    call void @llvm.assume(i1 [[NOTCOND]])
+; CHECK-NEXT:    ret i8 %y
+;
+  %notcond = xor i1 %cond, true
+  call void @llvm.assume(i1 %notcond)
+  %sel = select i1 %cond, i8 %x, i8 %y
+  ret i8 %sel
 }
 

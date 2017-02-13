@@ -53,6 +53,7 @@ public:
   CodeGenOpt::Level OptLevel;
   const TargetInstrInfo *TII;
   const TargetLowering *TLI;
+  bool FastISelFailed;
 
   static char ID;
 
@@ -270,6 +271,8 @@ private:
   SDNode *MorphNode(SDNode *Node, unsigned TargetOpc, SDVTList VTs,
                     ArrayRef<SDValue> Ops, unsigned EmitNodeInfo);
 
+  SDNode *MutateStrictFPToFP(SDNode *Node, unsigned NewOpc);
+
   /// Prepares the landing pad to take incoming values or do other EH
   /// personality specific tasks. Returns true if the block should be
   /// instruction selected, false if no code should be emitted for it.
@@ -305,7 +308,7 @@ private:
   std::vector<unsigned> OpcodeOffset;
 
   void UpdateChains(SDNode *NodeToMatch, SDValue InputChain,
-                    const SmallVectorImpl<SDNode *> &ChainNodesMatched,
+                    SmallVectorImpl<SDNode *> &ChainNodesMatched,
                     bool isMorphNodeTo);
 };
 

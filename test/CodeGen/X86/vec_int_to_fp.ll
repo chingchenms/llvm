@@ -2723,7 +2723,7 @@ define <4 x double> @sitofp_load_4i64_to_4f64(<4 x i64> *%a) {
 ;
 ; AVX1-LABEL: sitofp_load_4i64_to_4f64:
 ; AVX1:       # BB#0:
-; AVX1-NEXT:    vmovaps (%rdi), %ymm0
+; AVX1-NEXT:    vmovdqa (%rdi), %ymm0
 ; AVX1-NEXT:    vextractf128 $1, %ymm0, %xmm1
 ; AVX1-NEXT:    vpextrq $1, %xmm1, %rax
 ; AVX1-NEXT:    vcvtsi2sdq %rax, %xmm2, %xmm2
@@ -3130,7 +3130,7 @@ define <4 x double> @uitofp_load_4i64_to_4f64(<4 x i64> *%a) {
 ;
 ; AVX1-LABEL: uitofp_load_4i64_to_4f64:
 ; AVX1:       # BB#0:
-; AVX1-NEXT:    vmovaps (%rdi), %ymm0
+; AVX1-NEXT:    vmovdqa (%rdi), %ymm0
 ; AVX1-NEXT:    vextractf128 $1, %ymm0, %xmm1
 ; AVX1-NEXT:    vmovdqa {{.*#+}} xmm2 = [1127219200,1160773632,0,0]
 ; AVX1-NEXT:    vpunpckldq {{.*#+}} xmm3 = xmm1[0],xmm2[0],xmm1[1],xmm2[1]
@@ -4817,4 +4817,64 @@ define void @aggregate_sitofp_8i16_to_8f32(%Arguments* nocapture readonly %a0) {
  %4 = sitofp <8 x i16> %2 to <8 x float>
  store <8 x float> %4, <8 x float>* %3, align 32
  ret void
+}
+
+define <2 x double> @sitofp_i32_to_2f64(<2 x double> %a0, i32 %a1) nounwind {
+; SSE-LABEL: sitofp_i32_to_2f64:
+; SSE:       # BB#0:
+; SSE-NEXT:    cvtsi2sdl %edi, %xmm0
+; SSE-NEXT:    retq
+;
+; AVX-LABEL: sitofp_i32_to_2f64:
+; AVX:       # BB#0:
+; AVX-NEXT:    vcvtsi2sdl %edi, %xmm0, %xmm0
+; AVX-NEXT:    retq
+  %cvt = sitofp i32 %a1 to double
+  %res = insertelement <2 x double> %a0, double %cvt, i32 0
+  ret <2 x double> %res
+}
+
+define <4 x float> @sitofp_i32_to_4f32(<4 x float> %a0, i32 %a1) nounwind {
+; SSE-LABEL: sitofp_i32_to_4f32:
+; SSE:       # BB#0:
+; SSE-NEXT:    cvtsi2ssl %edi, %xmm0
+; SSE-NEXT:    retq
+;
+; AVX-LABEL: sitofp_i32_to_4f32:
+; AVX:       # BB#0:
+; AVX-NEXT:    vcvtsi2ssl %edi, %xmm0, %xmm0
+; AVX-NEXT:    retq
+  %cvt = sitofp i32 %a1 to float
+  %res = insertelement <4 x float> %a0, float %cvt, i32 0
+  ret <4 x float> %res
+}
+
+define <2 x double> @sitofp_i64_to_2f64(<2 x double> %a0, i64 %a1) nounwind {
+; SSE-LABEL: sitofp_i64_to_2f64:
+; SSE:       # BB#0:
+; SSE-NEXT:    cvtsi2sdq %rdi, %xmm0
+; SSE-NEXT:    retq
+;
+; AVX-LABEL: sitofp_i64_to_2f64:
+; AVX:       # BB#0:
+; AVX-NEXT:    vcvtsi2sdq %rdi, %xmm0, %xmm0
+; AVX-NEXT:    retq
+  %cvt = sitofp i64 %a1 to double
+  %res = insertelement <2 x double> %a0, double %cvt, i32 0
+  ret <2 x double> %res
+}
+
+define <4 x float> @sitofp_i64_to_4f32(<4 x float> %a0, i64 %a1) nounwind {
+; SSE-LABEL: sitofp_i64_to_4f32:
+; SSE:       # BB#0:
+; SSE-NEXT:    cvtsi2ssq %rdi, %xmm0
+; SSE-NEXT:    retq
+;
+; AVX-LABEL: sitofp_i64_to_4f32:
+; AVX:       # BB#0:
+; AVX-NEXT:    vcvtsi2ssq %rdi, %xmm0, %xmm0
+; AVX-NEXT:    retq
+  %cvt = sitofp i64 %a1 to float
+  %res = insertelement <4 x float> %a0, float %cvt, i32 0
+  ret <4 x float> %res
 }

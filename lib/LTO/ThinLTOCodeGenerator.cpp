@@ -73,27 +73,6 @@ namespace {
 static cl::opt<int>
     ThreadCount("threads", cl::init(llvm::heavyweight_hardware_concurrency()));
 
-Expected<std::unique_ptr<tool_output_file>>
-setupOptimizationRemarks(LLVMContext &Ctx, int Count) {
-  if (LTOPassRemarksWithHotness)
-    Ctx.setDiagnosticHotnessRequested(true);
-
-  if (LTORemarksFilename.empty())
-    return nullptr;
-
-  std::string FileName =
-      LTORemarksFilename + ".thin." + llvm::utostr(Count) + ".yaml";
-  std::error_code EC;
-  auto DiagnosticOutputFile =
-      llvm::make_unique<tool_output_file>(FileName, EC, sys::fs::F_None);
-  if (EC)
-    return errorCodeToError(EC);
-  Ctx.setDiagnosticsOutputFile(
-      llvm::make_unique<yaml::Output>(DiagnosticOutputFile->os()));
-  DiagnosticOutputFile->keep();
-  return std::move(DiagnosticOutputFile);
-}
-
 // Simple helper to save temporary files for debug.
 static void saveTempBitcode(const Module &TheModule, StringRef TempDir,
                             unsigned count, StringRef Suffix) {
@@ -829,11 +808,22 @@ static std::string writeGeneratedObject(int count, StringRef CacheEntryPath,
 
 // Main entry point for the ThinLTO processing
 void ThinLTOCodeGenerator::run() {
+  // Prepare the resulting object vector
+  assert(ProducedBinaries.empty() && "The generator should not be reused");
+  if (SavedObjectsDirectoryPath.empty())
+    ProducedBinaries.resize(Modules.size());
+  else {
+    sys::fs::create_directories(SavedObjectsDirectoryPath);
+    bool IsDir;
+    sys::fs::is_directory(SavedObjectsDirectoryPath, IsDir);
+    if (!IsDir)
+      report_fatal_error("Unexistent dir: '" + SavedObjectsDirectoryPath + "'");
+    ProducedBinaryFiles.resize(Modules.size());
+  }
+
   if (CodeGenOnly) {
     // Perform only parallel codegen and return.
     ThreadPool Pool;
-    assert(ProducedBinaries.empty() && "The generator should not be reused");
-    ProducedBinaries.resize(Modules.size());
     int count = 0;
     for (auto &ModuleBuffer : Modules) {
       Pool.async([&](int count) {
@@ -845,7 +835,12 @@ void ThinLTOCodeGenerator::run() {
                                               /*IsImporting*/ false);
 
         // CodeGen
-        ProducedBinaries[count] = codegen(*TheModule);
+        auto OutputBuffer = codegen(*TheModule);
+        if (SavedObjectsDirectoryPath.empty())
+          ProducedBinaries[count] = std::move(OutputBuffer);
+        else
+          ProducedBinaryFiles[count] = writeGeneratedObject(
+              count, "", SavedObjectsDirectoryPath, *OutputBuffer);
       }, count++);
     }
 
@@ -866,18 +861,6 @@ void ThinLTOCodeGenerator::run() {
     WriteIndexToFile(*Index, OS);
   }
 
-  // Prepare the resulting object vector
-  assert(ProducedBinaries.empty() && "The generator should not be reused");
-  if (SavedObjectsDirectoryPath.empty())
-    ProducedBinaries.resize(Modules.size());
-  else {
-    sys::fs::create_directories(SavedObjectsDirectoryPath);
-    bool IsDir;
-    sys::fs::is_directory(SavedObjectsDirectoryPath, IsDir);
-    if (!IsDir)
-      report_fatal_error("Unexistent dir: '" + SavedObjectsDirectoryPath + "'");
-    ProducedBinaryFiles.resize(Modules.size());
-  }
 
   // Prepare the module map.
   auto ModuleMap = generateModuleMap(Modules);
@@ -984,7 +967,8 @@ void ThinLTOCodeGenerator::run() {
         LLVMContext Context;
         Context.setDiscardValueNames(LTODiscardValueNames);
         Context.enableDebugTypeODRUniquing();
-        auto DiagFileOrErr = setupOptimizationRemarks(Context, count);
+        auto DiagFileOrErr = lto::setupOptimizationRemarks(
+            Context, LTORemarksFilename, LTOPassRemarksWithHotness, count);
         if (!DiagFileOrErr) {
           errs() << "Error: " << toString(DiagFileOrErr.takeError()) << "\n";
           report_fatal_error("ThinLTO: Can't get an output file for the "

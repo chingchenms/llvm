@@ -433,7 +433,8 @@ int ARMTTIImpl::getShuffleCost(TTI::ShuffleKind Kind, Type *Tp, int Index,
 int ARMTTIImpl::getArithmeticInstrCost(
     unsigned Opcode, Type *Ty, TTI::OperandValueKind Op1Info,
     TTI::OperandValueKind Op2Info, TTI::OperandValueProperties Opd1PropInfo,
-    TTI::OperandValueProperties Opd2PropInfo) {
+    TTI::OperandValueProperties Opd2PropInfo,
+    ArrayRef<const Value *> Args) {
 
   int ISDOpcode = TLI->InstructionOpcodeToISD(Opcode);
   std::pair<int, MVT> LT = TLI->getTypeLegalizationCost(DL, Ty);
@@ -532,7 +533,8 @@ int ARMTTIImpl::getInterleavedMemoryOpCost(unsigned Opcode, Type *VecTy,
     unsigned SubVecSize = DL.getTypeSizeInBits(SubVecTy);
 
     // vldN/vstN only support legal vector types of size 64 or 128 in bits.
-    if (NumElts % Factor == 0 && (SubVecSize == 64 || SubVecSize == 128))
+    if (NumElts % Factor == 0 && (SubVecSize == 64 || SubVecSize == 128) &&
+        !VecTy->getScalarType()->isHalfTy())
       return Factor;
   }
 

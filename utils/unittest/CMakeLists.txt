@@ -15,6 +15,8 @@
 include_directories(
   googletest/include
   googletest
+  googlemock/include
+  googlemock
   )
 
 if(WIN32)
@@ -38,13 +40,14 @@ if (NOT LLVM_ENABLE_THREADS)
   add_definitions( -DGTEST_HAS_PTHREAD=0 )
 endif()
 
-find_library(PTHREAD_LIBRARY_PATH pthread)
-if (PTHREAD_LIBRARY_PATH)
+find_library(LLVM_PTHREAD_LIBRARY_PATH pthread)
+if (LLVM_PTHREAD_LIBRARY_PATH)
   list(APPEND LIBS pthread)
 endif()
 
 add_llvm_library(gtest
   googletest/src/gtest-all.cc
+  googlemock/src/gmock-all.cc
 
   LINK_LIBS
   ${LIBS}

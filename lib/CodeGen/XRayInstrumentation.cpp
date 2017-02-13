@@ -81,7 +81,7 @@ void XRayInstrumentation::replaceRetWithPatchableRet(MachineFunction &MF,
         auto MIB = BuildMI(MBB, T, T.getDebugLoc(), TII->get(Opc))
                        .addImm(T.getOpcode());
         for (auto &MO : T.operands())
-          MIB.addOperand(MO);
+          MIB.add(MO);
         Terminators.push_back(&T);
       }
     }
@@ -157,6 +157,7 @@ bool XRayInstrumentation::runOnMachineFunction(MachineFunction &MF) {
   case Triple::ArchType::arm:
   case Triple::ArchType::thumb:
   case Triple::ArchType::aarch64:
+  case Triple::ArchType::ppc64le:
     // For the architectures which don't have a single return instruction
     prependRetWithPatchableExit(MF, TII);
     break;

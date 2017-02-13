@@ -133,6 +133,7 @@ struct SuspendCrossingInfo {
 };
 } // end anonymous namespace
 
+#if !defined(NDEBUG) || defined(LLVM_ENABLE_DUMP)
 LLVM_DUMP_METHOD void SuspendCrossingInfo::dump(StringRef Label,
                                                 BitVector const &BV) const {
   dbgs() << Label << ":";
@@ -151,6 +152,7 @@ LLVM_DUMP_METHOD void SuspendCrossingInfo::dump() const {
   }
   dbgs() << "\n";
 }
+#endif
 
 SuspendCrossingInfo::SuspendCrossingInfo(Function &F, coro::Shape &Shape)
     : Mapping(F) {
@@ -424,8 +426,8 @@ static Instruction *insertSpills(SpillInfo &Spills, coro::Shape &Shape) {
 
         Instruction *InsertPt = nullptr;
         if (isa<Argument>(CurrentValue)) {
-          // For, argument, we will place the store instruction right after
-          // the coroutine frame pointer instruction, i.e. bitcase of
+          // For arguments, we will place the store instruction right after
+          // the coroutine frame pointer instruction, i.e. bitcast of
           // coro.begin from i8* to %f.frame*.
           InsertPt = FramePtr->getNextNode();
         } else if (auto *II = dyn_cast<InvokeInst>(CurrentValue)) {
@@ -445,6 +447,7 @@ static Instruction *insertSpills(SpillInfo &Spills, coro::Shape &Shape) {
 
         Builder.SetInsertPoint(InsertPt);
 
+        Builder.SetInsertPoint(InsertPt);
         auto *G = Builder.CreateConstInBoundsGEP2_32(
             FrameTy, FramePtr, 0, Index,
             CurrentValue->getName() + Twine(".spill.addr"));
@@ -564,7 +567,7 @@ static void rewritePHIs(BasicBlock &BB) {
   // loop:
   //    %n.val = phi i32[%n, %entry], [%inc, %loop]
   //
-  // It will create:
+  // It will create:  
   //
   // loop.from.entry:
   //    %n.loop.pre = phi i32 [%n, %entry]

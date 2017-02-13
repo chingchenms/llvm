@@ -29,7 +29,7 @@ template <> struct ScalarEnumerationTraits<TypeTestResolution::Kind> {
 template <> struct MappingTraits<TypeTestResolution> {
   static void mapping(IO &io, TypeTestResolution &res) {
     io.mapOptional("Kind", res.TheKind);
-    io.mapOptional("SizeBitWidth", res.SizeBitWidth);
+    io.mapOptional("SizeM1BitWidth", res.SizeM1BitWidth);
   }
 };
 
@@ -82,7 +82,11 @@ template <> struct CustomMappingTraits<GlobalValueSummaryMapTy> {
                                           false);
       Elem.push_back(llvm::make_unique<FunctionSummary>(
           GVFlags, 0, ArrayRef<ValueInfo>{},
-          ArrayRef<FunctionSummary::EdgeTy>{}, std::move(FSum.TypeTests)));
+          ArrayRef<FunctionSummary::EdgeTy>{}, std::move(FSum.TypeTests),
+          ArrayRef<FunctionSummary::VFuncId>{},
+          ArrayRef<FunctionSummary::VFuncId>{},
+          ArrayRef<FunctionSummary::ConstVCall>{},
+          ArrayRef<FunctionSummary::ConstVCall>{}));
     }
   }
   static void output(IO &io, GlobalValueSummaryMapTy &V) {

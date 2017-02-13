@@ -18,6 +18,9 @@
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/Target/TargetRegisterInfo.h"
 
+#define GET_TARGET_REGBANK_IMPL
+#include "ARMGenRegisterBank.inc"
+
 using namespace llvm;
 
 #ifndef LLVM_BUILD_GLOBAL_ISEL
@@ -29,18 +32,17 @@ using namespace llvm;
 // into an ARMGenRegisterBankInfo.def (similar to AArch64).
 namespace llvm {
 namespace ARM {
-RegisterBank GPRRegBank;
-RegisterBank *RegBanks[] = {&GPRRegBank};
-
 RegisterBankInfo::PartialMapping GPRPartialMapping{0, 32, GPRRegBank};
+RegisterBankInfo::PartialMapping FPRPartialMapping{0, 32, FPRRegBank};
 
 RegisterBankInfo::ValueMapping ValueMappings[] = {
-    {&GPRPartialMapping, 1}, {&GPRPartialMapping, 1}, {&GPRPartialMapping, 1}};
+    {&GPRPartialMapping, 1}, {&GPRPartialMapping, 1}, {&GPRPartialMapping, 1},
+    {&FPRPartialMapping, 1}, {&FPRPartialMapping, 1}, {&FPRPartialMapping, 1}};
 } // end namespace arm
 } // end namespace llvm
 
 ARMRegisterBankInfo::ARMRegisterBankInfo(const TargetRegisterInfo &TRI)
-    : RegisterBankInfo(ARM::RegBanks, ARM::NumRegisterBanks) {
+    : ARMGenRegisterBankInfo() {
   static bool AlreadyInit = false;
   // We have only one set of register banks, whatever the subtarget
   // is. Therefore, the initialization of the RegBanks table should be
@@ -51,14 +53,11 @@ ARMRegisterBankInfo::ARMRegisterBankInfo(const TargetRegisterInfo &TRI)
     return;
   AlreadyInit = true;
 
-  // Initialize the GPR bank.
-  createRegisterBank(ARM::GPRRegBankID, "GPRB");
-
-  addRegBankCoverage(ARM::GPRRegBankID, ARM::GPRRegClassID, TRI);
-  addRegBankCoverage(ARM::GPRRegBankID, ARM::GPRwithAPSRRegClassID, TRI);
   const RegisterBank &RBGPR = getRegBank(ARM::GPRRegBankID);
   (void)RBGPR;
   assert(&ARM::GPRRegBank == &RBGPR && "The order in RegBanks is messed up");
+
+  // Initialize the GPR bank.
   assert(RBGPR.covers(*TRI.getRegClass(ARM::GPRRegClassID)) &&
          "Subclass not added?");
   assert(RBGPR.covers(*TRI.getRegClass(ARM::GPRwithAPSRRegClassID)) &&
@@ -82,8 +81,12 @@ const RegisterBank &ARMRegisterBankInfo::getRegBankFromRegClass(
 
   switch (RC.getID()) {
   case GPRRegClassID:
+  case GPRnopcRegClassID:
   case tGPR_and_tcGPRRegClassID:
     return getRegBank(ARM::GPRRegBankID);
+  case SPR_8RegClassID:
+  case SPRRegClassID:
+    return getRegBank(ARM::FPRRegBankID);
   default:
     llvm_unreachable("Unsupported register kind");
   }
@@ -111,9 +114,14 @@ ARMRegisterBankInfo::getInstrMapping(const MachineInstr &MI) const {
   switch (Opc) {
   case G_ADD:
   case G_LOAD:
+  case G_SEXT:
+  case G_ZEXT:
     // FIXME: We're abusing the fact that everything lives in a GPR for now; in
     // the real world we would use different mappings.
     OperandsMapping = &ARM::ValueMappings[0];
+    break;
+  case G_FADD:
+    OperandsMapping = &ARM::ValueMappings[3];
     break;
   case G_FRAME_INDEX:
     OperandsMapping = getOperandsMapping({&ARM::ValueMappings[0], nullptr});

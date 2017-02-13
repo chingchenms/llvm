@@ -19,6 +19,7 @@
 #include "llvm/Analysis/TypeMetadataUtils.h"
 #include "llvm/Bitcode/BitcodeWriter.h"
 #include "llvm/IR/Constants.h"
+#include "llvm/IR/DebugInfo.h"
 #include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/PassManager.h"
@@ -194,12 +195,13 @@ void simplifyExternals(Module &M) {
 }
 
 void filterModule(
-    Module *M, std::function<bool(const GlobalValue *)> ShouldKeepDefinition) {
+    Module *M, function_ref<bool(const GlobalValue *)> ShouldKeepDefinition) {
   for (Function &F : *M) {
     if (ShouldKeepDefinition(&F))
       continue;
 
     F.deleteBody();
+    F.setComdat(nullptr);
     F.clearMetadata();
   }
 
@@ -209,6 +211,7 @@ void filterModule(
 
     GV.setInitializer(nullptr);
     GV.setLinkage(GlobalValue::ExternalLinkage);
+    GV.setComdat(nullptr);
     GV.clearMetadata();
   }
 
@@ -259,6 +262,7 @@ void splitAndWriteThinLTOBitcode(raw_ostream &OS, Module &M) {
 
   ValueToValueMapTy VMap;
   std::unique_ptr<Module> MergedM(CloneModule(&M, VMap, IsInMergedM));
+  StripDebugInfo(*MergedM);
 
   filterModule(&M, [&](const GlobalValue *GV) { return !IsInMergedM(GV); });
 
