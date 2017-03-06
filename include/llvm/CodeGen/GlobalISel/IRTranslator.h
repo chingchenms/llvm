@@ -34,6 +34,7 @@ class Instruction;
 class MachineBasicBlock;
 class MachineFunction;
 class MachineInstr;
+class OptimizationRemarkEmitter;
 class MachineRegisterInfo;
 class TargetPassConfig;
 
@@ -300,6 +301,8 @@ private:
     return translateBinaryOp(TargetOpcode::G_FREM, U, MIRBuilder);
   }
 
+  bool translateVAArg(const User &U, MachineIRBuilder &MIRBuilder);
+
   // Stubs to keep the compiler happy while we implement the rest of the
   // translation.
   bool translateResume(const User &U, MachineIRBuilder &MIRBuilder) {
@@ -338,9 +341,6 @@ private:
   bool translateUserOp2(const User &U, MachineIRBuilder &MIRBuilder) {
     return false;
   }
-  bool translateVAArg(const User &U, MachineIRBuilder &MIRBuilder) {
-    return false;
-  }
   bool translateExtractElement(const User &U, MachineIRBuilder &MIRBuilder) {
     return false;
   }
@@ -373,6 +373,9 @@ private:
 
   /// Current target configuration. Controls how the pass handles errors.
   const TargetPassConfig *TPC;
+
+  /// Current optimization remark emitter. Used to report failures.
+  std::unique_ptr<OptimizationRemarkEmitter> ORE;
 
   // * Insert all the code needed to materialize the constants
   // at the proper place. E.g., Entry block or dominator block

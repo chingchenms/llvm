@@ -801,7 +801,6 @@ bool JumpThreadingPass::ProcessBlock(BasicBlock *BB) {
     return false;
   }
 
-
   if (CmpInst *CondCmp = dyn_cast<CmpInst>(CondInst)) {
     // If we're branching on a conditional, LVI might be able to determine
     // it's value at the branch instruction.  We only handle comparisons
@@ -854,7 +853,6 @@ bool JumpThreadingPass::ProcessBlock(BasicBlock *BB) {
     if (SimplifyPartiallyRedundantLoad(LI))
       return true;
 
-
   // Handle a variety of cases where we are branching on something derived from
   // a PHI node in the current block.  If we can prove that any predecessors
   // compute a predictable value based on a PHI node, thread those predecessors.
@@ -867,7 +865,6 @@ bool JumpThreadingPass::ProcessBlock(BasicBlock *BB) {
   if (PHINode *PN = dyn_cast<PHINode>(CondInst))
     if (PN->getParent() == BB && isa<BranchInst>(BB->getTerminator()))
       return ProcessBranchOnPHI(PN);
-
 
   // If this is an otherwise-unfoldable branch on a XOR, see if we can simplify.
   if (CondInst->getOpcode() == Instruction::Xor &&
@@ -1002,7 +999,7 @@ bool JumpThreadingPass::SimplifyPartiallyRedundantLoad(LoadInst *LI) {
                                  &IsLoadCSE, &NumScanedInst);
 
     // If PredBB has a single predecessor, continue scanning through the single
-    // precessor.
+    // predecessor.
     BasicBlock *SinglePredBB = PredBB;
     while (!PredAvailable && SinglePredBB && BBIt == SinglePredBB->begin() &&
            NumScanedInst < DefMaxInstsToScan) {
@@ -1902,10 +1899,10 @@ bool JumpThreadingPass::DuplicateCondBranchOnPHIIntoPred(
 /// TryToUnfoldSelect - Look for blocks of the form
 /// bb1:
 ///   %a = select
-///   br bb
+///   br bb2
 ///
 /// bb2:
-///   %p = phi [%a, %bb] ...
+///   %p = phi [%a, %bb1] ...
 ///   %c = icmp %p
 ///   br i1 %c
 ///
@@ -2068,16 +2065,20 @@ bool JumpThreadingPass::ProcessGuards(BasicBlock *BB) {
   Pred2 = *PI++;
   if (PI != PE)
     return false;
+  if (Pred1 == Pred2)
+    return false;
 
   // Try to thread one of the guards of the block.
   // TODO: Look up deeper than to immediate predecessor?
-  if (auto Parent = Pred1->getSinglePredecessor())
-    if (Parent == Pred2->getSinglePredecessor())
-      if (BranchInst *BI = dyn_cast<BranchInst>(Parent->getTerminator()))
-        for (auto &I : *BB)
-          if (match(&I, m_Intrinsic<Intrinsic::experimental_guard>()))
-            if (ThreadGuard(BB, cast<IntrinsicInst>(&I), BI))
-              return true;
+  auto *Parent = Pred1->getSinglePredecessor();
+  if (!Parent || Parent != Pred2->getSinglePredecessor())
+    return false;
+
+  if (auto *BI = dyn_cast<BranchInst>(Parent->getTerminator()))
+    for (auto &I : *BB)
+      if (match(&I, m_Intrinsic<Intrinsic::experimental_guard>()))
+        if (ThreadGuard(BB, cast<IntrinsicInst>(&I), BI))
+          return true;
 
   return false;
 }
@@ -2087,6 +2088,8 @@ bool JumpThreadingPass::ProcessGuards(BasicBlock *BB) {
 /// condition.
 bool JumpThreadingPass::ThreadGuard(BasicBlock *BB, IntrinsicInst *Guard,
                                     BranchInst *BI) {
+  assert(BI->getNumSuccessors() == 2 && "Wrong number of successors?");
+  assert(BI->isConditional() && "Unconditional branch has 2 successors?");
   Value *GuardCond = Guard->getArgOperand(0);
   Value *BranchCond = BI->getCondition();
   BasicBlock *TrueDest = BI->getSuccessor(0);

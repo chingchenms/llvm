@@ -98,6 +98,14 @@ def G_VASTART : Instruction {
   let mayStore = 1;
 }
 
+def G_VAARG : Instruction {
+  let OutOperandList = (outs type0:$val);
+  let InOperandList = (ins type1:$list, unknown:$align);
+  let hasSideEffects = 0;
+  let mayLoad = 1;
+  let mayStore = 1;
+}
+
 //------------------------------------------------------------------------------
 // Binary ops.
 //------------------------------------------------------------------------------
@@ -108,13 +116,6 @@ def G_ADD : Instruction {
   let InOperandList = (ins type0:$src1, type0:$src2);
   let hasSideEffects = 0;
   let isCommutable = 1;
-}
-
-// Generic pointer offset.
-def G_GEP : Instruction {
-  let OutOperandList = (outs type0:$dst);
-  let InOperandList = (ins type0:$src1, type1:$src2);
-  let hasSideEffects = 0;
 }
 
 // Generic subtraction.
@@ -228,6 +229,19 @@ def G_FCMP : Instruction {
 def G_SELECT : Instruction {
   let OutOperandList = (outs type0:$dst);
   let InOperandList = (ins type1:$tst, type0:$src1, type0:$src2);
+  let hasSideEffects = 0;
+}
+
+// Generic pointer offset.
+def G_GEP : Instruction {
+  let OutOperandList = (outs type0:$dst);
+  let InOperandList = (ins type0:$src1, type1:$src2);
+  let hasSideEffects = 0;
+}
+
+def G_PTR_MASK : Instruction {
+  let OutOperandList = (outs type0:$dst);
+  let InOperandList = (ins type0:$src, unknown:$bits);
   let hasSideEffects = 0;
 }
 
@@ -420,12 +434,19 @@ def G_EXTRACT : Instruction {
   let hasSideEffects = 0;
 }
 
-// Insert a sequence of smaller registers into a larger one at the specified
-// indices (interleaved with the values in the operand list "op0, bit0, op1,
-// bit1, ...")).
+// Extract multiple registers specified size, starting from blocks given by
+// indexes. This will almost certainly be mapped to sub-register COPYs after
+// register banks have been selected.
+def G_UNMERGE_VALUES : Instruction {
+  let OutOperandList = (outs);
+  let InOperandList = (ins variable_ops);
+  let hasSideEffects = 0;
+}
+
+// Insert a smaller register into a larger one at the specified bit-index.
 def G_INSERT : Instruction {
   let OutOperandList = (outs type0:$dst);
-  let InOperandList = (ins type0:$src, variable_ops);
+  let InOperandList = (ins type0:$src, type1:$op, unknown:$offset);
   let hasSideEffects = 0;
 }
 
@@ -433,6 +454,12 @@ def G_INSERT : Instruction {
 // bit 0). Essentially a G_INSERT where $src is an IMPLICIT_DEF, but it's so
 // important to legalization it probably deserves its own instruction.
 def G_SEQUENCE : Instruction {
+  let OutOperandList = (outs type0:$dst);
+  let InOperandList = (ins variable_ops);
+  let hasSideEffects = 0;
+}
+
+def G_MERGE_VALUES : Instruction {
   let OutOperandList = (outs type0:$dst);
   let InOperandList = (ins variable_ops);
   let hasSideEffects = 0;

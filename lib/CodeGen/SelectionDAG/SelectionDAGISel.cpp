@@ -713,8 +713,10 @@ void SelectionDAGISel::SelectBasicBlock(BasicBlock::const_iterator Begin,
                                         bool &HadTailCall) {
   // Lower the instructions. If a call is emitted as a tail call, cease emitting
   // nodes for this block.
-  for (BasicBlock::const_iterator I = Begin; I != End && !SDB->HasTailCall; ++I)
-    SDB->visit(*I);
+  for (BasicBlock::const_iterator I = Begin; I != End && !SDB->HasTailCall; ++I) {
+    if (!ElidedArgCopyInstrs.count(&*I))
+      SDB->visit(*I);
+  }
 
   // Make sure the root of the DAG is up-to-date.
   CurDAG->setRoot(SDB->getControlRoot());
@@ -1306,6 +1308,7 @@ static void setupSwiftErrorVals(const Function &Fn, const TargetLowering *TLI,
 }
 
 static void createSwiftErrorEntriesInEntryBlock(FunctionLoweringInfo *FuncInfo,
+                                                FastISel *FastIS,
                                                 const TargetLowering *TLI,
                                                 const TargetInstrInfo *TII,
                                                 SelectionDAGBuilder *SDB) {
@@ -1332,6 +1335,11 @@ static void createSwiftErrorEntriesInEntryBlock(FunctionLoweringInfo *FuncInfo,
     BuildMI(*FuncInfo->MBB, FuncInfo->MBB->getFirstNonPHI(),
             SDB->getCurDebugLoc(), TII->get(TargetOpcode::IMPLICIT_DEF),
             VReg);
+
+    // Keep FastIS informed about the value we just inserted.
+    if (FastIS)
+      FastIS->setLastLocalValue(&*std::prev(FuncInfo->InsertPt));
+
     FuncInfo->setCurrentSwiftErrorVReg(FuncInfo->MBB, SwiftErrorVal, VReg);
   }
 }
@@ -1501,7 +1509,7 @@ void SelectionDAGISel::SelectAllBasicBlocks(const Function &Fn) {
     else
       FastIS->setLastLocalValue(nullptr);
   }
-  createSwiftErrorEntriesInEntryBlock(FuncInfo, TLI, TII, SDB);
+  createSwiftErrorEntriesInEntryBlock(FuncInfo, FastIS, TLI, TII, SDB);
 
   // Iterate over all basic blocks in the function.
   for (const BasicBlock *LLVMBB : RPOT) {
@@ -1558,7 +1566,8 @@ void SelectionDAGISel::SelectAllBasicBlocks(const Function &Fn) {
         const Instruction *Inst = &*std::prev(BI);
 
         // If we no longer require this instruction, skip it.
-        if (isFoldedOrDeadInstruction(Inst, FuncInfo)) {
+        if (isFoldedOrDeadInstruction(Inst, FuncInfo) ||
+            ElidedArgCopyInstrs.count(Inst)) {
           --NumFastIselRemaining;
           continue;
         }
@@ -1678,10 +1687,17 @@ void SelectionDAGISel::SelectAllBasicBlocks(const Function &Fn) {
       // block.
       bool HadTailCall;
       SelectBasicBlock(Begin, BI, HadTailCall);
+
+      // But if FastISel was run, we already selected some of the block.
+      // If we emitted a tail-call, we need to delete any previously emitted
+      // instruction that follows it.
+      if (HadTailCall && FuncInfo->InsertPt != FuncInfo->MBB->end())
+        FastIS->removeDeadCode(FuncInfo->InsertPt, FuncInfo->MBB->end());
     }
 
     FinishBasicBlock();
     FuncInfo->PHINodesToUpdate.clear();
+    ElidedArgCopyInstrs.clear();
   }
 
   propagateSwiftErrorVRegs(FuncInfo);
@@ -3503,6 +3519,15 @@ void SelectionDAGISel::SelectCodeCommon(SDNode *NodeToMatch,
       assert(RecNo < RecordedNodes.size() && "Invalid EmitNodeXForm");
       SDValue Res = RunSDNodeXForm(RecordedNodes[RecNo].first, XFormNo);
       RecordedNodes.push_back(std::pair<SDValue,SDNode*>(Res, nullptr));
+      continue;
+    }
+    case OPC_Coverage: {
+      // This is emitted right before MorphNode/EmitNode.
+      // So it should be safe to assume that this node has been selected
+      unsigned index = MatcherTable[MatcherIndex++];
+      index |= (MatcherTable[MatcherIndex++] << 8);
+      dbgs() << "COVERED: " << getPatternForIndex(index) << "\n";
+      dbgs() << "INCLUDED: " << getIncludePathForIndex(index) << "\n";
       continue;
     }
 

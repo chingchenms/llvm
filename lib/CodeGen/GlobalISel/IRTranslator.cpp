@@ -12,8 +12,10 @@
 
 #include "llvm/CodeGen/GlobalISel/IRTranslator.h"
 
+#include "llvm/ADT/ScopeExit.h"
 #include "llvm/ADT/SmallSet.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/Analysis/OptimizationDiagnosticInfo.h"
 #include "llvm/CodeGen/GlobalISel/CallLowering.h"
 #include "llvm/CodeGen/Analysis.h"
 #include "llvm/CodeGen/MachineFunction.h"
@@ -43,11 +45,21 @@ INITIALIZE_PASS_DEPENDENCY(TargetPassConfig)
 INITIALIZE_PASS_END(IRTranslator, DEBUG_TYPE, "IRTranslator LLVM IR -> MI",
                 false, false)
 
-static void reportTranslationError(const Value &V, const Twine &Message) {
-  std::string ErrStorage;
-  raw_string_ostream Err(ErrStorage);
-  Err << Message << ": " << V << '\n';
-  report_fatal_error(Err.str());
+static void reportTranslationError(MachineFunction &MF,
+                                   const TargetPassConfig &TPC,
+                                   OptimizationRemarkEmitter &ORE,
+                                   OptimizationRemarkMissed &R) {
+  MF.getProperties().set(MachineFunctionProperties::Property::FailedISel);
+
+  // Print the function name explicitly if we don't have a debug location (which
+  // makes the diagnostic less useful) or if we're going to emit a raw error.
+  if (!R.getLocation().isValid() || TPC.isGlobalISelAbortEnabled())
+    R << (" (in function: " + MF.getName() + ")").str();
+
+  if (TPC.isGlobalISelAbortEnabled())
+    report_fatal_error(R.getMsg());
+  else
+    ORE.emit(R);
 }
 
 IRTranslator::IRTranslator() : MachineFunctionPass(ID), MRI(nullptr) {
@@ -76,12 +88,12 @@ unsigned IRTranslator::getOrCreateVReg(const Value &Val) {
   if (auto CV = dyn_cast<Constant>(&Val)) {
     bool Success = translate(*CV, VReg);
     if (!Success) {
-      if (!TPC->isGlobalISelAbortEnabled()) {
-        MF->getProperties().set(
-            MachineFunctionProperties::Property::FailedISel);
-        return VReg;
-      }
-      reportTranslationError(Val, "unable to translate constant");
+      OptimizationRemarkMissed R("gisel-irtranslator", "GISelFailure",
+                                 MF->getFunction()->getSubprogram(),
+                                 &MF->getFunction()->getEntryBlock());
+      R << "unable to translate constant: " << ore::NV("Type", Val.getType());
+      reportTranslationError(*MF, *TPC, *ORE, R);
+      return VReg;
     }
   }
 
@@ -117,12 +129,12 @@ unsigned IRTranslator::getMemOpAlignment(const Instruction &I) {
   } else if (const LoadInst *LI = dyn_cast<LoadInst>(&I)) {
     Alignment = LI->getAlignment();
     ValTy = LI->getType();
-  } else if (!TPC->isGlobalISelAbortEnabled()) {
-    MF->getProperties().set(
-        MachineFunctionProperties::Property::FailedISel);
+  } else {
+    OptimizationRemarkMissed R("gisel-irtranslator", "", &I);
+    R << "unable to translate memop: " << ore::NV("Opcode", &I);
+    reportTranslationError(*MF, *TPC, *ORE, R);
     return 1;
-  } else
-    llvm_unreachable("unhandled memory instruction");
+  }
 
   return Alignment ? Alignment : DL->getABITypeAlignment(ValTy);
 }
@@ -271,10 +283,6 @@ bool IRTranslator::translateIndirectBr(const User &U,
 bool IRTranslator::translateLoad(const User &U, MachineIRBuilder &MIRBuilder) {
   const LoadInst &LI = cast<LoadInst>(U);
 
-  if (!TPC->isGlobalISelAbortEnabled() && LI.isAtomic())
-    return false;
-
-  assert(!LI.isAtomic() && "only non-atomic loads are supported at the moment");
   auto Flags = LI.isVolatile() ? MachineMemOperand::MOVolatile
                                : MachineMemOperand::MONone;
   Flags |= MachineMemOperand::MOLoad;
@@ -286,17 +294,13 @@ bool IRTranslator::translateLoad(const User &U, MachineIRBuilder &MIRBuilder) {
       Res, Addr,
       *MF->getMachineMemOperand(MachinePointerInfo(LI.getPointerOperand()),
                                 Flags, DL->getTypeStoreSize(LI.getType()),
-                                getMemOpAlignment(LI)));
+                                getMemOpAlignment(LI), AAMDNodes(), nullptr,
+                                LI.getSynchScope(), LI.getOrdering()));
   return true;
 }
 
 bool IRTranslator::translateStore(const User &U, MachineIRBuilder &MIRBuilder) {
   const StoreInst &SI = cast<StoreInst>(U);
-
-  if (!TPC->isGlobalISelAbortEnabled() && SI.isAtomic())
-    return false;
-
-  assert(!SI.isAtomic() && "only non-atomic stores supported at the moment");
   auto Flags = SI.isVolatile() ? MachineMemOperand::MOVolatile
                                : MachineMemOperand::MONone;
   Flags |= MachineMemOperand::MOStore;
@@ -311,7 +315,8 @@ bool IRTranslator::translateStore(const User &U, MachineIRBuilder &MIRBuilder) {
       *MF->getMachineMemOperand(
           MachinePointerInfo(SI.getPointerOperand()), Flags,
           DL->getTypeStoreSize(SI.getValueOperand()->getType()),
-          getMemOpAlignment(SI)));
+          getMemOpAlignment(SI), AAMDNodes(), nullptr, SI.getSynchScope(),
+          SI.getOrdering()));
   return true;
 }
 
@@ -877,7 +882,7 @@ bool IRTranslator::translateAlloca(const User &U,
 
   unsigned AllocSize = MRI->createGenericVirtualRegister(IntPtrTy);
   unsigned TySize = MRI->createGenericVirtualRegister(IntPtrTy);
-  MIRBuilder.buildConstant(TySize, DL->getTypeAllocSize(Ty));
+  MIRBuilder.buildConstant(TySize, -DL->getTypeAllocSize(Ty));
   MIRBuilder.buildMul(AllocSize, NumElts, TySize);
 
   LLT PtrTy = LLT{*AI.getType(), *DL};
@@ -887,11 +892,8 @@ bool IRTranslator::translateAlloca(const User &U,
   unsigned SPTmp = MRI->createGenericVirtualRegister(PtrTy);
   MIRBuilder.buildCopy(SPTmp, SPReg);
 
-  unsigned SPInt = MRI->createGenericVirtualRegister(IntPtrTy);
-  MIRBuilder.buildInstr(TargetOpcode::G_PTRTOINT).addDef(SPInt).addUse(SPTmp);
-
-  unsigned AllocInt = MRI->createGenericVirtualRegister(IntPtrTy);
-  MIRBuilder.buildSub(AllocInt, SPInt, AllocSize);
+  unsigned AllocTmp = MRI->createGenericVirtualRegister(PtrTy);
+  MIRBuilder.buildGEP(AllocTmp, SPTmp, AllocSize);
 
   // Handle alignment. We have to realign if the allocation granule was smaller
   // than stack alignment, or the specific alloca requires more than stack
@@ -903,28 +905,28 @@ bool IRTranslator::translateAlloca(const User &U,
     // Round the size of the allocation up to the stack alignment size
     // by add SA-1 to the size. This doesn't overflow because we're computing
     // an address inside an alloca.
-    unsigned TmpSize = MRI->createGenericVirtualRegister(IntPtrTy);
-    unsigned AlignMinus1 = MRI->createGenericVirtualRegister(IntPtrTy);
-    MIRBuilder.buildConstant(AlignMinus1, Align - 1);
-    MIRBuilder.buildSub(TmpSize, AllocInt, AlignMinus1);
-
-    unsigned AlignedAlloc = MRI->createGenericVirtualRegister(IntPtrTy);
-    unsigned AlignMask = MRI->createGenericVirtualRegister(IntPtrTy);
-    MIRBuilder.buildConstant(AlignMask, -(uint64_t)Align);
-    MIRBuilder.buildAnd(AlignedAlloc, TmpSize, AlignMask);
-
-    AllocInt = AlignedAlloc;
+    unsigned AlignedAlloc = MRI->createGenericVirtualRegister(PtrTy);
+    MIRBuilder.buildPtrMask(AlignedAlloc, AllocTmp, Log2_32(Align));
+    AllocTmp = AlignedAlloc;
   }
 
-  unsigned DstReg = getOrCreateVReg(AI);
-  MIRBuilder.buildInstr(TargetOpcode::G_INTTOPTR)
-      .addDef(DstReg)
-      .addUse(AllocInt);
-
-  MIRBuilder.buildCopy(SPReg, DstReg);
+  MIRBuilder.buildCopy(SPReg, AllocTmp);
+  MIRBuilder.buildCopy(getOrCreateVReg(AI), AllocTmp);
 
   MF->getFrameInfo().CreateVariableSizedObject(Align ? Align : 1, &AI);
   assert(MF->getFrameInfo().hasVarSizedObjects());
+  return true;
+}
+
+bool IRTranslator::translateVAArg(const User &U, MachineIRBuilder &MIRBuilder) {
+  // FIXME: We may need more info about the type. Because of how LLT works,
+  // we're completely discarding the i64/double distinction here (amongst
+  // others). Fortunately the ABIs I know of where that matters don't use va_arg
+  // anyway but that's not guaranteed.
+  MIRBuilder.buildInstr(TargetOpcode::G_VAARG)
+    .addDef(getOrCreateVReg(U))
+    .addUse(getOrCreateVReg(*U.getOperand(0)))
+    .addImm(DL->getABITypeAlignment(U.getType()));
   return true;
 }
 
@@ -984,7 +986,7 @@ bool IRTranslator::translate(const Constant &C, unsigned Reg) {
   else if (auto CF = dyn_cast<ConstantFP>(&C))
     EntryBuilder.buildFConstant(Reg, *CF);
   else if (isa<UndefValue>(C))
-    EntryBuilder.buildInstr(TargetOpcode::IMPLICIT_DEF).addDef(Reg);
+    EntryBuilder.buildUndef(Reg);
   else if (isa<ConstantPointerNull>(C))
     EntryBuilder.buildConstant(Reg, 0);
   else if (auto GV = dyn_cast<GlobalValue>(&C))
@@ -1028,8 +1030,12 @@ bool IRTranslator::runOnMachineFunction(MachineFunction &CurMF) {
   MRI = &MF->getRegInfo();
   DL = &F.getParent()->getDataLayout();
   TPC = &getAnalysis<TargetPassConfig>();
+  ORE = make_unique<OptimizationRemarkEmitter>(&F);
 
   assert(PendingPHIs.empty() && "stale PHIs");
+
+  // Release the per-function state when we return, whether we succeeded or not.
+  auto FinalizeOnReturn = make_scope_exit([this]() { finalizeFunction(); });
 
   // Setup a separate basic-block for the arguments and constants, falling
   // through to the IR-level Function's entry block.
@@ -1042,15 +1048,13 @@ bool IRTranslator::runOnMachineFunction(MachineFunction &CurMF) {
   SmallVector<unsigned, 8> VRegArgs;
   for (const Argument &Arg: F.args())
     VRegArgs.push_back(getOrCreateVReg(Arg));
-  bool Succeeded = CLI->lowerFormalArguments(EntryBuilder, F, VRegArgs);
-  if (!Succeeded) {
-    if (!TPC->isGlobalISelAbortEnabled()) {
-      MF->getProperties().set(
-          MachineFunctionProperties::Property::FailedISel);
-      finalizeFunction();
-      return false;
-    }
-    report_fatal_error("Unable to lower arguments");
+  if (!CLI->lowerFormalArguments(EntryBuilder, F, VRegArgs)) {
+    OptimizationRemarkMissed R("gisel-irtranslator", "GISelFailure",
+                               MF->getFunction()->getSubprogram(),
+                               &MF->getFunction()->getEntryBlock());
+    R << "unable to lower arguments: " << ore::NV("Prototype", F.getType());
+    reportTranslationError(*MF, *TPC, *ORE, R);
+    return false;
   }
 
   // And translate the function!
@@ -1061,53 +1065,54 @@ bool IRTranslator::runOnMachineFunction(MachineFunction &CurMF) {
     CurBuilder.setMBB(MBB);
 
     for (const Instruction &Inst: BB) {
-      Succeeded &= translate(Inst);
-      if (!Succeeded) {
-        if (TPC->isGlobalISelAbortEnabled())
-          reportTranslationError(Inst, "unable to translate instruction");
-        MF->getProperties().set(
-            MachineFunctionProperties::Property::FailedISel);
-        break;
-      }
+      if (translate(Inst))
+        continue;
+
+      std::string InstStrStorage;
+      raw_string_ostream InstStr(InstStrStorage);
+      InstStr << Inst;
+
+      OptimizationRemarkMissed R("gisel-irtranslator", "GISelFailure",
+                                 Inst.getDebugLoc(), &BB);
+      R << "unable to translate instruction: " << ore::NV("Opcode", &Inst)
+        << ": '" << InstStr.str() << "'";
+      reportTranslationError(*MF, *TPC, *ORE, R);
+      return false;
     }
   }
 
-  if (Succeeded) {
-    finishPendingPhis();
+  finishPendingPhis();
 
-    // Now that the MachineFrameInfo has been configured, no further changes to
-    // the reserved registers are possible.
-    MRI->freezeReservedRegs(*MF);
+  // Now that the MachineFrameInfo has been configured, no further changes to
+  // the reserved registers are possible.
+  MRI->freezeReservedRegs(*MF);
 
-    // Merge the argument lowering and constants block with its single
-    // successor, the LLVM-IR entry block.  We want the basic block to
-    // be maximal.
-    assert(EntryBB->succ_size() == 1 &&
-           "Custom BB used for lowering should have only one successor");
-    // Get the successor of the current entry block.
-    MachineBasicBlock &NewEntryBB = **EntryBB->succ_begin();
-    assert(NewEntryBB.pred_size() == 1 &&
-           "LLVM-IR entry block has a predecessor!?");
-    // Move all the instruction from the current entry block to the
-    // new entry block.
-    NewEntryBB.splice(NewEntryBB.begin(), EntryBB, EntryBB->begin(),
-                      EntryBB->end());
+  // Merge the argument lowering and constants block with its single
+  // successor, the LLVM-IR entry block.  We want the basic block to
+  // be maximal.
+  assert(EntryBB->succ_size() == 1 &&
+         "Custom BB used for lowering should have only one successor");
+  // Get the successor of the current entry block.
+  MachineBasicBlock &NewEntryBB = **EntryBB->succ_begin();
+  assert(NewEntryBB.pred_size() == 1 &&
+         "LLVM-IR entry block has a predecessor!?");
+  // Move all the instruction from the current entry block to the
+  // new entry block.
+  NewEntryBB.splice(NewEntryBB.begin(), EntryBB, EntryBB->begin(),
+                    EntryBB->end());
 
-    // Update the live-in information for the new entry block.
-    for (const MachineBasicBlock::RegisterMaskPair &LiveIn : EntryBB->liveins())
-      NewEntryBB.addLiveIn(LiveIn);
-    NewEntryBB.sortUniqueLiveIns();
+  // Update the live-in information for the new entry block.
+  for (const MachineBasicBlock::RegisterMaskPair &LiveIn : EntryBB->liveins())
+    NewEntryBB.addLiveIn(LiveIn);
+  NewEntryBB.sortUniqueLiveIns();
 
-    // Get rid of the now empty basic block.
-    EntryBB->removeSuccessor(&NewEntryBB);
-    MF->remove(EntryBB);
-    MF->DeleteMachineBasicBlock(EntryBB);
+  // Get rid of the now empty basic block.
+  EntryBB->removeSuccessor(&NewEntryBB);
+  MF->remove(EntryBB);
+  MF->DeleteMachineBasicBlock(EntryBB);
 
-    assert(&MF->front() == &NewEntryBB &&
-           "New entry wasn't next in the list of basic block!");
-  }
-
-  finalizeFunction();
+  assert(&MF->front() == &NewEntryBB &&
+         "New entry wasn't next in the list of basic block!");
 
   return false;
 }

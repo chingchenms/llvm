@@ -232,7 +232,7 @@ StringRef MachineBasicBlock::getName() const {
   if (const BasicBlock *LBB = getBasicBlock())
     return LBB->getName();
   else
-    return "(null)";
+    return StringRef("", 0);
 }
 
 /// Return a hopefully unique identifier for this block.
@@ -1155,7 +1155,7 @@ MachineBasicBlock::findDebugLoc(instr_iterator MBBI) {
 /// Return UnknownLoc if there is none.
 DebugLoc
 MachineBasicBlock::findBranchDebugLoc() {
-  DebugLoc DL {};
+  DebugLoc DL;
   auto TI = getFirstTerminator();
   while (TI != end() && !TI->isBranch())
     ++TI;
