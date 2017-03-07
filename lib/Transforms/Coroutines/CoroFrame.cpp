@@ -446,8 +446,6 @@ static Instruction *insertSpills(SpillInfo &Spills, coro::Shape &Shape) {
         }
 
         Builder.SetInsertPoint(InsertPt);
-
-        Builder.SetInsertPoint(InsertPt);
         auto *G = Builder.CreateConstInBoundsGEP2_32(
             FrameTy, FramePtr, 0, Index,
             CurrentValue->getName() + Twine(".spill.addr"));

@@ -38,6 +38,8 @@ void dumpDebugAbbrev(DWARFContextInMemory &DCtx, DWARFYAML::Data &Y) {
           DWARFYAML::AttributeAbbrev AttAbrv;
           AttAbrv.Attribute = Attribute.Attr;
           AttAbrv.Form = Attribute.Form;
+          if (AttAbrv.Form == dwarf::DW_FORM_implicit_const)
+            AttAbrv.Value = *Attribute.ByteSizeOrValue;
           Abbrv.Attributes.push_back(AttAbrv);
         }
         Y.AbbrevDecls.push_back(Abbrv);
@@ -114,6 +116,8 @@ void dumpDebugInfo(DWARFContextInMemory &DCtx, DWARFYAML::Data &Y) {
     DWARFYAML::Unit NewUnit;
     NewUnit.Length.setLength(CU->getLength());
     NewUnit.Version = CU->getVersion();
+    if(NewUnit.Version >= 5)
+      NewUnit.Type = (dwarf::UnitType)CU->getUnitType();
     NewUnit.AbbrOffset = CU->getAbbreviations()->getOffset();
     NewUnit.AddrSize = CU->getAddressByteSize();
     for (auto DIE : CU->dies()) {
