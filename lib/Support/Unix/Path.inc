@@ -48,6 +48,8 @@
 # endif
 #endif
 
+#include <pwd.h>
+
 #ifdef __APPLE__
 #include <mach-o/dyld.h>
 #include <sys/attr.h>
@@ -372,6 +374,9 @@ static bool is_local_impl(struct STATVFS &Vfs) {
   default:
     return true;
   }
+#elif defined(__CYGWIN__)
+  // Cygwin doesn't expose this information; would need to use Win32 API.
+  return false;
 #else
   return !!(STATVFS_F_FLAG(Vfs) & MNT_LOCAL);
 #endif
@@ -473,6 +478,45 @@ std::error_code equivalent(const Twine &A, const Twine &B, bool &result) {
     return ec;
   result = equivalent(fsA, fsB);
   return std::error_code();
+}
+
+static void expandTildeExpr(SmallVectorImpl<char> &Path) {
+  StringRef PathStr(Path.begin(), Path.size());
+  if (PathStr.empty() || !PathStr.startswith("~"))
+    return;
+
+  PathStr = PathStr.drop_front();
+  StringRef Expr = PathStr.take_until(path::is_separator);
+  StringRef Remainder = PathStr.substr(Expr.size() + 1);
+  SmallString<128> Storage;
+  if (Expr.empty()) {
+    // This is just ~/..., resolve it to the current user's home dir.
+    if (!path::home_directory(Storage)) {
+      // For some reason we couldn't get the home directory.  Just exit.
+      return;
+    }
+
+    // Overwrite the first character and insert the rest.
+    Path[0] = Storage[0];
+    Path.insert(Path.begin() + 1, Storage.begin() + 1, Storage.end());
+    return;
+  }
+
+  // This is a string of the form ~username/, look up this user's entry in the
+  // password database.
+  struct passwd *Entry = nullptr;
+  std::string User = Expr.str();
+  Entry = ::getpwnam(User.c_str());
+
+  if (!Entry) {
+    // Unable to look up the entry, just return back the original path.
+    return;
+  }
+
+  Storage = Remainder;
+  Path.clear();
+  Path.append(Entry->pw_dir, Entry->pw_dir + strlen(Entry->pw_dir));
+  llvm::sys::path::append(Path, Storage);
 }
 
 static std::error_code fillStatus(int StatRet, const struct stat &Status,
@@ -836,6 +880,28 @@ std::error_code remove_directories(const Twine &path, bool IgnoreErrors) {
   return std::error_code();
 }
 
+std::error_code real_path(const Twine &path, SmallVectorImpl<char> &dest,
+                          bool expand_tilde) {
+  dest.clear();
+  if (path.isTriviallyEmpty())
+    return std::error_code();
+
+  if (expand_tilde) {
+    SmallString<128> Storage;
+    path.toVector(Storage);
+    expandTildeExpr(Storage);
+    return real_path(Storage, dest, false);
+  }
+
+  int fd;
+  std::error_code EC = openFileForRead(path, fd, &dest);
+
+  if (EC)
+    return EC;
+  ::close(fd);
+  return std::error_code();
+}
+
 } // end namespace fs
 
 namespace path {
@@ -846,7 +912,6 @@ bool home_directory(SmallVectorImpl<char> &result) {
     result.append(RequestedDir, RequestedDir + strlen(RequestedDir));
     return true;
   }
-
   return false;
 }
 
