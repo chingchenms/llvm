@@ -213,10 +213,6 @@ AMDGPUTargetLowering::AMDGPUTargetLowering(const TargetMachine &TM,
   // This is totally unsupported, just custom lower to produce an error.
   setOperationAction(ISD::DYNAMIC_STACKALLOC, MVT::i32, Custom);
 
-  // We need to custom lower some of the intrinsics
-  setOperationAction(ISD::INTRINSIC_WO_CHAIN, MVT::Other, Custom);
-  setOperationAction(ISD::INTRINSIC_VOID, MVT::Other, Custom);
-
   // Library functions.  These default to Expand, but we have instructions
   // for them.
   setOperationAction(ISD::FCEIL,  MVT::f32, Legal);
@@ -912,7 +908,6 @@ SDValue AMDGPUTargetLowering::LowerOperation(SDValue Op,
   case ISD::SIGN_EXTEND_INREG: return LowerSIGN_EXTEND_INREG(Op, DAG);
   case ISD::CONCAT_VECTORS: return LowerCONCAT_VECTORS(Op, DAG);
   case ISD::EXTRACT_SUBVECTOR: return LowerEXTRACT_SUBVECTOR(Op, DAG);
-  case ISD::INTRINSIC_WO_CHAIN: return LowerINTRINSIC_WO_CHAIN(Op, DAG);
   case ISD::UDIVREM: return LowerUDIVREM(Op, DAG);
   case ISD::SDIVREM: return LowerSDIVREM(Op, DAG);
   case ISD::FREM: return LowerFREM(Op, DAG);
@@ -1007,28 +1002,6 @@ SDValue AMDGPUTargetLowering::LowerEXTRACT_SUBVECTOR(SDValue Op,
                             VT.getVectorNumElements());
 
   return DAG.getBuildVector(Op.getValueType(), SDLoc(Op), Args);
-}
-
-SDValue AMDGPUTargetLowering::LowerINTRINSIC_WO_CHAIN(SDValue Op,
-    SelectionDAG &DAG) const {
-  unsigned IntrinsicID = cast<ConstantSDNode>(Op.getOperand(0))->getZExtValue();
-  SDLoc DL(Op);
-  EVT VT = Op.getValueType();
-
-  switch (IntrinsicID) {
-  default: return Op;
-  case AMDGPUIntrinsic::AMDGPU_bfe_i32:
-    return DAG.getNode(AMDGPUISD::BFE_I32, DL, VT,
-                       Op.getOperand(1),
-                       Op.getOperand(2),
-                       Op.getOperand(3));
-
-  case AMDGPUIntrinsic::AMDGPU_bfe_u32:
-    return DAG.getNode(AMDGPUISD::BFE_U32, DL, VT,
-                       Op.getOperand(1),
-                       Op.getOperand(2),
-                       Op.getOperand(3));
-  }
 }
 
 /// \brief Generate Min/Max node
@@ -3480,7 +3453,6 @@ const char* AMDGPUTargetLowering::getTargetNodeName(unsigned Opcode) const {
   NODE_NAME_CASE(CONST_ADDRESS)
   NODE_NAME_CASE(REGISTER_LOAD)
   NODE_NAME_CASE(REGISTER_STORE)
-  NODE_NAME_CASE(LOAD_INPUT)
   NODE_NAME_CASE(SAMPLE)
   NODE_NAME_CASE(SAMPLEB)
   NODE_NAME_CASE(SAMPLED)
@@ -3491,6 +3463,7 @@ const char* AMDGPUTargetLowering::getTargetNodeName(unsigned Opcode) const {
   NODE_NAME_CASE(CVT_F32_UBYTE3)
   NODE_NAME_CASE(CVT_PKRTZ_F16_F32)
   NODE_NAME_CASE(FP_TO_FP16)
+  NODE_NAME_CASE(FP16_ZEXT)
   NODE_NAME_CASE(BUILD_VERTICAL_VECTOR)
   NODE_NAME_CASE(CONST_DATA_PTR)
   NODE_NAME_CASE(PC_ADD_REL_OFFSET)
@@ -3555,13 +3528,11 @@ SDValue AMDGPUTargetLowering::getRecipEstimate(SDValue Operand,
 }
 
 void AMDGPUTargetLowering::computeKnownBitsForTargetNode(
-  const SDValue Op,
-  APInt &KnownZero,
-  APInt &KnownOne,
-  const SelectionDAG &DAG,
-  unsigned Depth) const {
+    const SDValue Op, APInt &KnownZero, APInt &KnownOne,
+    const APInt &DemandedElts, const SelectionDAG &DAG, unsigned Depth) const {
 
-  KnownZero = KnownOne = APInt(KnownOne.getBitWidth(), 0); // Don't know anything.
+  unsigned BitWidth = KnownZero.getBitWidth();
+  KnownZero = KnownOne = APInt(BitWidth, 0); // Don't know anything.
 
   APInt KnownZero2;
   APInt KnownOne2;
@@ -3582,15 +3553,15 @@ void AMDGPUTargetLowering::computeKnownBitsForTargetNode(
     if (!CWidth)
       return;
 
-    unsigned BitWidth = 32;
     uint32_t Width = CWidth->getZExtValue() & 0x1f;
 
     if (Opc == AMDGPUISD::BFE_U32)
-      KnownZero = APInt::getHighBitsSet(BitWidth, BitWidth - Width);
+      KnownZero = APInt::getHighBitsSet(32, 32 - Width);
 
     break;
   }
-  case AMDGPUISD::FP_TO_FP16: {
+  case AMDGPUISD::FP_TO_FP16:
+  case AMDGPUISD::FP16_ZEXT: {
     unsigned BitWidth = KnownZero.getBitWidth();
 
     // High bits are zero.
@@ -3601,9 +3572,8 @@ void AMDGPUTargetLowering::computeKnownBitsForTargetNode(
 }
 
 unsigned AMDGPUTargetLowering::ComputeNumSignBitsForTargetNode(
-  SDValue Op,
-  const SelectionDAG &DAG,
-  unsigned Depth) const {
+    SDValue Op, const APInt &DemandedElts, const SelectionDAG &DAG,
+    unsigned Depth) const {
   switch (Op.getOpcode()) {
   case AMDGPUISD::BFE_I32: {
     ConstantSDNode *Width = dyn_cast<ConstantSDNode>(Op.getOperand(2));
@@ -3627,7 +3597,9 @@ unsigned AMDGPUTargetLowering::ComputeNumSignBitsForTargetNode(
   case AMDGPUISD::CARRY:
   case AMDGPUISD::BORROW:
     return 31;
-
+  case AMDGPUISD::FP_TO_FP16:
+  case AMDGPUISD::FP16_ZEXT:
+    return 16;
   default:
     return 1;
   }

@@ -971,6 +971,8 @@ static FastMathFlags getDecodedFastMathFlags(unsigned Val) {
     FMF.setNoSignedZeros();
   if (0 != (Val & FastMathFlags::AllowReciprocal))
     FMF.setAllowReciprocal();
+  if (0 != (Val & FastMathFlags::AllowContract))
+    FMF.setAllowContract(true);
   return FMF;
 }
 
@@ -3058,13 +3060,6 @@ Error BitcodeReader::parseModule(uint64_t ResumeBit,
       IndirectSymbolInits.push_back(std::make_pair(NewGA, Val));
       break;
     }
-    /// MODULE_CODE_PURGEVALS: [numvals]
-    case bitc::MODULE_CODE_PURGEVALS:
-      // Trim down the value list to the specified size.
-      if (Record.size() < 1 || Record[0] > ValueList.size())
-        return error("Invalid record");
-      ValueList.shrinkTo(Record[0]);
-      break;
     /// MODULE_CODE_VSTOFFSET: [offset]
     case bitc::MODULE_CODE_VSTOFFSET:
       if (Record.size() < 1)

@@ -2194,6 +2194,10 @@ otherwise unsafe floating point transformations.
    Allow Reciprocal - Allow optimizations to use the reciprocal of an
    argument rather than perform division.
 
+``contract``
+   Allow floating-point contraction (e.g. fusing a multiply followed by an
+   addition into a fused multiply-and-add).
+
 ``fast``
    Fast - Allow algebraically equivalent transformations that may
    dramatically change results in floating point (e.g. reassociate). This
@@ -7196,7 +7200,7 @@ Overview:
 The '``alloca``' instruction allocates memory on the stack frame of the
 currently executing function, to be automatically released when this
 function returns to its caller. The object is always allocated in the
-generic address space (address space zero).
+default address space (address space zero).
 
 Arguments:
 """"""""""
@@ -9791,7 +9795,7 @@ Semantics:
       compile-time-known constant value.
 
       The return value type of :ref:`llvm.get.dynamic.area.offset <int_get_dynamic_area_offset>`
-      must match the target's generic address space's (address space 0) pointer type.
+      must match the target's default address space's (address space 0) pointer type.
 
 '``llvm.prefetch``' Intrinsic
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
