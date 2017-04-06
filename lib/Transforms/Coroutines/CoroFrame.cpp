@@ -728,20 +728,25 @@ void coro::buildCoroutineFrame(Function &F, Shape &Shape) {
   IRBuilder<> Builder(F.getContext());
   SpillInfo Spills;
 
-  // See if there are materializable instructions across suspend points.
-  for (Instruction &I : instructions(F))
-    if (materializable(I))
-      for (User *U : I.users())
-        if (Checker.isDefinitionAcrossSuspend(I, U))
-          Spills.emplace_back(&I, U);
+  for (int repeat = 0; repeat < 4; ++repeat) {
+    // See if there are materializable instructions across suspend points.
+    for (Instruction &I : instructions(F))
+      if (materializable(I))
+        for (User *U : I.users())
+          if (Checker.isDefinitionAcrossSuspend(I, U))
+            Spills.emplace_back(&I, U);
 
-  // Rewrite materializable instructions to be materialized at the use point.
-  std::sort(Spills.begin(), Spills.end());
-  DEBUG(dump("Materializations", Spills));
-  rewriteMaterializableInstructions(Builder, Spills);
+    if (Spills.empty())
+      break;
+
+    // Rewrite materializable instructions to be materialized at the use point.
+    std::sort(Spills.begin(), Spills.end());
+    DEBUG(dump("Materializations", Spills));
+    rewriteMaterializableInstructions(Builder, Spills);
+    Spills.clear();
+  }
 
   // Collect the spills for arguments and other not-materializable values.
-  Spills.clear();
   for (Argument &A : F.args())
     for (User *U : A.users())
       if (Checker.isDefinitionAcrossSuspend(A, U))
@@ -763,8 +768,6 @@ void coro::buildCoroutineFrame(Function &F, Shape &Shape) {
         if (I.getType()->isTokenTy())
           report_fatal_error(
               "token definition is separated from the use by a suspend point");
-        assert(!materializable(I) &&
-               "rewriteMaterializable did not do its job");
         Spills.emplace_back(&I, U);
       }
   }
