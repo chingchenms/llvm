@@ -177,7 +177,7 @@ SuspendCrossingInfo::SuspendCrossingInfo(Function &F, coro::Shape &Shape)
   // consume. Note, that crossing coro.save also requires a spill, as any code
   // between coro.save and coro.suspend may resume the coroutine and all of the
   // state needs to be saved by that time.
-  auto markSuspendBlock = [&](IntrinsicInst* BarrierInst) {
+  auto markSuspendBlock = [&](IntrinsicInst *BarrierInst) {
     BasicBlock *SuspendBlock = BarrierInst->getParent();
     auto &B = getBlockData(SuspendBlock);
     B.Suspend = true;
@@ -347,6 +347,27 @@ static StructType *buildFrameType(Function &F, coro::Shape &Shape,
   return FrameTy;
 }
 
+// We need to make room to insert a spill after initial PHIs, but before
+// catchswitch instruction. Placing it before catchswitch which will violate the
+// requirement that catchswitch, like all other EHPadsm must be the first nonPHI
+// instruction. We will split away catchswitch into a separate block and insert:
+//   cleanuppad <InsertPt> cleanupret after the PHIs.
+// cleanupret instruction will act as an insert point for the spill.
+static Instruction *splitBeforeCatchSwitch(CatchSwitchInst *CSI) {
+//  (void)(CSI);
+//  llvm_unreachable("Got catchswitch");
+#if 1
+  BasicBlock *CurrentBlock = CSI->getParent();
+  BasicBlock *NewBlock = CurrentBlock->splitBasicBlock(CSI);
+  CurrentBlock->getTerminator()->eraseFromParent();
+
+  auto *CleanupPad =
+      CleanupPadInst::Create(CSI->getParentPad(), {}, "", CurrentBlock);
+  auto *CleanupRet = CleanupReturnInst::Create(CleanupPad, NewBlock, CurrentBlock);
+  return CleanupRet;
+#endif
+}
+
 // Replace all alloca and SSA values that are accessed across suspend points
 // with GetElementPointer from coroutine frame + loads and stores. Create an
 // AllocaSpillBB that will become the new entry block for the resume parts of
@@ -435,6 +456,13 @@ static Instruction *insertSpills(SpillInfo &Spills, coro::Shape &Shape) {
           // normal edge and insert the spill in the new block.
           auto NewBB = SplitEdge(II->getParent(), II->getNormalDest());
           InsertPt = NewBB->getTerminator();
+        } else if (dyn_cast<PHINode>(CurrentValue)) {
+          // Skip the PHINodes and EH pads instructions.
+          BasicBlock *DefBlock = cast<Instruction>(E.def())->getParent();
+          if (auto *CSI = dyn_cast<CatchSwitchInst>(DefBlock->getTerminator()))
+            InsertPt = splitBeforeCatchSwitch(CSI);
+          else
+            InsertPt = &*DefBlock->getFirstInsertionPt();
         } else {
           // For all other values, the spill is placed immediately after
           // the definition.
@@ -491,6 +519,76 @@ static Instruction *insertSpills(SpillInfo &Spills, coro::Shape &Shape) {
   return FramePtr;
 }
 
+static void setUnwindEdgeTo(TerminatorInst *TI, BasicBlock *Succ) {
+  if (auto *II = dyn_cast<InvokeInst>(TI))
+    II->setUnwindDest(Succ);
+  else if (auto *CS = dyn_cast<CatchSwitchInst>(TI))
+    CS->setUnwindDest(Succ);
+  else if (auto *CR = dyn_cast<CleanupReturnInst>(TI))
+    CR->setUnwindDest(Succ);
+  else
+    llvm_unreachable("unexpected terminator instruction");
+}
+
+static void updatePhiNodes(BasicBlock *DestBB, BasicBlock *OldPred,
+                           BasicBlock *NewPred,
+                           PHINode *LandingPadReplacement) {
+  unsigned BBIdx = 0;
+  for (BasicBlock::iterator I = DestBB->begin(); isa<PHINode>(I); ++I) {
+    // We no longer enter through OldPred, now we come in through NewPred.
+    // Revector exactly one entry in the PHI node that used to come from
+    // OldPred to come from NewPred.
+    PHINode *PN = cast<PHINode>(I);
+
+    // We manually update the LandingPadReplacement PHINode and it is the last
+    // PHI Node. So, if we find it, we are done.
+    if (LandingPadReplacement == PN)
+      break;
+
+    // Reuse the previous value of BBIdx if it lines up.  In cases where we
+    // have multiple phi nodes with *lots* of predecessors, this is a speed
+    // win because we don't have to scan the PHI looking for TIBB.  This
+    // happens because the BB list of PHI nodes are usually in the same
+    // order.
+    if (PN->getIncomingBlock(BBIdx) != OldPred)
+      BBIdx = PN->getBasicBlockIndex(OldPred);
+
+    assert(BBIdx != (unsigned)-1 && "Invalid PHI Index!");
+    PN->setIncomingBlock(BBIdx, NewPred);
+  }
+}
+
+static BasicBlock *ehAwareSplitEdge(BasicBlock *BB, BasicBlock *Succ,
+                                    LandingPadInst *OriginalPad,
+                                    PHINode *LandingPadReplacement) {
+  auto *PadInst = Succ->getFirstNonPHI();
+  if (!LandingPadReplacement && !PadInst->isEHPad())
+    return SplitEdge(BB, Succ);
+
+  auto *NewBB = BasicBlock::Create(BB->getContext(), "", BB->getParent(), Succ);
+  setUnwindEdgeTo(BB->getTerminator(), NewBB);
+  updatePhiNodes(Succ, BB, NewBB, LandingPadReplacement);
+
+  if (LandingPadReplacement) {
+    auto *NewLP = OriginalPad->clone();
+    auto *Terminator = BranchInst::Create(Succ, NewBB);
+    NewLP->insertBefore(Terminator);
+    LandingPadReplacement->addIncoming(NewLP, NewBB);
+    return NewBB;
+  }
+  Value *ParentPad = nullptr;
+  if (auto *FuncletPad = dyn_cast<FuncletPadInst>(PadInst))
+    ParentPad = FuncletPad->getParentPad();
+  else if (auto *CatchSwitch = dyn_cast<CatchSwitchInst>(PadInst))
+    ParentPad = CatchSwitch->getParentPad();
+  else
+    llvm_unreachable("handling for other EHPads not implemented yet");
+
+  auto *NewCP = CleanupPadInst::Create(ParentPad, {}, "", NewBB);
+  CleanupReturnInst::Create(NewCP, Succ, NewBB);
+  return NewBB;
+}
+
 static void rewritePHIs(BasicBlock &BB) {
   // For every incoming edge we will create a block holding all
   // incoming values in a single PHI nodes.
@@ -498,7 +596,7 @@ static void rewritePHIs(BasicBlock &BB) {
   // loop:
   //    %n.val = phi i32[%n, %entry], [%inc, %loop]
   //
-  // It will create:  
+  // It will create:
   //
   // loop.from.entry:
   //    %n.loop.pre = phi i32 [%n, %entry]
@@ -513,9 +611,19 @@ static void rewritePHIs(BasicBlock &BB) {
   // TODO: Simplify PHINodes in the basic block to remove duplicate
   // predecessors.
 
+  LandingPadInst *LandingPad = nullptr;
+  PHINode *ReplPHI = nullptr;
+  if ((LandingPad = dyn_cast_or_null<LandingPadInst>(BB.getFirstNonPHI()))) {
+    ReplPHI = PHINode::Create(LandingPad->getType(), 1, "", LandingPad);
+    ReplPHI->takeName(LandingPad);
+    LandingPad->replaceAllUsesWith(ReplPHI);
+    // We will erase it at the end of the function once ehAwareSplitEdge
+    // cloned it in the transition blocks.
+  }
+
   SmallVector<BasicBlock *, 8> Preds(pred_begin(&BB), pred_end(&BB));
   for (BasicBlock *Pred : Preds) {
-    auto *IncomingBB = SplitEdge(Pred, &BB);
+    auto *IncomingBB = ehAwareSplitEdge(Pred, &BB, LandingPad, ReplPHI);
     IncomingBB->setName(BB.getName() + Twine(".from.") + Pred->getName());
     auto *PN = cast<PHINode>(&BB.front());
     do {
@@ -527,7 +635,13 @@ static void rewritePHIs(BasicBlock &BB) {
       InputV->addIncoming(V, Pred);
       PN->setIncomingValue(Index, InputV);
       PN = dyn_cast<PHINode>(PN->getNextNode());
-    } while (PN);
+    } while (PN != ReplPHI);
+  }
+
+  if (LandingPad) {
+    // Calls to ehAwareSplitEdge function cloned the original lading pad.
+    // No longer needed it.
+    LandingPad->eraseFromParent();
   }
 }
 
@@ -596,51 +710,6 @@ static void rewriteMaterializableInstructions(IRBuilder<> &IRB,
   }
 }
 
-// Move early uses of spilled variable after CoroBegin.
-// For example, if a parameter had address taken, we may end up with the code
-// like:
-//        define @f(i32 %n) {
-//          %n.addr = alloca i32
-//          store %n, %n.addr
-//          ...
-//          call @coro.begin
-//    we need to move the store after coro.begin
-static void moveSpillUsesAfterCoroBegin(Function &F, SpillInfo const &Spills,
-                                        CoroBeginInst *CoroBegin) {
-  DominatorTree DT(F);
-  SmallVector<Instruction *, 8> NeedsMoving;
-
-  Value *CurrentValue = nullptr;
-
-  for (auto const &E : Spills) {
-    if (CurrentValue == E.def())
-      continue;
-
-    CurrentValue = E.def();
-
-    for (User *U : CurrentValue->users()) {
-      Instruction *I = cast<Instruction>(U);
-      if (!DT.dominates(CoroBegin, I)) {
-        // TODO: Make this more robust. Currently if we run into a situation
-        // where simple instruction move won't work we panic and
-        // report_fatal_error.
-        for (User *UI : I->users()) {
-          if (!DT.dominates(CoroBegin, cast<Instruction>(UI)))
-            report_fatal_error("cannot move instruction since its users are not"
-                               " dominated by CoroBegin");
-        }
-
-        DEBUG(dbgs() << "will move: " << *I << "\n");
-        NeedsMoving.push_back(I);
-      }
-    }
-  }
-
-  Instruction *InsertPt = CoroBegin->getNextNode();
-  for (Instruction *I : NeedsMoving)
-    I->moveBefore(InsertPt);
-}
-
 // Splits the block at a particular instruction unless it is the first
 // instruction in the block with a single predecessor.
 static BasicBlock *splitBlockIfNotFirst(Instruction *I, const Twine &Name) {
@@ -693,20 +762,25 @@ void coro::buildCoroutineFrame(Function &F, Shape &Shape) {
   IRBuilder<> Builder(F.getContext());
   SpillInfo Spills;
 
-  // See if there are materializable instructions across suspend points.
-  for (Instruction &I : instructions(F))
-    if (materializable(I))
-      for (User *U : I.users())
-        if (Checker.isDefinitionAcrossSuspend(I, U))
-          Spills.emplace_back(&I, U);
+  for (int repeat = 0; repeat < 4; ++repeat) {
+    // See if there are materializable instructions across suspend points.
+    for (Instruction &I : instructions(F))
+      if (materializable(I))
+        for (User *U : I.users())
+          if (Checker.isDefinitionAcrossSuspend(I, U))
+            Spills.emplace_back(&I, U);
 
-  // Rewrite materializable instructions to be materialized at the use point.
-  std::sort(Spills.begin(), Spills.end());
-  DEBUG(dump("Materializations", Spills));
-  rewriteMaterializableInstructions(Builder, Spills);
+    if (Spills.empty())
+      break;
+
+    // Rewrite materializable instructions to be materialized at the use point.
+    std::sort(Spills.begin(), Spills.end());
+    DEBUG(dump("Materializations", Spills));
+    rewriteMaterializableInstructions(Builder, Spills);
+    Spills.clear();
+  }
 
   // Collect the spills for arguments and other not-materializable values.
-  Spills.clear();
   for (Argument &A : F.args())
     for (User *U : A.users())
       if (Checker.isDefinitionAcrossSuspend(A, U))
@@ -728,14 +802,11 @@ void coro::buildCoroutineFrame(Function &F, Shape &Shape) {
         if (I.getType()->isTokenTy())
           report_fatal_error(
               "token definition is separated from the use by a suspend point");
-        assert(!materializable(I) &&
-               "rewriteMaterializable did not do its job");
         Spills.emplace_back(&I, U);
       }
   }
   std::sort(Spills.begin(), Spills.end());
   DEBUG(dump("Spills", Spills));
-  moveSpillUsesAfterCoroBegin(F, Spills, Shape.CoroBegin);
   Shape.FrameTy = buildFrameType(F, Shape, Spills);
   Shape.FramePtr = insertSpills(Spills, Shape);
 }
