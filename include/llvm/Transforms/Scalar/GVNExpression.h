@@ -18,6 +18,7 @@
 
 #include "llvm/ADT/Hashing.h"
 #include "llvm/ADT/iterator_range.h"
+#include "llvm/Analysis/MemorySSA.h"
 #include "llvm/IR/Constant.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/Value.h"
@@ -26,7 +27,6 @@
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
-#include "llvm/Transforms/Utils/MemorySSA.h"
 #include <algorithm>
 #include <cassert>
 #include <iterator>
@@ -40,6 +40,7 @@ enum ExpressionType {
   ET_Base,
   ET_Constant,
   ET_Variable,
+  ET_Dead,
   ET_Unknown,
   ET_BasicStart,
   ET_Basic,
@@ -74,6 +75,7 @@ public:
     if (getOpcode() == getEmptyKey() || getOpcode() == getTombstoneKey())
       return true;
     // Compare the expression type for anything but load and store.
+    // For load and store we set the opcode to zero to make them equal.
     if (getExpressionType() != ET_Load && getExpressionType() != ET_Store &&
         getExpressionType() != Other.getExpressionType())
       return false;
@@ -379,7 +381,9 @@ public:
       OS << "ExpressionTypeStore, ";
     this->BasicExpression::printInternal(OS, false);
     OS << " represents Store  " << *Store;
-    OS << " with MemoryLeader " << *getMemoryLeader();
+    OS << " with StoredValue ";
+    StoredValue->printAsOperand(OS);
+    OS << " and MemoryLeader " << *getMemoryLeader();
   }
 };
 
@@ -509,6 +513,17 @@ public:
       OS << "ExpressionTypePhi, ";
     this->BasicExpression::printInternal(OS, false);
     OS << "bb = " << BB;
+  }
+};
+
+class DeadExpression final : public Expression {
+public:
+  DeadExpression() : Expression(ET_Dead) {}
+  DeadExpression(const DeadExpression &) = delete;
+  DeadExpression &operator=(const DeadExpression &) = delete;
+
+  static bool classof(const Expression *E) {
+    return E->getExpressionType() == ET_Dead;
   }
 };
 

@@ -43,12 +43,10 @@ namespace llvm {
 class MemoryBuffer;
 class raw_ostream;
 
-// In place of applying the relocations to the data we've read from disk we use
-// a separate mapping table to the side and checking that at locations in the
-// dwarf where we expect relocated values. This adds a bit of complexity to the
-// dwarf parsing/extraction at the benefit of not allocating memory for the
-// entire size of the debug info sections.
-typedef DenseMap<uint64_t, std::pair<uint8_t, int64_t>> RelocAddrMap;
+/// Reads a value from data extractor and applies a relocation to the result if
+/// one exists for the given offset.
+uint64_t getRelocatedValue(const DataExtractor &Data, uint32_t Size,
+                           uint32_t *Off, const RelocAddrMap *Relocs);
 
 /// DWARFContext
 /// This data structure is the top level entity that deals with dwarf debug
@@ -100,6 +98,8 @@ public:
 
   void dump(raw_ostream &OS, DIDumpType DumpType = DIDT_All,
             bool DumpEH = false, bool SummarizeTypes = false) override;
+
+  bool verify(raw_ostream &OS, DIDumpType DumpType = DIDT_All) override;
 
   typedef DWARFUnitSection<DWARFCompileUnit>::iterator_range cu_iterator_range;
   typedef DWARFUnitSection<DWARFTypeUnit>::iterator_range tu_iterator_range;
@@ -165,6 +165,9 @@ public:
     return DWOCUs[index].get();
   }
 
+  /// Get a DIE given an exact offset.
+  DWARFDie getDIEForOffset(uint32_t Offset);
+
   const DWARFUnitIndex &getCUIndex();
   DWARFGdbIndex &getGdbIndex();
   const DWARFUnitIndex &getTUIndex();
@@ -216,7 +219,7 @@ public:
   virtual StringRef getEHFrameSection() = 0;
   virtual const DWARFSection &getLineSection() = 0;
   virtual StringRef getStringSection() = 0;
-  virtual StringRef getRangeSection() = 0;
+  virtual const DWARFSection& getRangeSection() = 0;
   virtual StringRef getMacinfoSection() = 0;
   virtual StringRef getPubNamesSection() = 0;
   virtual StringRef getPubTypesSection() = 0;
@@ -231,8 +234,8 @@ public:
   virtual const DWARFSection &getLocDWOSection() = 0;
   virtual StringRef getStringDWOSection() = 0;
   virtual StringRef getStringOffsetDWOSection() = 0;
-  virtual StringRef getRangeDWOSection() = 0;
-  virtual StringRef getAddrSection() = 0;
+  virtual const DWARFSection &getRangeDWOSection() = 0;
+  virtual const DWARFSection &getAddrSection() = 0;
   virtual const DWARFSection& getAppleNamesSection() = 0;
   virtual const DWARFSection& getAppleTypesSection() = 0;
   virtual const DWARFSection& getAppleNamespacesSection() = 0;
@@ -271,7 +274,7 @@ class DWARFContextInMemory : public DWARFContext {
   StringRef EHFrameSection;
   DWARFSection LineSection;
   StringRef StringSection;
-  StringRef RangeSection;
+  DWARFSection RangeSection;
   StringRef MacinfoSection;
   StringRef PubNamesSection;
   StringRef PubTypesSection;
@@ -286,8 +289,8 @@ class DWARFContextInMemory : public DWARFContext {
   DWARFSection LocDWOSection;
   StringRef StringDWOSection;
   StringRef StringOffsetDWOSection;
-  StringRef RangeDWOSection;
-  StringRef AddrSection;
+  DWARFSection RangeDWOSection;
+  DWARFSection AddrSection;
   DWARFSection AppleNamesSection;
   DWARFSection AppleTypesSection;
   DWARFSection AppleNamespacesSection;
@@ -299,6 +302,11 @@ class DWARFContextInMemory : public DWARFContext {
   SmallVector<SmallString<32>, 4> UncompressedSections;
 
   StringRef *MapSectionToMember(StringRef Name);
+
+  /// If Sec is compressed section, decompresses and updates its contents
+  /// provided by Data. Otherwise leaves it unchanged.
+  Error maybeDecompress(const object::SectionRef &Sec, StringRef Name,
+                        StringRef &Data);
 
 public:
   DWARFContextInMemory(const object::ObjectFile &Obj,
@@ -319,7 +327,7 @@ public:
   StringRef getEHFrameSection() override { return EHFrameSection; }
   const DWARFSection &getLineSection() override { return LineSection; }
   StringRef getStringSection() override { return StringSection; }
-  StringRef getRangeSection() override { return RangeSection; }
+  const DWARFSection &getRangeSection() override { return RangeSection; }
   StringRef getMacinfoSection() override { return MacinfoSection; }
   StringRef getPubNamesSection() override { return PubNamesSection; }
   StringRef getPubTypesSection() override { return PubTypesSection; }
@@ -346,11 +354,9 @@ public:
     return StringOffsetDWOSection;
   }
 
-  StringRef getRangeDWOSection() override { return RangeDWOSection; }
+  const DWARFSection &getRangeDWOSection() override { return RangeDWOSection; }
 
-  StringRef getAddrSection() override {
-    return AddrSection;
-  }
+  const DWARFSection &getAddrSection() override { return AddrSection; }
 
   StringRef getCUIndexSection() override { return CUIndexSection; }
   StringRef getGdbIndexSection() override { return GdbIndexSection; }
