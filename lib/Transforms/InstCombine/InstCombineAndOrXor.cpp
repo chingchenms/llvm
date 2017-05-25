@@ -1834,25 +1834,8 @@ Value *InstCombiner::FoldOrOfICmps(ICmpInst *LHS, ICmpInst *RHS,
     case ICmpInst::ICMP_UGT: // (X == 13 | X u> 14) -> no change
     case ICmpInst::ICMP_SGT: // (X == 13 | X s> 14) -> no change
       break;
-    case ICmpInst::ICMP_NE:  // (X == 13 | X != 15) -> X != 15
-    case ICmpInst::ICMP_ULT: // (X == 13 | X u< 15) -> X u< 15
-    case ICmpInst::ICMP_SLT: // (X == 13 | X s< 15) -> X s< 15
-      return RHS;
     }
     break;
-  case ICmpInst::ICMP_NE:
-    switch (PredR) {
-    default:
-      llvm_unreachable("Unknown integer condition code!");
-    case ICmpInst::ICMP_EQ:  // (X != 13 | X == 15) -> X != 13
-    case ICmpInst::ICMP_UGT: // (X != 13 | X u> 15) -> X != 13
-    case ICmpInst::ICMP_SGT: // (X != 13 | X s> 15) -> X != 13
-      return LHS;
-    case ICmpInst::ICMP_NE:  // (X != 13 | X != 15) -> true
-    case ICmpInst::ICMP_ULT: // (X != 13 | X u< 15) -> true
-    case ICmpInst::ICMP_SLT: // (X != 13 | X s< 15) -> true
-      return Builder->getTrue();
-    }
   case ICmpInst::ICMP_ULT:
     switch (PredR) {
     default:
@@ -1860,15 +1843,9 @@ Value *InstCombiner::FoldOrOfICmps(ICmpInst *LHS, ICmpInst *RHS,
     case ICmpInst::ICMP_EQ: // (X u< 13 | X == 14) -> no change
       break;
     case ICmpInst::ICMP_UGT: // (X u< 13 | X u> 15) -> (X-13) u> 2
-      // If RHSC is [us]MAXINT, it is always false.  Not handling
-      // this can cause overflow.
-      if (RHSC->isMaxValue(false))
-        return LHS;
+      assert(!RHSC->isMaxValue(false) && "Missed icmp simplification");
       return insertRangeTest(LHS0, LHSC->getValue(), RHSC->getValue() + 1,
                              false, false);
-    case ICmpInst::ICMP_NE:  // (X u< 13 | X != 15) -> X != 15
-    case ICmpInst::ICMP_ULT: // (X u< 13 | X u< 15) -> X u< 15
-      return RHS;
     }
     break;
   case ICmpInst::ICMP_SLT:
@@ -1878,39 +1855,9 @@ Value *InstCombiner::FoldOrOfICmps(ICmpInst *LHS, ICmpInst *RHS,
     case ICmpInst::ICMP_EQ: // (X s< 13 | X == 14) -> no change
       break;
     case ICmpInst::ICMP_SGT: // (X s< 13 | X s> 15) -> (X-13) s> 2
-      // If RHSC is [us]MAXINT, it is always false.  Not handling
-      // this can cause overflow.
-      if (RHSC->isMaxValue(true))
-        return LHS;
+      assert(!RHSC->isMaxValue(true) && "Missed icmp simplification");
       return insertRangeTest(LHS0, LHSC->getValue(), RHSC->getValue() + 1, true,
                              false);
-    case ICmpInst::ICMP_NE:  // (X s< 13 | X != 15) -> X != 15
-    case ICmpInst::ICMP_SLT: // (X s< 13 | X s< 15) -> X s< 15
-      return RHS;
-    }
-    break;
-  case ICmpInst::ICMP_UGT:
-    switch (PredR) {
-    default:
-      llvm_unreachable("Unknown integer condition code!");
-    case ICmpInst::ICMP_EQ:  // (X u> 13 | X == 15) -> X u> 13
-    case ICmpInst::ICMP_UGT: // (X u> 13 | X u> 15) -> X u> 13
-      return LHS;
-    case ICmpInst::ICMP_NE:  // (X u> 13 | X != 15) -> true
-    case ICmpInst::ICMP_ULT: // (X u> 13 | X u< 15) -> true
-      return Builder->getTrue();
-    }
-    break;
-  case ICmpInst::ICMP_SGT:
-    switch (PredR) {
-    default:
-      llvm_unreachable("Unknown integer condition code!");
-    case ICmpInst::ICMP_EQ:  // (X s> 13 | X == 15) -> X > 13
-    case ICmpInst::ICMP_SGT: // (X s> 13 | X s> 15) -> X > 13
-      return LHS;
-    case ICmpInst::ICMP_NE:  // (X s> 13 | X != 15) -> true
-    case ICmpInst::ICMP_SLT: // (X s> 13 | X s< 15) -> true
-      return Builder->getTrue();
     }
     break;
   }
@@ -2433,25 +2380,32 @@ Instruction *InstCombiner::visitXor(BinaryOperator &I) {
   if (Value *V = SimplifyBSwap(I))
     return replaceInstUsesWith(I, V);
 
+  // Apply DeMorgan's Law for 'nand' / 'nor' logic with an inverted operand.
+  Value *X, *Y;
+
+  // We must eliminate the and/or (one-use) for these transforms to not increase
+  // the instruction count.
+  // ~(~X & Y) --> (X | ~Y)
+  // ~(Y & ~X) --> (X | ~Y)
+  if (match(&I, m_Not(m_OneUse(m_c_And(m_Not(m_Value(X)), m_Value(Y)))))) {
+    Value *NotY = Builder->CreateNot(Y, Y->getName() + ".not");
+    return BinaryOperator::CreateOr(X, NotY);
+  }
+  // ~(~X | Y) --> (X & ~Y)
+  // ~(Y | ~X) --> (X & ~Y)
+  if (match(&I, m_Not(m_OneUse(m_c_Or(m_Not(m_Value(X)), m_Value(Y)))))) {
+    Value *NotY = Builder->CreateNot(Y, Y->getName() + ".not");
+    return BinaryOperator::CreateAnd(X, NotY);
+  }
+
   // Is this a 'not' (~) fed by a binary operator?
   BinaryOperator *NotOp;
   if (match(&I, m_Not(m_BinOp(NotOp)))) {
     if (NotOp->getOpcode() == Instruction::And ||
         NotOp->getOpcode() == Instruction::Or) {
-      // ~(~X & Y) --> (X | ~Y) - De Morgan's Law
-      // ~(~X | Y) === (X & ~Y) - De Morgan's Law
-      if (dyn_castNotVal(NotOp->getOperand(1)))
-        NotOp->swapOperands();
-      if (Value *Op0NotVal = dyn_castNotVal(NotOp->getOperand(0))) {
-        Value *NotY = Builder->CreateNot(
-            NotOp->getOperand(1), NotOp->getOperand(1)->getName() + ".not");
-        if (NotOp->getOpcode() == Instruction::And)
-          return BinaryOperator::CreateOr(Op0NotVal, NotY);
-        return BinaryOperator::CreateAnd(Op0NotVal, NotY);
-      }
-
-      // ~(X & Y) --> (~X | ~Y) - De Morgan's Law
-      // ~(X | Y) === (~X & ~Y) - De Morgan's Law
+      // Apply DeMorgan's Law when inverts are free:
+      // ~(X & Y) --> (~X | ~Y)
+      // ~(X | Y) --> (~X & ~Y)
       if (IsFreeToInvert(NotOp->getOperand(0),
                          NotOp->getOperand(0)->hasOneUse()) &&
           IsFreeToInvert(NotOp->getOperand(1),

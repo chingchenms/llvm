@@ -350,7 +350,8 @@ static SDValue getCopyFromPartsVector(SelectionDAG &DAG, const SDLoc &DL,
 
   EVT ValueSVT = ValueVT.getVectorElementType();
   if (ValueVT.getVectorNumElements() == 1 && ValueSVT != PartEVT)
-    Val = DAG.getAnyExtOrTrunc(Val, DL, ValueSVT);
+    Val = ValueVT.isFloatingPoint() ? DAG.getFPExtendOrRound(Val, DL, ValueSVT)
+                                    : DAG.getAnyExtOrTrunc(Val, DL, ValueSVT);
 
   return DAG.getBuildVector(ValueVT, DL, Val);
 }
@@ -543,10 +544,9 @@ static void getCopyToPartsVector(SelectionDAG &DAG, const SDLoc &DL,
       Val = DAG.getNode(
           ISD::EXTRACT_VECTOR_ELT, DL, PartVT, Val,
           DAG.getConstant(0, DL, TLI.getVectorIdxTy(DAG.getDataLayout())));
-
-      Val = DAG.getAnyExtOrTrunc(Val, DL, PartVT);
     }
 
+    assert(Val.getValueType() == PartVT && "Unexpected vector part value type");
     Parts[0] = Val;
     return;
   }
@@ -1335,7 +1335,7 @@ void SelectionDAGBuilder::visitRet(const ReturnInst &I) {
                                 RetPtr.getValueType(), RetPtr,
                                 DAG.getIntPtrConstant(Offsets[i],
                                                       getCurSDLoc()),
-                                &Flags);
+                                Flags);
       Chains[i] = DAG.getStore(Chain, getCurSDLoc(),
                                SDValue(RetOp.getNode(), RetOp.getResNo() + i),
                                // FIXME: better loc info would be nice.
@@ -2575,7 +2575,7 @@ void SelectionDAGBuilder::visitBinary(const User &I, unsigned OpCode) {
   Flags.setUnsafeAlgebra(FMF.unsafeAlgebra());
 
   SDValue BinNodeValue = DAG.getNode(OpCode, getCurSDLoc(), Op1.getValueType(),
-                                     Op1, Op2, &Flags);
+                                     Op1, Op2, Flags);
   setValue(&I, BinNodeValue);
 }
 
@@ -2628,7 +2628,7 @@ void SelectionDAGBuilder::visitShift(const User &I, unsigned Opcode) {
   Flags.setNoSignedWrap(nsw);
   Flags.setNoUnsignedWrap(nuw);
   SDValue Res = DAG.getNode(Opcode, getCurSDLoc(), Op1.getValueType(), Op1, Op2,
-                            &Flags);
+                            Flags);
   setValue(&I, Res);
 }
 
@@ -2640,7 +2640,7 @@ void SelectionDAGBuilder::visitSDiv(const User &I) {
   Flags.setExact(isa<PossiblyExactOperator>(&I) &&
                  cast<PossiblyExactOperator>(&I)->isExact());
   setValue(&I, DAG.getNode(ISD::SDIV, getCurSDLoc(), Op1.getValueType(), Op1,
-                           Op2, &Flags));
+                           Op2, Flags));
 }
 
 void SelectionDAGBuilder::visitICmp(const User &I) {
@@ -3252,7 +3252,7 @@ void SelectionDAGBuilder::visitGetElementPtr(const User &I) {
           Flags.setNoUnsignedWrap(true);
 
         N = DAG.getNode(ISD::ADD, dl, N.getValueType(), N,
-                        DAG.getConstant(Offset, dl, N.getValueType()), &Flags);
+                        DAG.getConstant(Offset, dl, N.getValueType()), Flags);
       }
     } else {
       MVT PtrTy =
@@ -3282,7 +3282,7 @@ void SelectionDAGBuilder::visitGetElementPtr(const User &I) {
         if (Offs.isNonNegative() && cast<GEPOperator>(I).isInBounds())
           Flags.setNoUnsignedWrap(true);
 
-        N = DAG.getNode(ISD::ADD, dl, N.getValueType(), N, OffsVal, &Flags);
+        N = DAG.getNode(ISD::ADD, dl, N.getValueType(), N, OffsVal, Flags);
         continue;
       }
 
@@ -3360,7 +3360,7 @@ void SelectionDAGBuilder::visitAlloca(const AllocaInst &I) {
   Flags.setNoUnsignedWrap(true);
   AllocSize = DAG.getNode(ISD::ADD, dl,
                           AllocSize.getValueType(), AllocSize,
-                          DAG.getIntPtrConstant(StackAlign - 1, dl), &Flags);
+                          DAG.getIntPtrConstant(StackAlign - 1, dl), Flags);
 
   // Mask out the low bits for alignment purposes.
   AllocSize = DAG.getNode(ISD::AND, dl,
@@ -3464,7 +3464,7 @@ void SelectionDAGBuilder::visitLoad(const LoadInst &I) {
     SDValue A = DAG.getNode(ISD::ADD, dl,
                             PtrVT, Ptr,
                             DAG.getConstant(Offsets[i], dl, PtrVT),
-                            &Flags);
+                            Flags);
     auto MMOFlags = MachineMemOperand::MONone;
     if (isVolatile)
       MMOFlags |= MachineMemOperand::MOVolatile;
@@ -3619,7 +3619,7 @@ void SelectionDAGBuilder::visitStore(const StoreInst &I) {
       ChainI = 0;
     }
     SDValue Add = DAG.getNode(ISD::ADD, dl, PtrVT, Ptr,
-                              DAG.getConstant(Offsets[i], dl, PtrVT), &Flags);
+                              DAG.getConstant(Offsets[i], dl, PtrVT), Flags);
     SDValue St = DAG.getStore(
         Root, dl, SDValue(Src.getNode(), Src.getResNo() + i), Add,
         MachinePointerInfo(PtrV, Offsets[i]), Alignment, MMOFlags, AAInfo);
@@ -4992,45 +4992,33 @@ SelectionDAGBuilder::visitIntrinsicCall(const CallInst &I, unsigned Intrinsic) {
       SDV = DAG.getConstantDbgValue(Variable, Expression, V, Offset, dl,
                                     SDNodeOrder);
       DAG.AddDbgValue(SDV, nullptr, false);
-    } else {
-      // Do not use getValue() in here; we don't want to generate code at
-      // this point if it hasn't been done yet.
-      SDValue N = NodeMap[V];
-      if (!N.getNode() && isa<Argument>(V))
-        // Check unused arguments map.
-        N = UnusedArgNodeMap[V];
-      if (N.getNode()) {
-        if (!EmitFuncArgumentDbgValue(V, Variable, Expression, dl, Offset,
-                                      false, N)) {
-          SDV = getDbgValue(N, Variable, Expression, Offset, dl, SDNodeOrder);
-          DAG.AddDbgValue(SDV, N.getNode(), false);
-        }
-      } else if (!V->use_empty() ) {
-        // Do not call getValue(V) yet, as we don't want to generate code.
-        // Remember it for later.
-        DanglingDebugInfo DDI(&DI, dl, SDNodeOrder);
-        DanglingDebugInfoMap[V] = DDI;
-      } else {
-        // We may expand this to cover more cases.  One case where we have no
-        // data available is an unreferenced parameter.
-        DEBUG(dbgs() << "Dropping debug info for " << DI << "\n");
-      }
-    }
-
-    // Build a debug info table entry.
-    if (const BitCastInst *BCI = dyn_cast<BitCastInst>(V))
-      V = BCI->getOperand(0);
-    const AllocaInst *AI = dyn_cast<AllocaInst>(V);
-    // Don't handle byval struct arguments or VLAs, for example.
-    if (!AI) {
-      DEBUG(dbgs() << "Dropping debug location info for:\n  " << DI << "\n");
-      DEBUG(dbgs() << "  Last seen at:\n    " << *V << "\n");
       return nullptr;
     }
-    DenseMap<const AllocaInst*, int>::iterator SI =
-      FuncInfo.StaticAllocaMap.find(AI);
-    if (SI == FuncInfo.StaticAllocaMap.end())
-      return nullptr; // VLAs.
+
+    // Do not use getValue() in here; we don't want to generate code at
+    // this point if it hasn't been done yet.
+    SDValue N = NodeMap[V];
+    if (!N.getNode() && isa<Argument>(V)) // Check unused arguments map.
+      N = UnusedArgNodeMap[V];
+    if (N.getNode()) {
+      if (EmitFuncArgumentDbgValue(V, Variable, Expression, dl, Offset, false,
+                                   N))
+        return nullptr;
+      SDV = getDbgValue(N, Variable, Expression, Offset, dl, SDNodeOrder);
+      DAG.AddDbgValue(SDV, N.getNode(), false);
+      return nullptr;
+    }
+
+    if (!V->use_empty() ) {
+      // Do not call getValue(V) yet, as we don't want to generate code.
+      // Remember it for later.
+      DanglingDebugInfo DDI(&DI, dl, SDNodeOrder);
+      DanglingDebugInfoMap[V] = DDI;
+      return nullptr;
+    }
+
+    DEBUG(dbgs() << "Dropping debug location info for:\n  " << DI << "\n");
+    DEBUG(dbgs() << "  Last seen at:\n    " << *V << "\n");
     return nullptr;
   }
 
@@ -7883,7 +7871,7 @@ TargetLowering::LowerCallTo(TargetLowering::CallLoweringInfo &CLI) const {
     for (unsigned i = 0; i < NumValues; ++i) {
       SDValue Add = CLI.DAG.getNode(ISD::ADD, CLI.DL, PtrVT, DemoteStackSlot,
                                     CLI.DAG.getConstant(Offsets[i], CLI.DL,
-                                                        PtrVT), &Flags);
+                                                        PtrVT), Flags);
       SDValue L = CLI.DAG.getLoad(
           RetTys[i], CLI.DL, CLI.Chain, Add,
           MachinePointerInfo::getFixedStack(CLI.DAG.getMachineFunction(),

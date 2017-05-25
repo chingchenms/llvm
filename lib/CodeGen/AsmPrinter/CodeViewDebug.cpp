@@ -17,6 +17,7 @@
 #include "llvm/DebugInfo/CodeView/CVTypeVisitor.h"
 #include "llvm/DebugInfo/CodeView/CodeView.h"
 #include "llvm/DebugInfo/CodeView/Line.h"
+#include "llvm/DebugInfo/CodeView/ModuleDebugInlineeLinesFragment.h"
 #include "llvm/DebugInfo/CodeView/SymbolRecord.h"
 #include "llvm/DebugInfo/CodeView/TypeDatabase.h"
 #include "llvm/DebugInfo/CodeView/TypeDumpVisitor.h"
@@ -468,7 +469,7 @@ void CodeViewDebug::emitTypeInformation() {
     CommentPrefix += ' ';
   }
 
-  TypeDatabase TypeDB;
+  TypeDatabase TypeDB(TypeTable.records().size());
   CVTypeDumper CVTD(TypeDB);
   TypeTable.ForEachRecord([&](TypeIndex Index, ArrayRef<uint8_t> Record) {
     if (OS.isVerboseAsm()) {
@@ -1704,10 +1705,12 @@ TypeIndex CodeViewDebug::lowerCompleteTypeClass(const DICompositeType *Ty) {
                  SizeInBytes, FullName, Ty->getIdentifier());
   TypeIndex ClassTI = TypeTable.writeKnownType(CR);
 
-  StringIdRecord SIDR(TypeIndex(0x0), getFullFilepath(Ty->getFile()));
-  TypeIndex SIDI = TypeTable.writeKnownType(SIDR);
-  UdtSourceLineRecord USLR(ClassTI, SIDI, Ty->getLine());
-  TypeTable.writeKnownType(USLR);
+  if (const auto *File = Ty->getFile()) {
+    StringIdRecord SIDR(TypeIndex(0x0), getFullFilepath(File));
+    TypeIndex SIDI = TypeTable.writeKnownType(SIDR);
+    UdtSourceLineRecord USLR(ClassTI, SIDI, Ty->getLine());
+    TypeTable.writeKnownType(USLR);
+  }
 
   addToUDTs(Ty, ClassTI);
 
