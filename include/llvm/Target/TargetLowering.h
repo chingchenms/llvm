@@ -186,7 +186,7 @@ public:
           IsNest(false), IsByVal(false), IsInAlloca(false), IsReturned(false),
           IsSwiftSelf(false), IsSwiftError(false) {}
 
-    void setAttributes(ImmutableCallSite *CS, unsigned AttrIdx);
+    void setAttributes(ImmutableCallSite *CS, unsigned ArgIdx);
   };
   typedef std::vector<ArgListEntry> ArgListTy;
 
@@ -434,6 +434,15 @@ public:
   ///   cc = test %register, #mask
   /// \endcode
   virtual bool isMaskAndCmp0FoldingBeneficial(const Instruction &AndI) const {
+    return false;
+  }
+
+  /// Use bitwise logic to make pairs of compares more efficient. For example:
+  /// and (seteq A, B), (seteq C, D) --> seteq (or (xor A, B), (xor C, D)), 0
+  /// This should be true when it takes more than one instruction to lower
+  /// setcc (cmp+set on x86 scalar), when bitwise ops are faster than logic on
+  /// condition bits (crand on PowerPC), and/or when reducing cmp+br is a win.
+  virtual bool convertSetCCLogicToBitwiseLogic(EVT VT) const {
     return false;
   }
 
@@ -2671,15 +2680,15 @@ public:
                                 ImmutableCallSite &Call) {
       RetTy = ResultType;
 
-      IsInReg = Call.paramHasAttr(0, Attribute::InReg);
+      IsInReg = Call.hasRetAttr(Attribute::InReg);
       DoesNotReturn =
           Call.doesNotReturn() ||
           (!Call.isInvoke() &&
            isa<UnreachableInst>(Call.getInstruction()->getNextNode()));
       IsVarArg = FTy->isVarArg();
       IsReturnValueUsed = !Call.getInstruction()->use_empty();
-      RetSExt = Call.paramHasAttr(0, Attribute::SExt);
-      RetZExt = Call.paramHasAttr(0, Attribute::ZExt);
+      RetSExt = Call.hasRetAttr(Attribute::SExt);
+      RetZExt = Call.hasRetAttr(Attribute::ZExt);
 
       Callee = Target;
 

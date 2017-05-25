@@ -2101,7 +2101,7 @@ void X86TargetLowering::insertSSPDeclarations(Module &M) const {
     auto *SecurityCheckCookie = cast<Function>(
         M.getOrInsertFunction("__security_check_cookie",
                               Type::getVoidTy(M.getContext()),
-                              Type::getInt8PtrTy(M.getContext()), nullptr));
+                              Type::getInt8PtrTy(M.getContext())));
     SecurityCheckCookie->setCallingConv(CallingConv::X86_FastCall);
     SecurityCheckCookie->addAttribute(1, Attribute::AttrKind::InReg);
     return;
@@ -6120,54 +6120,6 @@ static SDValue getShuffleScalarElt(SDNode *N, unsigned Index, SelectionDAG &DAG,
   return SDValue();
 }
 
-// Attempt to lower a build vector of repeated elts as a build vector of unique
-// ops followed by a shuffle.
-static SDValue
-lowerBuildVectorWithRepeatedEltsUsingShuffle(SDValue V, SelectionDAG &DAG,
-                                             const X86Subtarget &Subtarget) {
-  MVT VT = V.getSimpleValueType();
-  unsigned NumElts = VT.getVectorNumElements();
-
-  // TODO - vXi8 insertions+shuffles often cause PSHUFBs which can lead to
-  // excessive/bulky shuffle mask creation.
-  if (VT.getScalarSizeInBits() < 16)
-    return SDValue();
-
-  // Create list of unique operands to be passed to a build vector and a shuffle
-  // mask describing the repetitions.
-  // TODO - we currently insert the first occurances in place - sometimes it
-  // might be better to insert them in other locations for shuffle efficiency.
-  bool HasRepeatedElts = false;
-  SmallVector<int, 16> Mask(NumElts, SM_SentinelUndef);
-  SmallVector<SDValue, 16> Uniques(V->op_begin(), V->op_end());
-  for (unsigned i = 0; i != NumElts; ++i) {
-    SDValue Op = Uniques[i];
-    if (Op.isUndef())
-      continue;
-    Mask[i] = i;
-
-    // Zeros can be efficiently repeated, so don't shuffle these.
-    if (X86::isZeroNode(Op))
-      continue;
-
-    // If any repeated operands are found then mark the build vector entry as
-    // undef and setup a copy in the shuffle mask.
-    for (unsigned j = i + 1; j != NumElts; ++j)
-      if (Op == Uniques[j]) {
-        HasRepeatedElts = true;
-        Mask[j] = i;
-        Uniques[j] = DAG.getUNDEF(VT.getScalarType());
-      }
-  }
-
-  if (!HasRepeatedElts)
-    return SDValue();
-
-  SDLoc DL(V);
-  return DAG.getVectorShuffle(VT, DL, DAG.getBuildVector(VT, DL, Uniques),
-                              DAG.getUNDEF(VT), Mask);
-}
-
 /// Custom lower build_vector of v16i8.
 static SDValue LowerBuildVectorv16i8(SDValue Op, unsigned NonZeros,
                                      unsigned NumNonZero, unsigned NumZero,
@@ -7800,17 +7752,11 @@ X86TargetLowering::LowerBUILD_VECTOR(SDValue Op, SelectionDAG &DAG) const {
   if (IsAllConstants)
     return SDValue();
 
+  // See if we can use a vector load to get all of the elements.
   if (VT.is128BitVector() || VT.is256BitVector() || VT.is512BitVector()) {
-    // See if we can use a vector load to get all of the elements.
     SmallVector<SDValue, 64> Ops(Op->op_begin(), Op->op_begin() + NumElems);
     if (SDValue LD = EltsFromConsecutiveLoads(VT, Ops, dl, DAG, false))
       return LD;
-
-    // Attempt to lower a build vector of repeated elts as single insertions
-    // followed by a shuffle.
-    if (SDValue V =
-            lowerBuildVectorWithRepeatedEltsUsingShuffle(Op, DAG, Subtarget))
-      return V;
   }
 
   // For AVX-length vectors, build the individual 128-bit pieces and use
@@ -34660,16 +34606,63 @@ static SDValue combineAddOrSubToADCOrSBB(SDNode *N, SelectionDAG &DAG) {
   SDValue NewCmp = DAG.getNode(X86ISD::CMP, DL, MVT::i32, Z,
                                DAG.getConstant(1, DL, Z.getValueType()));
 
+  SDVTList VTs = DAG.getVTList(N->getValueType(0), MVT::i32);
+
   // X - (Z != 0) --> sub X, (zext(setne Z, 0)) --> adc X, -1, (cmp Z, 1)
   // X + (Z != 0) --> add X, (zext(setne Z, 0)) --> sbb X, -1, (cmp Z, 1)
   if (CC == X86::COND_NE)
-    return DAG.getNode(IsSub ? X86ISD::ADC : X86ISD::SBB, DL, VT, X,
+    return DAG.getNode(IsSub ? X86ISD::ADC : X86ISD::SBB, DL, VTs, X,
                        DAG.getConstant(-1ULL, DL, VT), NewCmp);
 
   // X - (Z == 0) --> sub X, (zext(sete  Z, 0)) --> sbb X, 0, (cmp Z, 1)
   // X + (Z == 0) --> add X, (zext(sete  Z, 0)) --> adc X, 0, (cmp Z, 1)
-  return DAG.getNode(IsSub ? X86ISD::SBB : X86ISD::ADC, DL, VT, X,
+  return DAG.getNode(IsSub ? X86ISD::SBB : X86ISD::ADC, DL, VTs, X,
                      DAG.getConstant(0, DL, VT), NewCmp);
+}
+
+static SDValue combineLoopMAddPattern(SDNode *N, SelectionDAG &DAG,
+                                      const X86Subtarget &Subtarget) {
+  SDValue MulOp = N->getOperand(0);
+  SDValue Phi = N->getOperand(1);
+
+  if (MulOp.getOpcode() != ISD::MUL)
+    std::swap(MulOp, Phi);
+  if (MulOp.getOpcode() != ISD::MUL)
+    return SDValue();
+
+  ShrinkMode Mode;
+  if (!canReduceVMulWidth(MulOp.getNode(), DAG, Mode))
+    return SDValue();
+
+  EVT VT = N->getValueType(0);
+
+  unsigned RegSize = 128;
+  if (Subtarget.hasBWI())
+    RegSize = 512;
+  else if (Subtarget.hasAVX2())
+    RegSize = 256;
+  unsigned VectorSize = VT.getVectorNumElements() * 16;
+  // If the vector size is less than 128, or greater than the supported RegSize,
+  // do not use PMADD.
+  if (VectorSize < 128 || VectorSize > RegSize)
+    return SDValue();
+
+  SDLoc DL(N);
+  EVT ReducedVT = EVT::getVectorVT(*DAG.getContext(), MVT::i16,
+                                   VT.getVectorNumElements());
+  EVT MAddVT = EVT::getVectorVT(*DAG.getContext(), MVT::i32,
+                                VT.getVectorNumElements() / 2);
+
+  // Shrink the operands of mul.
+  SDValue N0 = DAG.getNode(ISD::TRUNCATE, DL, ReducedVT, MulOp->getOperand(0));
+  SDValue N1 = DAG.getNode(ISD::TRUNCATE, DL, ReducedVT, MulOp->getOperand(1));
+
+  // Madd vector size is half of the original vector size
+  SDValue Madd = DAG.getNode(X86ISD::VPMADDWD, DL, MAddVT, N0, N1);
+  // Fill the rest of the output with 0
+  SDValue Zero = getZeroVector(Madd.getSimpleValueType(), Subtarget, DAG, DL);
+  SDValue Concat = DAG.getNode(ISD::CONCAT_VECTORS, DL, VT, Madd, Zero);
+  return DAG.getNode(ISD::ADD, DL, VT, Concat, Phi);
 }
 
 static SDValue combineLoopSADPattern(SDNode *N, SelectionDAG &DAG,
@@ -34749,6 +34742,8 @@ static SDValue combineAdd(SDNode *N, SelectionDAG &DAG,
   if (Flags->hasVectorReduction()) {
     if (SDValue Sad = combineLoopSADPattern(N, DAG, Subtarget))
       return Sad;
+    if (SDValue MAdd = combineLoopMAddPattern(N, DAG, Subtarget))
+      return MAdd;
   }
   EVT VT = N->getValueType(0);
   SDValue Op0 = N->getOperand(0);
@@ -35922,10 +35917,17 @@ X86TargetLowering::getRegForInlineAsmConstraint(const TargetRegisterInfo *TRI,
       return Res;
     }
 
-    // 'A' means EAX + EDX.
+    // 'A' means [ER]AX + [ER]DX.
     if (Constraint == "A") {
-      Res.first = X86::EAX;
-      Res.second = &X86::GR32_ADRegClass;
+      if (Subtarget.is64Bit()) {
+        Res.first = X86::RAX;
+        Res.second = &X86::GR64_ADRegClass;
+      } else {
+        assert((Subtarget.is32Bit() || Subtarget.is16Bit()) &&
+               "Expecting 64, 32 or 16 bit subtarget");
+        Res.first = X86::EAX;
+        Res.second = &X86::GR32_ADRegClass;
+      }
       return Res;
     }
     return Res;

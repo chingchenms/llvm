@@ -75,20 +75,16 @@ static Value *SimplifyXorInst(Value *, Value *, const Query &, unsigned);
 static Value *SimplifyCastInst(unsigned, Value *, Type *,
                                const Query &, unsigned);
 
-/// For a boolean type, or a vector of boolean type, return false, or
-/// a vector with every element false, as appropriate for the type.
+/// For a boolean type or a vector of boolean type, return false or a vector
+/// with every element false.
 static Constant *getFalse(Type *Ty) {
-  assert(Ty->getScalarType()->isIntegerTy(1) &&
-         "Expected i1 type or a vector of i1!");
-  return Constant::getNullValue(Ty);
+  return ConstantInt::getFalse(Ty);
 }
 
-/// For a boolean type, or a vector of boolean type, return true, or
-/// a vector with every element true, as appropriate for the type.
+/// For a boolean type or a vector of boolean type, return true or a vector
+/// with every element true.
 static Constant *getTrue(Type *Ty) {
-  assert(Ty->getScalarType()->isIntegerTy(1) &&
-         "Expected i1 type or a vector of i1!");
-  return Constant::getAllOnesValue(Ty);
+  return ConstantInt::getTrue(Ty);
 }
 
 /// isSameCompare - Is V equivalent to the comparison "LHS Pred RHS"?
@@ -141,10 +137,9 @@ static bool ValueDominatesPHI(Value *V, PHINode *P, const DominatorTree *DT) {
 /// given by OpcodeToExpand, while "A" corresponds to LHS and "B op' C" to RHS.
 /// Also performs the transform "(A op' B) op C" -> "(A op C) op' (B op C)".
 /// Returns the simplified value, or null if no simplification was performed.
-static Value *ExpandBinOp(unsigned Opcode, Value *LHS, Value *RHS,
-                          unsigned OpcToExpand, const Query &Q,
+static Value *ExpandBinOp(Instruction::BinaryOps Opcode, Value *LHS, Value *RHS,
+                          Instruction::BinaryOps OpcodeToExpand, const Query &Q,
                           unsigned MaxRecurse) {
-  Instruction::BinaryOps OpcodeToExpand = (Instruction::BinaryOps)OpcToExpand;
   // Recursion is always used, so bail out at once if we already hit the limit.
   if (!MaxRecurse--)
     return nullptr;
@@ -200,9 +195,9 @@ static Value *ExpandBinOp(unsigned Opcode, Value *LHS, Value *RHS,
 
 /// Generic simplifications for associative binary operations.
 /// Returns the simpler value, or null if none was found.
-static Value *SimplifyAssociativeBinOp(unsigned Opc, Value *LHS, Value *RHS,
-                                       const Query &Q, unsigned MaxRecurse) {
-  Instruction::BinaryOps Opcode = (Instruction::BinaryOps)Opc;
+static Value *SimplifyAssociativeBinOp(Instruction::BinaryOps Opcode,
+                                       Value *LHS, Value *RHS, const Query &Q,
+                                       unsigned MaxRecurse) {
   assert(Instruction::isAssociative(Opcode) && "Not an associative operation!");
 
   // Recursion is always used, so bail out at once if we already hit the limit.
@@ -299,8 +294,9 @@ static Value *SimplifyAssociativeBinOp(unsigned Opc, Value *LHS, Value *RHS,
 /// try to simplify the binop by seeing whether evaluating it on both branches
 /// of the select results in the same value. Returns the common value if so,
 /// otherwise returns null.
-static Value *ThreadBinOpOverSelect(unsigned Opcode, Value *LHS, Value *RHS,
-                                    const Query &Q, unsigned MaxRecurse) {
+static Value *ThreadBinOpOverSelect(Instruction::BinaryOps Opcode, Value *LHS,
+                                    Value *RHS, const Query &Q,
+                                    unsigned MaxRecurse) {
   // Recursion is always used, so bail out at once if we already hit the limit.
   if (!MaxRecurse--)
     return nullptr;
@@ -452,8 +448,9 @@ static Value *ThreadCmpOverSelect(CmpInst::Predicate Pred, Value *LHS,
 /// try to simplify the binop by seeing whether evaluating it on the incoming
 /// phi values yields the same result for every value. If so returns the common
 /// value, otherwise returns null.
-static Value *ThreadBinOpOverPHI(unsigned Opcode, Value *LHS, Value *RHS,
-                                 const Query &Q, unsigned MaxRecurse) {
+static Value *ThreadBinOpOverPHI(Instruction::BinaryOps Opcode, Value *LHS,
+                                 Value *RHS, const Query &Q,
+                                 unsigned MaxRecurse) {
   // Recursion is always used, so bail out at once if we already hit the limit.
   if (!MaxRecurse--)
     return nullptr;
@@ -579,7 +576,7 @@ static Value *SimplifyAddInst(Value *Op0, Value *Op1, bool isNSW, bool isNUW,
     return Y;
 
   /// i1 add -> xor.
-  if (MaxRecurse && Op0->getType()->isIntegerTy(1))
+  if (MaxRecurse && Op0->getType()->getScalarType()->isIntegerTy(1))
     if (Value *V = SimplifyXorInst(Op0, Op1, Q, MaxRecurse-1))
       return V;
 
@@ -796,7 +793,7 @@ static Value *SimplifySubInst(Value *Op0, Value *Op1, bool isNSW, bool isNUW,
       return ConstantExpr::getIntegerCast(Result, Op0->getType(), true);
 
   // i1 sub -> xor.
-  if (MaxRecurse && Op0->getType()->isIntegerTy(1))
+  if (MaxRecurse && Op0->getType()->getScalarType()->isIntegerTy(1))
     if (Value *V = SimplifyXorInst(Op0, Op1, Q, MaxRecurse-1))
       return V;
 
@@ -930,7 +927,7 @@ static Value *SimplifyMulInst(Value *Op0, Value *Op1, const Query &Q,
     return X;
 
   // i1 mul -> and.
-  if (MaxRecurse && Op0->getType()->isIntegerTy(1))
+  if (MaxRecurse && Op0->getType()->getScalarType()->isIntegerTy(1))
     if (Value *V = SimplifyAndInst(Op0, Op1, Q, MaxRecurse-1))
       return V;
 
@@ -3106,8 +3103,8 @@ static Value *SimplifyICmpInst(unsigned Predicate, Value *LHS, Value *RHS,
   // If both operands have range metadata, use the metadata
   // to simplify the comparison.
   if (isa<Instruction>(RHS) && isa<Instruction>(LHS)) {
-    auto RHS_Instr = dyn_cast<Instruction>(RHS);
-    auto LHS_Instr = dyn_cast<Instruction>(LHS);
+    auto RHS_Instr = cast<Instruction>(RHS);
+    auto LHS_Instr = cast<Instruction>(LHS);
 
     if (RHS_Instr->getMetadata(LLVMContext::MD_range) &&
         LHS_Instr->getMetadata(LLVMContext::MD_range)) {
@@ -4084,8 +4081,9 @@ Value *llvm::SimplifyCastInst(unsigned CastOpc, Value *Op, Type *Ty,
 static Value *SimplifyShuffleVectorInst(Value *Op0, Value *Op1, Constant *Mask,
                                         Type *RetTy, const Query &Q,
                                         unsigned MaxRecurse) {
+  Type *InVecTy = Op0->getType();
   unsigned MaskNumElts = Mask->getType()->getVectorNumElements();
-  unsigned InVecNumElts = Op0->getType()->getVectorNumElements();
+  unsigned InVecNumElts = InVecTy->getVectorNumElements();
 
   auto *Op0Const = dyn_cast<Constant>(Op0);
   auto *Op1Const = dyn_cast<Constant>(Op1);
@@ -4107,11 +4105,22 @@ static Value *SimplifyShuffleVectorInst(Value *Op0, Value *Op1, Constant *Mask,
       MaskSelects1 = true;
   }
   if (!MaskSelects0 && Op1Const)
-    return ConstantFoldShuffleVectorInstruction(UndefValue::get(Op0->getType()),
+    return ConstantFoldShuffleVectorInstruction(UndefValue::get(InVecTy),
                                                 Op1Const, Mask);
   if (!MaskSelects1 && Op0Const)
-    return ConstantFoldShuffleVectorInstruction(
-        Op0Const, UndefValue::get(Op0->getType()), Mask);
+    return ConstantFoldShuffleVectorInstruction(Op0Const,
+                                                UndefValue::get(InVecTy), Mask);
+
+  // A shuffle of a splat is always the splat itself. Legal if the shuffle's
+  // value type is same as the input vectors' type.
+  if (auto *OpShuf = dyn_cast<ShuffleVectorInst>(Op0))
+    if (!MaskSelects1 && RetTy == InVecTy &&
+        OpShuf->getMask()->getSplatValue())
+      return Op0;
+  if (auto *OpShuf = dyn_cast<ShuffleVectorInst>(Op1))
+    if (!MaskSelects0 && RetTy == InVecTy &&
+        OpShuf->getMask()->getSplatValue())
+      return Op1;
 
   return nullptr;
 }
@@ -4169,28 +4178,7 @@ static Value *SimplifyBinOp(unsigned Opcode, Value *LHS, Value *RHS,
   case Instruction::Xor:
     return SimplifyXorInst(LHS, RHS, Q, MaxRecurse);
   default:
-    if (Constant *CLHS = dyn_cast<Constant>(LHS))
-      if (Constant *CRHS = dyn_cast<Constant>(RHS))
-        return ConstantFoldBinaryOpOperands(Opcode, CLHS, CRHS, Q.DL);
-
-    // If the operation is associative, try some generic simplifications.
-    if (Instruction::isAssociative(Opcode))
-      if (Value *V = SimplifyAssociativeBinOp(Opcode, LHS, RHS, Q, MaxRecurse))
-        return V;
-
-    // If the operation is with the result of a select instruction check whether
-    // operating on either branch of the select always yields the same value.
-    if (isa<SelectInst>(LHS) || isa<SelectInst>(RHS))
-      if (Value *V = ThreadBinOpOverSelect(Opcode, LHS, RHS, Q, MaxRecurse))
-        return V;
-
-    // If the operation is with the result of a phi instruction, check whether
-    // operating on all incoming values of the phi always yields the same value.
-    if (isa<PHINode>(LHS) || isa<PHINode>(RHS))
-      if (Value *V = ThreadBinOpOverPHI(Opcode, LHS, RHS, Q, MaxRecurse))
-        return V;
-
-    return nullptr;
+    llvm_unreachable("Unexpected opcode");
   }
 }
 
@@ -4634,6 +4622,10 @@ Value *llvm::SimplifyInstruction(Instruction *I, const DataLayout &DL,
 #undef HANDLE_CAST_INST
     Result = SimplifyCastInst(I->getOpcode(), I->getOperand(0), I->getType(),
                               DL, TLI, DT, AC, I);
+    break;
+  case Instruction::Alloca:
+    // No simplifications for Alloca and it can't be constant folded.
+    Result = nullptr;
     break;
   }
 

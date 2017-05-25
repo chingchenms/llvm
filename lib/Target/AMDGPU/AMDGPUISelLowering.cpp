@@ -44,6 +44,37 @@ static bool allocateKernArg(unsigned ValNo, MVT ValVT, MVT LocVT,
   return true;
 }
 
+static bool allocateCCRegs(unsigned ValNo, MVT ValVT, MVT LocVT,
+                           CCValAssign::LocInfo LocInfo,
+                           ISD::ArgFlagsTy ArgFlags, CCState &State,
+                           const TargetRegisterClass *RC,
+                           unsigned NumRegs) {
+  ArrayRef<MCPhysReg> RegList = makeArrayRef(RC->begin(), NumRegs);
+  unsigned RegResult = State.AllocateReg(RegList);
+  if (RegResult == AMDGPU::NoRegister)
+    return false;
+
+  State.addLoc(CCValAssign::getReg(ValNo, ValVT, RegResult, LocVT, LocInfo));
+  return true;
+}
+
+static bool allocateSGPRTuple(unsigned ValNo, MVT ValVT, MVT LocVT,
+                              CCValAssign::LocInfo LocInfo,
+                              ISD::ArgFlagsTy ArgFlags, CCState &State) {
+  switch (LocVT.SimpleTy) {
+  case MVT::i64:
+  case MVT::f64:
+  case MVT::v2i32:
+  case MVT::v2f32: {
+    // Up to SGPR0-SGPR39
+    return allocateCCRegs(ValNo, ValVT, LocVT, LocInfo, ArgFlags, State,
+                          &AMDGPU::SGPR_64RegClass, 20);
+  }
+  default:
+    return false;
+  }
+}
+
 #include "AMDGPUGenCallingConv.inc"
 
 // Find a larger type to do a load / store of a vector with.
@@ -836,11 +867,6 @@ void AMDGPUTargetLowering::analyzeFormalArgumentsCompute(CCState &State,
   }
 }
 
-void AMDGPUTargetLowering::AnalyzeFormalArguments(CCState &State,
-                              const SmallVectorImpl<ISD::InputArg> &Ins) const {
-  State.AnalyzeFormalArguments(Ins, CC_AMDGPU);
-}
-
 void AMDGPUTargetLowering::AnalyzeReturn(CCState &State,
                            const SmallVectorImpl<ISD::OutputArg> &Outs) const {
 
@@ -859,6 +885,24 @@ AMDGPUTargetLowering::LowerReturn(SDValue Chain, CallingConv::ID CallConv,
 //===---------------------------------------------------------------------===//
 // Target specific lowering
 //===---------------------------------------------------------------------===//
+
+/// Selects the correct CCAssignFn for a given CallingConvention value.
+CCAssignFn *AMDGPUTargetLowering::CCAssignFnForCall(CallingConv::ID CC,
+                                                    bool IsVarArg) {
+  switch (CC) {
+  case CallingConv::C:
+  case CallingConv::AMDGPU_KERNEL:
+  case CallingConv::SPIR_KERNEL:
+    return CC_AMDGPU_Kernel;
+  case CallingConv::AMDGPU_VS:
+  case CallingConv::AMDGPU_GS:
+  case CallingConv::AMDGPU_PS:
+  case CallingConv::AMDGPU_CS:
+    return CC_AMDGPU;
+  default:
+    report_fatal_error("Unsupported calling convention.");
+  }
+}
 
 SDValue AMDGPUTargetLowering::LowerCall(CallLoweringInfo &CLI,
                                         SmallVectorImpl<SDValue> &InVals) const {

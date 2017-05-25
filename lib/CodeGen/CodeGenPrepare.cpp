@@ -96,7 +96,7 @@ static cl::opt<bool> DisableSelectToBranch(
   cl::desc("Disable select to branch conversion."));
 
 static cl::opt<bool> AddrSinkUsingGEPs(
-  "addr-sink-using-gep", cl::Hidden, cl::init(false),
+  "addr-sink-using-gep", cl::Hidden, cl::init(true),
   cl::desc("Address sinking in CGP using GEPs."));
 
 static cl::opt<bool> EnableAndCmpSinking(
@@ -570,8 +570,14 @@ bool CodeGenPrepare::splitIndirectCriticalEdges(Function &F) {
     ValueToValueMapTy VMap;
     BasicBlock *DirectSucc = CloneBasicBlock(Target, VMap, ".clone", &F);
 
-    for (BasicBlock *Pred : OtherPreds)
-      Pred->getTerminator()->replaceUsesOfWith(Target, DirectSucc);
+    for (BasicBlock *Pred : OtherPreds) {
+      // If the target is a loop to itself, then the terminator of the split
+      // block needs to be updated.
+      if (Pred == Target)
+        BodyBlock->getTerminator()->replaceUsesOfWith(Target, DirectSucc);
+      else
+        Pred->getTerminator()->replaceUsesOfWith(Target, DirectSucc);
+    }
 
     // Ok, now fix up the PHIs. We know the two blocks only have PHIs, and that
     // they are clones, so the number of PHIs are the same.
@@ -5457,7 +5463,7 @@ bool CodeGenPrepare::optimizeSwitchInst(SwitchInst *SI) {
   auto *ExtInst = CastInst::Create(ExtType, Cond, NewType);
   ExtInst->insertBefore(SI);
   SI->setCondition(ExtInst);
-  for (SwitchInst::CaseIt Case : SI->cases()) {
+  for (auto Case : SI->cases()) {
     APInt NarrowConst = Case.getCaseValue()->getValue();
     APInt WideConst = (ExtType == Instruction::ZExt) ?
                       NarrowConst.zext(RegWidth) : NarrowConst.sext(RegWidth);

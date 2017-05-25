@@ -820,7 +820,6 @@ void coro::buildCoroutineFrame(Function &F, Shape &Shape) {
         Spills.emplace_back(&I, U);
       }
   }
-  std::sort(Spills.begin(), Spills.end());
   DEBUG(dump("Spills", Spills));
   moveSpillUsesAfterCoroBegin(F, Spills, Shape.CoroBegin);
   Shape.FrameTy = buildFrameType(F, Shape, Spills);
