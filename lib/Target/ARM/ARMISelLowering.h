@@ -350,8 +350,7 @@ class InstrItineraryData;
                                     SDValue &Offset, ISD::MemIndexedMode &AM,
                                     SelectionDAG &DAG) const override;
 
-    void computeKnownBitsForTargetNode(const SDValue Op, APInt &KnownZero,
-                                       APInt &KnownOne,
+    void computeKnownBitsForTargetNode(const SDValue Op, KnownBits &Known,
                                        const APInt &DemandedElts,
                                        const SelectionDAG &DAG,
                                        unsigned Depth) const override;
@@ -717,7 +716,7 @@ class InstrItineraryData;
 
     bool isUsedByReturnOnly(SDNode *N, SDValue &Chain) const override;
 
-    bool mayBeEmittedAsTailCall(CallInst *CI) const override;
+    bool mayBeEmittedAsTailCall(const CallInst *CI) const override;
 
     SDValue getCMOV(const SDLoc &dl, EVT VT, SDValue FalseVal, SDValue TrueVal,
                     SDValue ARMcc, SDValue CCR, SDValue Cmp,

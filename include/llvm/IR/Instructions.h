@@ -273,10 +273,11 @@ public:
   Value *getPointerOperand() { return getOperand(0); }
   const Value *getPointerOperand() const { return getOperand(0); }
   static unsigned getPointerOperandIndex() { return 0U; }
+  Type *getPointerOperandType() const { return getPointerOperand()->getType(); }
 
   /// Returns the address space of the pointer operand.
   unsigned getPointerAddressSpace() const {
-    return getPointerOperand()->getType()->getPointerAddressSpace();
+    return getPointerOperandType()->getPointerAddressSpace();
   }
 
   // Methods for support type inquiry through isa, cast, and dyn_cast:
@@ -397,10 +398,11 @@ public:
   Value *getPointerOperand() { return getOperand(1); }
   const Value *getPointerOperand() const { return getOperand(1); }
   static unsigned getPointerOperandIndex() { return 1U; }
+  Type *getPointerOperandType() const { return getPointerOperand()->getType(); }
 
   /// Returns the address space of the pointer operand.
   unsigned getPointerAddressSpace() const {
-    return getPointerOperand()->getType()->getPointerAddressSpace();
+    return getPointerOperandType()->getPointerAddressSpace();
   }
 
   // Methods for support type inquiry through isa, cast, and dyn_cast:
@@ -1712,9 +1714,12 @@ public:
   ///     (\p i - 1) in the operand list.
   bool dataOperandHasImpliedAttr(unsigned i, Attribute::AttrKind Kind) const;
 
+  /// Extract the alignment of the return value.
+  unsigned getRetAlignment() const { return Attrs.getRetAlignment(); }
+
   /// Extract the alignment for a call or parameter (0=unknown).
-  unsigned getParamAlignment(unsigned i) const {
-    return Attrs.getParamAlignment(i);
+  unsigned getParamAlignment(unsigned ArgNo) const {
+    return Attrs.getParamAlignment(ArgNo);
   }
 
   /// Extract the number of dereferenceable bytes for a call or
@@ -3802,9 +3807,12 @@ public:
   ///     (\p i - 1) in the operand list.
   bool dataOperandHasImpliedAttr(unsigned i, Attribute::AttrKind Kind) const;
 
+  /// Extract the alignment of the return value.
+  unsigned getRetAlignment() const { return Attrs.getRetAlignment(); }
+
   /// Extract the alignment for a call or parameter (0=unknown).
-  unsigned getParamAlignment(unsigned i) const {
-    return Attrs.getParamAlignment(i);
+  unsigned getParamAlignment(unsigned ArgNo) const {
+    return Attrs.getParamAlignment(ArgNo);
   }
 
   /// Extract the number of dereferenceable bytes for a call or

@@ -78,6 +78,8 @@ public:
     APINT_BITS_PER_WORD = APINT_WORD_SIZE * CHAR_BIT
   };
 
+  static const WordType WORD_MAX = ~WordType(0);
+
 private:
   /// This union is used to store the integer value. When the
   /// integer bit-width <= 64, it uses VAL, otherwise it uses pVal.
@@ -89,6 +91,8 @@ private:
   unsigned BitWidth; ///< The number of bits in this APInt.
 
   friend struct DenseMapAPIntKeyInfo;
+
+  friend class APSInt;
 
   /// \brief Fast internal constructor
   ///
@@ -134,15 +138,10 @@ private:
   /// zero'd out.
   APInt &clearUnusedBits() {
     // Compute how many bits are used in the final word
-    unsigned wordBits = BitWidth % APINT_BITS_PER_WORD;
-    if (wordBits == 0)
-      // If all bits are used, we want to leave the value alone. This also
-      // avoids the undefined behavior of >> when the shift is the same size as
-      // the word size (64).
-      return *this;
+    unsigned WordBits = ((BitWidth-1) % APINT_BITS_PER_WORD) + 1;
 
     // Mask out the high bits.
-    uint64_t mask = UINT64_MAX >> (APINT_BITS_PER_WORD - wordBits);
+    uint64_t mask = WORD_MAX >> (APINT_BITS_PER_WORD - WordBits);
     if (isSingleWord())
       VAL &= mask;
     else
@@ -191,14 +190,17 @@ private:
   /// out-of-line slow case for shl
   void shlSlowCase(unsigned ShiftAmt);
 
+  /// out-of-line slow case for lshr.
+  void lshrSlowCase(unsigned ShiftAmt);
+
+  /// out-of-line slow case for ashr.
+  void ashrSlowCase(unsigned ShiftAmt);
+
   /// out-of-line slow case for operator=
-  APInt &AssignSlowCase(const APInt &RHS);
+  void AssignSlowCase(const APInt &RHS);
 
   /// out-of-line slow case for operator==
   bool EqualSlowCase(const APInt &RHS) const LLVM_READONLY;
-
-  /// out-of-line slow case for operator==
-  bool EqualSlowCase(uint64_t Val) const LLVM_READONLY;
 
   /// out-of-line slow case for countLeadingZeros
   unsigned countLeadingZerosSlowCase() const LLVM_READONLY;
@@ -209,6 +211,12 @@ private:
   /// out-of-line slow case for countPopulation
   unsigned countPopulationSlowCase() const LLVM_READONLY;
 
+  /// out-of-line slow case for intersects.
+  bool intersectsSlowCase(const APInt &RHS) const LLVM_READONLY;
+
+  /// out-of-line slow case for isSubsetOf.
+  bool isSubsetOfSlowCase(const APInt &RHS) const LLVM_READONLY;
+
   /// out-of-line slow case for setBits.
   void setBitsSlowCase(unsigned loBit, unsigned hiBit);
 
@@ -216,13 +224,21 @@ private:
   void flipAllBitsSlowCase();
 
   /// out-of-line slow case for operator&=.
-  APInt& AndAssignSlowCase(const APInt& RHS);
+  void AndAssignSlowCase(const APInt& RHS);
 
   /// out-of-line slow case for operator|=.
-  APInt& OrAssignSlowCase(const APInt& RHS);
+  void OrAssignSlowCase(const APInt& RHS);
 
   /// out-of-line slow case for operator^=.
-  APInt& XorAssignSlowCase(const APInt& RHS);
+  void XorAssignSlowCase(const APInt& RHS);
+
+  /// Unsigned comparison. Returns -1, 0, or 1 if this APInt is less than, equal
+  /// to, or greater than RHS.
+  int compare(const APInt &RHS) const LLVM_READONLY;
+
+  /// Signed comparison. Returns -1, 0, or 1 if this APInt is less than, equal
+  /// to, or greater than RHS.
+  int compareSigned(const APInt &RHS) const LLVM_READONLY;
 
 public:
   /// \name Constructors
@@ -350,16 +366,21 @@ public:
   /// that 0 is not a positive value.
   ///
   /// \returns true if this APInt is positive.
-  bool isStrictlyPositive() const { return isNonNegative() && !!*this; }
+  bool isStrictlyPositive() const { return isNonNegative() && !isNullValue(); }
 
   /// \brief Determine if all bits are set
   ///
   /// This checks to see if the value has all bits of the APInt are set or not.
   bool isAllOnesValue() const {
     if (isSingleWord())
-      return VAL == UINT64_MAX >> (APINT_BITS_PER_WORD - BitWidth);
+      return VAL == WORD_MAX >> (APINT_BITS_PER_WORD - BitWidth);
     return countPopulationSlowCase() == BitWidth;
   }
+
+  /// \brief Determine if all bits are set
+  ///
+  /// This checks to see if the value has all bits of the APInt are set or not.
+  bool isNullValue() const { return !*this; }
 
   /// \brief Determine if this is the largest unsigned value.
   ///
@@ -379,7 +400,7 @@ public:
   ///
   /// This checks to see if the value of this APInt is the minimum unsigned
   /// value for the APInt's bit width.
-  bool isMinValue() const { return !*this; }
+  bool isMinValue() const { return isNullValue(); }
 
   /// \brief Determine if this is the smallest signed value.
   ///
@@ -410,10 +431,10 @@ public:
     return countPopulationSlowCase() == 1;
   }
 
-  /// \brief Check if the APInt's value is returned by getSignBit.
+  /// \brief Check if the APInt's value is returned by getSignMask.
   ///
-  /// \returns true if this is the value returned by getSignBit.
-  bool isSignBit() const { return isMinSignedValue(); }
+  /// \returns true if this is the value returned by getSignMask.
+  bool isSignMask() const { return isMinSignedValue(); }
 
   /// \brief Convert APInt to a boolean value.
   ///
@@ -423,8 +444,7 @@ public:
   /// If this value is smaller than the specified limit, return it, otherwise
   /// return the limit value.  This causes the value to saturate to the limit.
   uint64_t getLimitedValue(uint64_t Limit = UINT64_MAX) const {
-    return (getActiveBits() > 64 || getZExtValue() > Limit) ? Limit
-                                                            : getZExtValue();
+    return ugt(Limit) ? Limit : getZExtValue();
   }
 
   /// \brief Check if the APInt consists of a repeated bit pattern.
@@ -440,9 +460,10 @@ public:
     assert(numBits != 0 && "numBits must be non-zero");
     assert(numBits <= BitWidth && "numBits out of range");
     if (isSingleWord())
-      return VAL == (UINT64_MAX >> (APINT_BITS_PER_WORD - numBits));
-    unsigned Ones = countTrailingOnes();
-    return (numBits == Ones) && ((Ones + countLeadingZeros()) == BitWidth);
+      return VAL == (WORD_MAX >> (APINT_BITS_PER_WORD - numBits));
+    unsigned Ones = countTrailingOnesSlowCase();
+    return (numBits == Ones) &&
+           ((Ones + countLeadingZerosSlowCase()) == BitWidth);
   }
 
   /// \returns true if this APInt is a non-empty sequence of ones starting at
@@ -451,8 +472,8 @@ public:
   bool isMask() const {
     if (isSingleWord())
       return isMask_64(VAL);
-    unsigned Ones = countTrailingOnes();
-    return (Ones > 0) && ((Ones + countLeadingZeros()) == BitWidth);
+    unsigned Ones = countTrailingOnesSlowCase();
+    return (Ones > 0) && ((Ones + countLeadingZerosSlowCase()) == BitWidth);
   }
 
   /// \brief Return true if this APInt value contains a sequence of ones with
@@ -460,8 +481,9 @@ public:
   bool isShiftedMask() const {
     if (isSingleWord())
       return isShiftedMask_64(VAL);
-    unsigned Ones = countPopulation();
-    return (Ones + countTrailingZeros() + countLeadingZeros()) == BitWidth;
+    unsigned Ones = countPopulationSlowCase();
+    unsigned LeadZ = countLeadingZerosSlowCase();
+    return (Ones + LeadZ + countTrailingZeros()) == BitWidth;
   }
 
   /// @}
@@ -490,11 +512,11 @@ public:
     return API;
   }
 
-  /// \brief Get the SignBit for a specific bit width.
+  /// \brief Get the SignMask for a specific bit width.
   ///
   /// This is just a wrapper function of getSignedMinValue(), and it helps code
-  /// readability when we want to get a SignBit.
-  static APInt getSignBit(unsigned BitWidth) {
+  /// readability when we want to get a SignMask.
+  static APInt getSignMask(unsigned BitWidth) {
     return getSignedMinValue(BitWidth);
   }
 
@@ -502,7 +524,7 @@ public:
   ///
   /// \returns the all-ones value for an APInt of the specified bit-width.
   static APInt getAllOnesValue(unsigned numBits) {
-    return APInt(numBits, UINT64_MAX, true);
+    return APInt(numBits, WORD_MAX, true);
   }
 
   /// \brief Get the '0' value.
@@ -688,7 +710,8 @@ public:
       return clearUnusedBits();
     }
 
-    return AssignSlowCase(RHS);
+    AssignSlowCase(RHS);
+    return *this;
   }
 
   /// @brief Move assignment operator.
@@ -733,11 +756,11 @@ public:
   /// \returns *this after ANDing with RHS.
   APInt &operator&=(const APInt &RHS) {
     assert(BitWidth == RHS.BitWidth && "Bit widths must be the same");
-    if (isSingleWord()) {
+    if (isSingleWord())
       VAL &= RHS.VAL;
-      return *this;
-    }
-    return AndAssignSlowCase(RHS);
+    else
+      AndAssignSlowCase(RHS);
+    return *this;
   }
 
   /// \brief Bitwise AND assignment operator.
@@ -763,11 +786,11 @@ public:
   /// \returns *this after ORing with RHS.
   APInt &operator|=(const APInt &RHS) {
     assert(BitWidth == RHS.BitWidth && "Bit widths must be the same");
-    if (isSingleWord()) {
+    if (isSingleWord())
       VAL |= RHS.VAL;
-      return *this;
-    }
-    return OrAssignSlowCase(RHS);
+    else
+      OrAssignSlowCase(RHS);
+    return *this;
   }
 
   /// \brief Bitwise OR assignment operator.
@@ -793,11 +816,11 @@ public:
   /// \returns *this after XORing with RHS.
   APInt &operator^=(const APInt &RHS) {
     assert(BitWidth == RHS.BitWidth && "Bit widths must be the same");
-    if (isSingleWord()) {
+    if (isSingleWord())
       VAL ^= RHS.VAL;
-      return *this;
-    }
-    return XorAssignSlowCase(RHS);
+    else
+      XorAssignSlowCase(RHS);
+    return *this;
   }
 
   /// \brief Bitwise XOR assignment operator.
@@ -844,8 +867,9 @@ public:
   ///
   /// \returns *this after shifting left by ShiftAmt
   APInt &operator<<=(unsigned ShiftAmt) {
+    assert(ShiftAmt <= BitWidth && "Invalid shift amount");
     if (isSingleWord()) {
-      if (ShiftAmt >= BitWidth)
+      if (ShiftAmt == BitWidth)
         VAL = 0;
       else
         VAL <<= ShiftAmt;
@@ -854,6 +878,13 @@ public:
     shlSlowCase(ShiftAmt);
     return *this;
   }
+
+  /// \brief Left-shift assignment function.
+  ///
+  /// Shifts *this left by shiftAmt and assigns the result to *this.
+  ///
+  /// \returns *this after shifting left by ShiftAmt
+  APInt &operator<<=(const APInt &ShiftAmt);
 
   /// @}
   /// \name Binary Operators
@@ -877,7 +908,26 @@ public:
   /// \brief Arithmetic right-shift function.
   ///
   /// Arithmetic right-shift this APInt by shiftAmt.
-  APInt ashr(unsigned shiftAmt) const;
+  APInt ashr(unsigned ShiftAmt) const {
+    APInt R(*this);
+    R.ashrInPlace(ShiftAmt);
+    return R;
+  }
+
+  /// Arithmetic right-shift this APInt by ShiftAmt in place.
+  void ashrInPlace(unsigned ShiftAmt) {
+    assert(ShiftAmt <= BitWidth && "Invalid shift amount");
+    if (isSingleWord()) {
+      int64_t SExtVAL = SignExtend64(VAL, BitWidth);
+      if (ShiftAmt == BitWidth)
+        VAL = SExtVAL >> (APINT_BITS_PER_WORD - 1); // Fill with sign bit.
+      else
+        VAL = SExtVAL >> ShiftAmt;
+      clearUnusedBits();
+      return;
+    }
+    ashrSlowCase(ShiftAmt);
+  }
 
   /// \brief Logical right-shift function.
   ///
@@ -889,7 +939,17 @@ public:
   }
 
   /// Logical right-shift this APInt by ShiftAmt in place.
-  void lshrInPlace(unsigned ShiftAmt);
+  void lshrInPlace(unsigned ShiftAmt) {
+    assert(ShiftAmt <= BitWidth && "Invalid shift amount");
+    if (isSingleWord()) {
+      if (ShiftAmt == BitWidth)
+        VAL = 0;
+      else
+        VAL >>= ShiftAmt;
+      return;
+    }
+    lshrSlowCase(ShiftAmt);
+  }
 
   /// \brief Left-shift function.
   ///
@@ -909,17 +969,35 @@ public:
   /// \brief Arithmetic right-shift function.
   ///
   /// Arithmetic right-shift this APInt by shiftAmt.
-  APInt ashr(const APInt &shiftAmt) const;
+  APInt ashr(const APInt &ShiftAmt) const {
+    APInt R(*this);
+    R.ashrInPlace(ShiftAmt);
+    return R;
+  }
+
+  /// Arithmetic right-shift this APInt by shiftAmt in place.
+  void ashrInPlace(const APInt &shiftAmt);
 
   /// \brief Logical right-shift function.
   ///
   /// Logical right-shift this APInt by shiftAmt.
-  APInt lshr(const APInt &shiftAmt) const;
+  APInt lshr(const APInt &ShiftAmt) const {
+    APInt R(*this);
+    R.lshrInPlace(ShiftAmt);
+    return R;
+  }
+
+  /// Logical right-shift this APInt by ShiftAmt in place.
+  void lshrInPlace(const APInt &ShiftAmt);
 
   /// \brief Left-shift function.
   ///
   /// Left-shift this APInt by shiftAmt.
-  APInt shl(const APInt &shiftAmt) const;
+  APInt shl(const APInt &ShiftAmt) const {
+    APInt R(*this);
+    R <<= ShiftAmt;
+    return R;
+  }
 
   /// \brief Rotate left by rotateAmt.
   APInt rotl(const APInt &rotateAmt) const;
@@ -1012,9 +1090,7 @@ public:
   ///
   /// \returns true if *this == Val
   bool operator==(uint64_t Val) const {
-    if (isSingleWord())
-      return VAL == Val;
-    return EqualSlowCase(Val);
+    return (isSingleWord() || getActiveBits() <= 64) && getZExtValue() == Val;
   }
 
   /// \brief Equality comparison.
@@ -1055,7 +1131,7 @@ public:
   /// the validity of the less-than relationship.
   ///
   /// \returns true if *this < RHS when both are considered unsigned.
-  bool ult(const APInt &RHS) const LLVM_READONLY;
+  bool ult(const APInt &RHS) const { return compare(RHS) < 0; }
 
   /// \brief Unsigned less than comparison
   ///
@@ -1064,7 +1140,8 @@ public:
   ///
   /// \returns true if *this < RHS when considered unsigned.
   bool ult(uint64_t RHS) const {
-    return getActiveBits() > 64 ? false : getZExtValue() < RHS;
+    // Only need to check active bits if not a single word.
+    return (isSingleWord() || getActiveBits() <= 64) && getZExtValue() < RHS;
   }
 
   /// \brief Signed less than comparison
@@ -1073,7 +1150,7 @@ public:
   /// validity of the less-than relationship.
   ///
   /// \returns true if *this < RHS when both are considered signed.
-  bool slt(const APInt &RHS) const LLVM_READONLY;
+  bool slt(const APInt &RHS) const { return compareSigned(RHS) < 0; }
 
   /// \brief Signed less than comparison
   ///
@@ -1082,7 +1159,8 @@ public:
   ///
   /// \returns true if *this < RHS when considered signed.
   bool slt(int64_t RHS) const {
-    return getMinSignedBits() > 64 ? isNegative() : getSExtValue() < RHS;
+    return (!isSingleWord() && getMinSignedBits() > 64) ? isNegative()
+                                                        : getSExtValue() < RHS;
   }
 
   /// \brief Unsigned less or equal comparison
@@ -1091,7 +1169,7 @@ public:
   /// validity of the less-or-equal relationship.
   ///
   /// \returns true if *this <= RHS when both are considered unsigned.
-  bool ule(const APInt &RHS) const { return ult(RHS) || eq(RHS); }
+  bool ule(const APInt &RHS) const { return compare(RHS) <= 0; }
 
   /// \brief Unsigned less or equal comparison
   ///
@@ -1107,7 +1185,7 @@ public:
   /// validity of the less-or-equal relationship.
   ///
   /// \returns true if *this <= RHS when both are considered signed.
-  bool sle(const APInt &RHS) const { return slt(RHS) || eq(RHS); }
+  bool sle(const APInt &RHS) const { return compareSigned(RHS) <= 0; }
 
   /// \brief Signed less or equal comparison
   ///
@@ -1123,7 +1201,7 @@ public:
   /// the validity of the greater-than relationship.
   ///
   /// \returns true if *this > RHS when both are considered unsigned.
-  bool ugt(const APInt &RHS) const { return !ult(RHS) && !eq(RHS); }
+  bool ugt(const APInt &RHS) const { return !ule(RHS); }
 
   /// \brief Unsigned greater than comparison
   ///
@@ -1132,7 +1210,8 @@ public:
   ///
   /// \returns true if *this > RHS when considered unsigned.
   bool ugt(uint64_t RHS) const {
-    return getActiveBits() > 64 ? true : getZExtValue() > RHS;
+    // Only need to check active bits if not a single word.
+    return (!isSingleWord() && getActiveBits() > 64) || getZExtValue() > RHS;
   }
 
   /// \brief Signed greather than comparison
@@ -1141,7 +1220,7 @@ public:
   /// validity of the greater-than relationship.
   ///
   /// \returns true if *this > RHS when both are considered signed.
-  bool sgt(const APInt &RHS) const { return !slt(RHS) && !eq(RHS); }
+  bool sgt(const APInt &RHS) const { return !sle(RHS); }
 
   /// \brief Signed greater than comparison
   ///
@@ -1150,7 +1229,8 @@ public:
   ///
   /// \returns true if *this > RHS when considered signed.
   bool sgt(int64_t RHS) const {
-    return getMinSignedBits() > 64 ? !isNegative() : getSExtValue() > RHS;
+    return (!isSingleWord() && getMinSignedBits() > 64) ? !isNegative()
+                                                        : getSExtValue() > RHS;
   }
 
   /// \brief Unsigned greater or equal comparison
@@ -1188,9 +1268,18 @@ public:
   /// This operation tests if there are any pairs of corresponding bits
   /// between this APInt and RHS that are both set.
   bool intersects(const APInt &RHS) const {
-    APInt temp(*this);
-    temp &= RHS;
-    return temp != 0;
+    assert(BitWidth == RHS.BitWidth && "Bit widths must be the same");
+    if (isSingleWord())
+      return (VAL & RHS.VAL) != 0;
+    return intersectsSlowCase(RHS);
+  }
+
+  /// This operation checks that all bits set in this APInt are also set in RHS.
+  bool isSubsetOf(const APInt &RHS) const {
+    assert(BitWidth == RHS.BitWidth && "Bit widths must be the same");
+    if (isSingleWord())
+      return (VAL & ~RHS.VAL) == 0;
+    return isSubsetOfSlowCase(RHS);
   }
 
   /// @}
@@ -1249,7 +1338,7 @@ public:
   /// \brief Set every bit to 1.
   void setAllBits() {
     if (isSingleWord())
-      VAL = UINT64_MAX;
+      VAL = WORD_MAX;
     else
       // Set all the bits in all the words.
       memset(pVal, -1, getNumWords() * APINT_WORD_SIZE);
@@ -1271,15 +1360,11 @@ public:
   void setBits(unsigned loBit, unsigned hiBit) {
     assert(hiBit <= BitWidth && "hiBit out of range");
     assert(loBit <= BitWidth && "loBit out of range");
+    assert(loBit <= hiBit && "loBit greater than hiBit");
     if (loBit == hiBit)
       return;
-    if (loBit > hiBit) {
-      setLowBits(hiBit);
-      setHighBits(BitWidth - loBit);
-      return;
-    }
     if (loBit < APINT_BITS_PER_WORD && hiBit <= APINT_BITS_PER_WORD) {
-      uint64_t mask = UINT64_MAX >> (APINT_BITS_PER_WORD - (hiBit - loBit));
+      uint64_t mask = WORD_MAX >> (APINT_BITS_PER_WORD - (hiBit - loBit));
       mask <<= loBit;
       if (isSingleWord())
         VAL |= mask;
@@ -1318,10 +1403,15 @@ public:
   /// Set the given bit to 0 whose position is given as "bitPosition".
   void clearBit(unsigned bitPosition);
 
+  /// Set the sign bit to 0.
+  void clearSignBit() {
+    clearBit(BitWidth - 1);
+  }
+
   /// \brief Toggle every bit to its opposite value.
   void flipAllBits() {
     if (isSingleWord()) {
-      VAL ^= UINT64_MAX;
+      VAL ^= WORD_MAX;
       clearUnusedBits();
     } else {
       flipAllBitsSlowCase();
@@ -1413,8 +1503,7 @@ public:
   /// int64_t. Otherwise an assertion will result.
   int64_t getSExtValue() const {
     if (isSingleWord())
-      return int64_t(VAL << (APINT_BITS_PER_WORD - BitWidth)) >>
-             (APINT_BITS_PER_WORD - BitWidth);
+      return SignExtend64(VAL, BitWidth);
     assert(getMinSignedBits() <= 64 && "Too many bits for int64_t");
     return int64_t(pVal[0]);
   }
@@ -1617,13 +1706,13 @@ public:
   /// referencing 2 in a space where 2 does no exist.
   unsigned nearestLogBase2() const {
     // Special case when we have a bitwidth of 1. If VAL is 1, then we
-    // get 0. If VAL is 0, we get UINT64_MAX which gets truncated to
+    // get 0. If VAL is 0, we get WORD_MAX which gets truncated to
     // UINT32_MAX.
     if (BitWidth == 1)
       return VAL - 1;
 
     // Handle the zero case.
-    if (!getBoolValue())
+    if (isNullValue())
       return UINT32_MAX;
 
     // The non-zero case is handled by computing:
@@ -1968,7 +2057,7 @@ inline const APInt &umax(const APInt &A, const APInt &B) {
 /// \brief Compute GCD of two unsigned APInt values.
 ///
 /// This function returns the greatest common divisor of the two APInt values
-/// using Euclid's algorithm.
+/// using Stein's algorithm.
 ///
 /// \returns the greatest common divisor of A and B.
 APInt GreatestCommonDivisor(APInt A, APInt B);
