@@ -228,6 +228,7 @@ static Function *createClone(Function &F, Twine Suffix, coro::Shape &Shape,
 
   SmallVector<ReturnInst *, 4> Returns;
 
+#if 0
   if (DISubprogram *SP = F.getSubprogram()) {
     // If we have debug info, add mapping for the metadata nodes that should not
     // be cloned by CloneFunctionInfo.
@@ -237,6 +238,8 @@ static Function *createClone(Function &F, Twine Suffix, coro::Shape &Shape,
     MD[SP->getFile()].reset(SP->getFile());
   }
   CloneFunctionInto(NewF, &F, VMap, /*ModuleLevelChanges=*/true, Returns);
+#endif
+  CloneFunctionInto(NewF, &F, VMap, /*ModuleLevelChanges=*/false, Returns);
 
   // Remove old returns.
   for (ReturnInst *Return : Returns)

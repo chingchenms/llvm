@@ -163,12 +163,41 @@ void DebugLoc::reparentDebugInfo(Instruction &I, DISubprogram *OrigSP,
 
   // Fix up debug variables to point to NewSP.
   auto reparentVar = [&](DILocalVariable *Var) {
-    return DILocalVariable::getDistinct(
+#if 1
+#if 0
+    if (auto *Found = Cache[Var])
+      return cast<DILocalVariable>(Found);
+
+    auto *NewVar = DILocalVariable::getDistinct(
         Ctx,
         cast<DILocalScope>(
             reparentScope(Ctx, Var->getScope(), OrigSP, NewSP, Cache)),
         Var->getName(), Var->getFile(), Var->getLine(), Var->getType(),
         Var->getArg(), Var->getFlags(), Var->getAlignInBits());
+    Cache[Var] = NewVar;
+    return NewVar;
+#else
+    auto& CacheEntry = Cache.FindAndConstruct(Var);
+    if (CacheEntry.second)
+      return cast<DILocalVariable>(CacheEntry.second);
+
+    auto *NewVar = DILocalVariable::getDistinct(
+      Ctx,
+      cast<DILocalScope>(
+        reparentScope(Ctx, Var->getScope(), OrigSP, NewSP, Cache)),
+      Var->getName(), Var->getFile(), Var->getLine(), Var->getType(),
+      Var->getArg(), Var->getFlags(), Var->getAlignInBits());
+    CacheEntry.second = NewVar;
+    return NewVar;
+#endif
+#else
+    return DILocalVariable::get(
+      Ctx,
+      cast<DILocalScope>(
+        reparentScope(Ctx, Var->getScope(), OrigSP, NewSP, Cache)),
+      Var->getName(), Var->getFile(), Var->getLine(), Var->getType(),
+      Var->getArg(), Var->getFlags(), Var->getAlignInBits());
+#endif
   };
   if (auto *DbgValue = dyn_cast<DbgValueInst>(&I)) {
     auto *Var = DbgValue->getVariable();
