@@ -31,6 +31,7 @@ void llvm::initializeCoroutines(PassRegistry &Registry) {
 static void addCoroutineOpt0Passes(const PassManagerBuilder &Builder,
                                    legacy::PassManagerBase &PM) {
   PM.add(createCoroSplitPass());
+  PM.add(createAAResultsWrapperPass());
   PM.add(createCoroElidePass());
 
   PM.add(createBarrierNoopPass());
