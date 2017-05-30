@@ -183,7 +183,9 @@ namespace {
 
 struct CoroEarly : public FunctionPass {
   static char ID; // Pass identification, replacement for typeid.
-  CoroEarly() : FunctionPass(ID) {}
+  CoroEarly() : FunctionPass(ID) {
+    initializeCoroEarlyPass(*PassRegistry::getPassRegistry());
+  }
 
   std::unique_ptr<Lowerer> L;
 
@@ -199,7 +201,7 @@ struct CoroEarly : public FunctionPass {
   }
 
   bool runOnFunction(Function &F) override {
-    if (!L)
+    if (!L || skipFunction(F))
       return false;
 
     return L->lowerEarlyIntrinsics(F);

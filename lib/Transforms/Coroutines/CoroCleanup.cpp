@@ -101,7 +101,9 @@ namespace {
 struct CoroCleanup : FunctionPass {
   static char ID; // Pass identification, replacement for typeid
 
-  CoroCleanup() : FunctionPass(ID) {}
+  CoroCleanup() : FunctionPass(ID) {
+    initializeCoroCleanupPass(*PassRegistry::getPassRegistry());
+  }
 
   std::unique_ptr<Lowerer> L;
 
@@ -116,9 +118,10 @@ struct CoroCleanup : FunctionPass {
   }
 
   bool runOnFunction(Function &F) override {
-    if (L)
-      return L->lowerRemainingCoroIntrinsics(F);
-    return false;
+    if (!L || skipFunction(F))
+      return false;
+
+    return L->lowerRemainingCoroIntrinsics(F);
   }
   void getAnalysisUsage(AnalysisUsage &AU) const override {
     if (!L)
