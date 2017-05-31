@@ -691,7 +691,9 @@ namespace {
 
 struct CoroSplit : public CallGraphSCCPass {
   static char ID; // Pass identification, replacement for typeid
-  CoroSplit() : CallGraphSCCPass(ID) {}
+  CoroSplit() : CallGraphSCCPass(ID) {
+    initializeCoroSplitPass(*PassRegistry::getPassRegistry());
+  }
 
   bool Run = false;
 
