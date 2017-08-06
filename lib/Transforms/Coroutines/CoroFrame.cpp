@@ -19,6 +19,7 @@
 
 #include "CoroInternal.h"
 #include "llvm/ADT/BitVector.h"
+#include "llvm/Analysis/PtrUseVisitor.h"
 #include "llvm/IR/CFG.h"
 #include "llvm/IR/Dominators.h"
 #include "llvm/IR/IRBuilder.h"
@@ -761,6 +762,35 @@ static void moveSpillUsesAfterCoroBegin(Function &F, SpillInfo const &Spills,
     I->moveBefore(InsertPt);
 }
 
+// Checks if alloca escapes.
+static bool allocaEscapes(Instruction *I) {
+  auto *AI = dyn_cast<AllocaInst>(I);
+  if (!AI)
+    return false;
+
+  class AllocaEscapeChecker : public PtrUseVisitor<AllocaEscapeChecker> {
+    friend class PtrUseVisitor<AllocaEscapeChecker>;
+    friend class InstVisitor<AllocaEscapeChecker>;
+  public:
+    AllocaEscapeChecker(AllocaInst &AI)
+        : PtrUseVisitor<AllocaEscapeChecker>(AI.getModule()->getDataLayout()),
+          PtrI(visitPtr(AI)) {}
+
+    bool isEscapedOrAborted() const {
+      return PtrI.isEscaped() || PtrI.isAborted();
+    }
+
+  private:
+    void visitPHINode(PHINode &PN) { enqueueUsers(PN); }
+    void visitSelectInst(SelectInst &SI) { enqueueUsers(SI); }
+
+    PtrInfo PtrI;
+  };
+
+  AllocaEscapeChecker Checker(*AI);
+  return Checker.isEscapedOrAborted();
+}
+
 // Splits the block at a particular instruction unless it is the first
 // instruction in the block with a single predecessor.
 static BasicBlock *splitBlockIfNotFirst(Instruction *I, const Twine &Name) {
@@ -790,6 +820,8 @@ void coro::buildCoroutineFrame(Function &F, Shape &Shape) {
   if (Shape.PromiseAlloca) {
     Shape.CoroBegin->getId()->clearPromise();
   }
+
+  splitBlockIfNotFirst(Shape.CoroBegin->getNextNode(), "AfterCoroBegin");
 
   // Make sure that all coro.save, coro.suspend and the fallthrough coro.end
   // intrinsics are in their own blocks to simplify the logic of building up
@@ -847,7 +879,7 @@ void coro::buildCoroutineFrame(Function &F, Shape &Shape) {
       continue;
 
     for (User *U : I.users())
-      if (Checker.isDefinitionAcrossSuspend(I, U)) {
+      if (Checker.isDefinitionAcrossSuspend(I, U) || allocaEscapes(&I)) {
         // We cannot spill a token.
         if (I.getType()->isTokenTy())
           report_fatal_error(
