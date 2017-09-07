@@ -28,6 +28,7 @@
 #include "llvm/Support/circular_raw_ostream.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Transforms/Utils/Local.h"
+#include "llvm/Transforms/Utils/PromoteMemToReg.h"
 
 using namespace llvm;
 
@@ -761,6 +762,44 @@ static void moveSpillUsesAfterCoroBegin(Function &F, SpillInfo const &Spills,
     I->moveBefore(InsertPt);
 }
 
+static bool allocaOnlyStoresConstantInts(AllocaInst *AI) {
+  for (User *U : AI->users())
+    if (auto *SI = dyn_cast<StoreInst>(U))
+      if (!isa<ConstantInt>(SI->getValueOperand()))
+        return false;
+
+  return true;
+}
+
+// Allocas that follow the pattern of cleanup.dest.slot, namely, they are
+// integer allocas that don't escape and only store constants. We don't want
+// them to be saved into the coroutine frame (as some of the cleanup code will
+// access them after coroutine frame destroyed).
+//
+// PromiseAlloca should be always stored in the coroutine frame even if its
+// usage pattern only consists of constant stores.
+static void
+promoteCleanupSlotLikeAllocasToRegisters(Function &F,
+                                         AllocaInst *PromiseAlloca) {
+  SmallVector<AllocaInst *, 2> Allocas;
+  BasicBlock &BB = F.getEntryBlock(); // Get the entry node for the function
+
+  // Find allocas that are safe to promote, by looking at all instructions in
+  // the entry node.
+  for (BasicBlock::iterator I = BB.begin(), E = --BB.end(); I != E; ++I)
+    if (auto *AI = dyn_cast<AllocaInst>(I))
+      if (AI != PromiseAlloca && AI->getAllocatedType()->isIntegerTy() &&
+          isAllocaPromotable(AI) && allocaOnlyStoresConstantInts(AI))
+        Allocas.push_back(AI);
+
+  // None found, nothing to do.
+  if (Allocas.empty())
+    return;
+
+  DominatorTree DT(F);
+  PromoteMemToReg(Allocas, DT);
+}
+
 // Splits the block at a particular instruction unless it is the first
 // instruction in the block with a single predecessor.
 static BasicBlock *splitBlockIfNotFirst(Instruction *I, const Twine &Name) {
@@ -798,6 +837,9 @@ void coro::buildCoroutineFrame(Function &F, Shape &Shape) {
     splitAround(CSI->getCoroSave(), "CoroSave");
     splitAround(CSI, "CoroSuspend");
   }
+
+  // See if we can eliminate cleanup.slot-like allocas.
+  promoteCleanupSlotLikeAllocasToRegisters(F, Shape.PromiseAlloca);
 
   // Put CoroEnds into their own blocks.
   for (CoroEndInst *CE : Shape.CoroEnds)
