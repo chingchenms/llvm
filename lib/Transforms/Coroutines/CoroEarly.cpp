@@ -13,10 +13,12 @@
 
 #include "CoroInternal.h"
 #include "llvm/IR/CallSite.h"
+#include "llvm/IR/Dominators.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/InstIterator.h"
 #include "llvm/IR/Module.h"
 #include "llvm/Pass.h"
+#include "llvm/Transforms/Utils/PromoteMemToReg.h"
 
 using namespace llvm;
 
@@ -38,7 +40,7 @@ public:
         AnyResumeFnPtrTy(FunctionType::get(Type::getVoidTy(Context), Int8Ptr,
                                            /*isVarArg=*/false)
                              ->getPointerTo()) {}
-  bool lowerEarlyIntrinsics(Function &F);
+  bool lowerEarlyIntrinsics(Function &F, DominatorTree &DT);
 };
 }
 
@@ -103,6 +105,43 @@ void Lowerer::lowerCoroDone(IntrinsicInst *II) {
   II->eraseFromParent();
 }
 
+static bool allocaOnlyStoresConstantInts(AllocaInst *AI) {
+  for (User *U : AI->users())
+    if (auto *SI = dyn_cast<StoreInst>(U))
+      if (!isa<ConstantInt>(SI->getValueOperand()))
+        return false;
+
+  return true;
+}
+
+// Allocas that follow the pattern of cleanup.dest.slot, namely, they are
+// integer allocas that don't escape and only store constants. We don't want
+// them to be saved into the coroutine frame (as some of the cleanup code will
+// access them after coroutine frame destroyed).
+//
+// PromiseAlloca should be always stored in the coroutine frame even if its
+// usage pattern only consists of constant stores.
+static void
+promoteCleanupSlotLikeAllocasToRegisters(Function &F, DominatorTree& DT,
+                                         AllocaInst *PromiseAlloca) {
+  SmallVector<AllocaInst *, 2> Allocas;
+  BasicBlock &BB = F.getEntryBlock(); // Get the entry node for the function
+
+  // Find allocas that are safe to promote, by looking at all non-terminator
+  // instructions in the entry node.
+  for (BasicBlock::iterator I = BB.begin(), E = --BB.end(); I != E; ++I)
+    if (auto *AI = dyn_cast<AllocaInst>(I))
+      if (AI != PromiseAlloca && AI->getAllocatedType()->isIntegerTy() &&
+          isAllocaPromotable(AI) && allocaOnlyStoresConstantInts(AI))
+        Allocas.push_back(AI);
+
+  // None found, nothing to do.
+  if (Allocas.empty())
+    return;
+
+  PromoteMemToReg(Allocas, DT);
+}
+
 // Prior to CoroSplit, calls to coro.begin needs to be marked as NoDuplicate,
 // as CoroSplit assumes there is exactly one coro.begin. After CoroSplit,
 // NoDuplicate attribute will be removed from coro.begin otherwise, it will
@@ -113,7 +152,7 @@ static void setCannotDuplicate(CoroIdInst *CoroId) {
       CB->setCannotDuplicate();
 }
 
-bool Lowerer::lowerEarlyIntrinsics(Function &F) {
+bool Lowerer::lowerEarlyIntrinsics(Function &F, DominatorTree &DT) {
   bool Changed = false;
   CoroIdInst *CoroId = nullptr;
   SmallVector<CoroFreeInst *, 4> CoroFrees;
@@ -147,6 +186,11 @@ bool Lowerer::lowerEarlyIntrinsics(Function &F) {
             setCannotDuplicate(CII);
             CII->setCoroutineSelf();
             CoroId = cast<CoroIdInst>(&I);
+            // Eliminate cleanup.slot-like allocas. Required for O0, since
+            // cleanup slot allocas are accessed (potentially) after coroutine
+            // frame is destroyed.
+            promoteCleanupSlotLikeAllocasToRegisters(F, DT,
+                                                     CoroId->getPromise());
           }
         }
         break;
@@ -204,17 +248,22 @@ struct CoroEarly : public FunctionPass {
     if (!L)
       return false;
 
-    return L->lowerEarlyIntrinsics(F);
+    auto &DTWP = getAnalysis<DominatorTreeWrapperPass>();
+    return L->lowerEarlyIntrinsics(F, DTWP.getDomTree());
   }
 
   void getAnalysisUsage(AnalysisUsage &AU) const override {
     AU.setPreservesCFG();
+    AU.addRequired<DominatorTreeWrapperPass>();
   }
 };
 }
 
 char CoroEarly::ID = 0;
-INITIALIZE_PASS(CoroEarly, "coro-early", "Lower early coroutine intrinsics",
-                false, false)
+INITIALIZE_PASS_BEGIN(CoroEarly, "coro-early",
+                      "Lower early coroutine intrinsics", false, false)
+INITIALIZE_PASS_DEPENDENCY(DominatorTreeWrapperPass)
+INITIALIZE_PASS_END(CoroEarly, "coro-early", "Lower early coroutine intrinsics",
+                    false, false)
 
 Pass *llvm::createCoroEarlyPass() { return new CoroEarly(); }
