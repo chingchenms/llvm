@@ -270,11 +270,22 @@ struct Spill : std::pair<Value *, Instruction *> {
   Instruction *user() const { return second; }
   BasicBlock *userBlock() const { return second->getParent(); }
 
-  std::pair<Value *, BasicBlock *> getKey() const {
-    return {def(), userBlock()};
+  // Note that field index is stored in the first SpillEntry for a particular
+  // definition. Subsequent mentions of a defintion do not have fieldNo
+  // assigned. This works out fine as the users of Spills capture the info about
+  // the definition the first time they encounter it. Consider refactoring
+  // SpillInfo into two arrays to normalize the spill representation.
+  unsigned field() const {
+    assert(FieldNo && "Accessing unassigned field");
+    return FieldNo;
+  }
+  void setField(unsigned FieldNumber) {
+    assert(!FieldNo && "Reassigning field number");
+    FieldNo = FieldNumber;
   }
 
-  bool operator<(Spill const &rhs) const { return getKey() < rhs.getKey(); }
+private:
+  unsigned FieldNo = 0;
 };
 
 // Note that there may be more than one record with the same value of Def in
@@ -296,6 +307,55 @@ static void dump(StringRef Title, SpillInfo const &Spills) {
 }
 #endif
 
+// We cannot rely solely on natural alignment of a type when building a
+// coroutine frame and if the alignment specified on the Alloca instruciton
+// differs from the natural alignment of the alloca type we will need to insert
+// padding.
+struct PaddingCalculator {
+  const DataLayout &DL;
+  LLVMContext &Context;
+  unsigned StructSize = 0;
+
+  PaddingCalculator(LLVMContext &Context, DataLayout const &DL)
+      : DL(DL), Context(Context) {}
+
+  // Replicate the logic from IR/DataLayout.cpp to match field offset
+  // computation for LLVM structs.
+  void addType(Type *Ty) {
+    unsigned TyAlign = DL.getABITypeAlignment(Ty);
+    if ((StructSize & (TyAlign - 1)) != 0)
+      StructSize = alignTo(StructSize, TyAlign);
+
+    StructSize += DL.getTypeAllocSize(Ty); // Consume space for this data item.
+  }
+
+  void addTypes(SmallVectorImpl<Type *> const &Types) {
+    for (auto *Ty : Types)
+      addType(Ty);
+  }
+
+  unsigned computePadding(Type *Ty, unsigned ForcedAlignment) {
+    unsigned TyAlign = DL.getABITypeAlignment(Ty);
+    auto Natural = alignTo(StructSize, TyAlign);
+    auto Forced = alignTo(StructSize, ForcedAlignment);
+
+    // Return how many bytes of padding we need to insert.
+    if (Natural != Forced)
+      return std::max(Natural, Forced) - StructSize;
+
+    // Rely on natural alignment.
+    return 0;
+  }
+
+  // If padding required, return the padding field type to insert.
+  ArrayType *getPaddingType(Type *Ty, unsigned ForcedAlignment) {
+    if (auto Padding = computePadding(Ty, ForcedAlignment))
+      return ArrayType::get(Type::getInt8Ty(Context), Padding);
+
+    return nullptr;
+  }
+};
+
 // Build a struct that will keep state for an active coroutine.
 //   struct f.frame {
 //     ResumeFnTy ResumeFnAddr;
@@ -307,6 +367,8 @@ static void dump(StringRef Title, SpillInfo const &Spills) {
 static StructType *buildFrameType(Function &F, coro::Shape &Shape,
                                   SpillInfo &Spills) {
   LLVMContext &C = F.getContext();
+  const DataLayout &DL = F.getParent()->getDataLayout();
+  PaddingCalculator Padder(C, DL);
   SmallString<32> Name(F.getName());
   Name.append(".Frame");
   StructType *FrameTy = StructType::create(C, Name);
@@ -324,8 +386,10 @@ static StructType *buildFrameType(Function &F, coro::Shape &Shape,
                                Type::getIntNTy(C, IndexBits)};
   Value *CurrentDef = nullptr;
 
+  Padder.addTypes(Types);
+
   // Create an entry for every spilled value.
-  for (auto const &S : Spills) {
+  for (auto &S : Spills) {
     if (CurrentDef == S.def())
       continue;
 
@@ -335,12 +399,23 @@ static StructType *buildFrameType(Function &F, coro::Shape &Shape,
       continue;
 
     Type *Ty = nullptr;
-    if (auto *AI = dyn_cast<AllocaInst>(CurrentDef))
+    if (auto *AI = dyn_cast<AllocaInst>(CurrentDef)) {
       Ty = AI->getAllocatedType();
-    else
+      if (unsigned AllocaAlignment = AI->getAlignment()) {
+        // If alignment is specified in alloca, see if we need to insert extra
+        // padding.
+        if (auto PaddingTy = Padder.getPaddingType(Ty, AllocaAlignment)) {
+          Types.push_back(PaddingTy);
+          Padder.addType(PaddingTy);
+        }
+      }
+    } else
       Ty = CurrentDef->getType();
 
+    S.setField(Types.size());
+
     Types.push_back(Ty);
+    Padder.addType(Ty);
   }
   FrameTy->setBody(Types);
 
@@ -380,7 +455,7 @@ static Instruction *insertSpills(SpillInfo &Spills, coro::Shape &Shape) {
   Value *CurrentValue = nullptr;
   BasicBlock *CurrentBlock = nullptr;
   Value *CurrentReload = nullptr;
-  unsigned Index = coro::Shape::LastKnownField;
+  unsigned Index = 0;
 
   // We need to keep track of any allocas that need "spilling"
   // since they will live in the coroutine frame now, all access to them
@@ -395,6 +470,7 @@ static Instruction *insertSpills(SpillInfo &Spills, coro::Shape &Shape) {
   // Create a load instruction to reload the spilled value from the coroutine
   // frame.
   auto CreateReload = [&](Instruction *InsertBefore) {
+    assert(Index && "accessing unassigned field number");
     Builder.SetInsertPoint(InsertBefore);
     auto *G = Builder.CreateConstInBoundsGEP2_32(FrameTy, FramePtr, 0, Index,
                                                  CurrentValue->getName() +
@@ -411,8 +487,7 @@ static Instruction *insertSpills(SpillInfo &Spills, coro::Shape &Shape) {
       CurrentValue = E.def();
       CurrentBlock = nullptr;
       CurrentReload = nullptr;
-
-      ++Index;
+      Index = E.field();
 
       if (auto *AI = dyn_cast<AllocaInst>(CurrentValue)) {
         // Spilled AllocaInst will be replaced with GEP from the coroutine frame
@@ -565,7 +640,7 @@ static void rewritePHIs(BasicBlock &BB) {
   // loop:
   //    %n.val = phi i32[%n, %entry], [%inc, %loop]
   //
-  // It will create:  
+  // It will create:
   //
   // loop.from.entry:
   //    %n.loop.pre = phi i32 [%n, %entry]
@@ -789,7 +864,6 @@ void coro::buildCoroutineFrame(Function &F, Shape &Shape) {
       break;
 
     // Rewrite materializable instructions to be materialized at the use point.
-    std::sort(Spills.begin(), Spills.end());
     DEBUG(dump("Materializations", Spills));
     rewriteMaterializableInstructions(Builder, Spills);
     Spills.clear();
@@ -820,7 +894,6 @@ void coro::buildCoroutineFrame(Function &F, Shape &Shape) {
         Spills.emplace_back(&I, U);
       }
   }
-  std::sort(Spills.begin(), Spills.end());
   DEBUG(dump("Spills", Spills));
   moveSpillUsesAfterCoroBegin(F, Spills, Shape.CoroBegin);
   Shape.FrameTy = buildFrameType(F, Shape, Spills);
