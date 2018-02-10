@@ -133,10 +133,6 @@ void Lowerer::lowerCoroNoop(IntrinsicInst *II) {
     NoopCoro = new GlobalVariable(M, NoopCoroConst->getType(), /*isConstant=*/true,
                                 GlobalVariable::PrivateLinkage, NoopCoroConst,
                                 "NoopCoro.Frame.Const");
-
-    FrameTy->dump();
-    NoopFn->dump();
-    NoopCoro->dump();
   }
 
   Builder.SetInsertPoint(II);
@@ -237,11 +233,10 @@ struct CoroEarly : public FunctionPass {
   // This pass has work to do only if we find intrinsics we are going to lower
   // in the module.
   bool doInitialization(Module &M) override {
-    if (coro::declaresIntrinsics(M, {"llvm.coro.id", "llvm.coro.destroy",
-                                     "llvm.coro.done", "llvm.coro.end",
-                                     "llvm.coro.noop",
-                                     "llvm.coro.free", "llvm.coro.promise",
-                                     "llvm.coro.resume", "llvm.coro.suspend"}))
+    if (coro::declaresIntrinsics(
+            M, {"llvm.coro.id", "llvm.coro.destroy", "llvm.coro.done",
+                "llvm.coro.end", "llvm.coro.noop", "llvm.coro.free",
+                "llvm.coro.promise", "llvm.coro.resume", "llvm.coro.suspend"}))
       L = llvm::make_unique<Lowerer>(M);
     return false;
   }
